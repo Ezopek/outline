@@ -20,6 +20,14 @@ This is the source code that runs [**Outline**](https://www.getoutline.com) and 
 
 If you'd like to run your own copy of Outline or contribute to development then this is the place for you.
 
+## Ezopek fork development scope
+
+This fork is preparing deterministic Wiki linting in Outline's built-in MCP
+server. The agreed design, non-goals, enforcement boundary, and acceptance
+criteria are recorded in [`server/tools/README.md`](server/tools/README.md).
+Implementation must preserve a single standard `/mcp` endpoint so the behavior
+is shared by every MCP client rather than depending on client-specific wiring.
+
 # Installation
 
 Please see the [documentation](https://docs.getoutline.com/s/hosting/) for running your own copy of Outline in a production configuration.
