@@ -19,18 +19,19 @@ MCP server.
 The linter is ordinary program logic. It must not invoke an LLM, perform semantic
 classification, or judge whether prose is factually or logically appropriate.
 
-### Version boundary
+### Selected version baseline
 
-The currently deployed environment was inspected at Outline `v1.10.1`. This
-branch began from upstream `main` at `2f57a36d50f78a34adb77009d7499b8c556838db`,
-which is newer than tag `v1.10.1` at
-`9686f7264506a910ed87a4ad8704bafd361a3393`. Before implementation or deployment,
-explicitly choose and verify one of these paths:
+Implementation targets the deployed Outline `v1.10.1` baseline without upgrading
+to `upstream/main`. `v1.10.1` is an annotated tag: its tag object is
+`9686f7264506a910ed87a4ad8704bafd361a3393`, while the source commit used for this
+branch, builds, and compatibility tests is
+`4a5a616a21be800257dc11cef4263d0dd0412156` (`v1.10.1^{}`).
 
-1. implement against the deployed `v1.10.1` baseline; or
-2. upgrade the deployment to a tested newer revision before enabling the fork.
-
-Do not treat tests against one revision as proof for the other.
+Do not merge or rebase the linting implementation onto `upstream/main`. Evaluate
+each later upstream change as a separate, explicit backport with its own tests.
+In particular, keep the post-`v1.10.1` fix for patch edits inside container blocks
+out of the initial linting change. Tests against another revision do not validate
+this baseline.
 
 ### MCP tools and enforcement
 

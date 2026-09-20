@@ -1,208 +1,49 @@
-Outline is a fast, collaborative knowledge base built for teams. It's built with React and TypeScript in both frontend and backend, uses a real-time collaboration engine, and is designed for excellent performance and user experience. The backend is a Koa server with an RPC API and uses PostgreSQL and Redis. The application can be self-hosted or used as a cloud service.
+<!-- bmad:context -->
+<!-- Verified 2026-09-20 against v1.10.1 commit 4a5a616a21be800257dc11cef4263d0dd0412156 and fork design e5e3f7905. Managed by bmad-project-context. -->
 
-There is a web client which is fully responsive and works on mobile devices.
+## Ezopek Outline fork
 
-**Monorepo Structure:**
+This is an operator-maintained Outline fork for deterministic Wiki linting in the built-in MCP server. Product scope and acceptance criteria live in `server/tools/README.md`; BMAD artifacts live in `_bmad-output/`. Upstream documentation remains useful technical reference, but does not define this fork's product policy.
 
-- **`app/`** - React web application with MobX state management
-- **`server/`** - Koa API server with Sequelize ORM and background workers
-- **`shared/`** - Shared TypeScript types, utilities, and editor components
-- **`plugins/`** - Plugin system for extending functionality
-- **`public/`** - Static assets served directly
-- **Various config files** - TypeScript, Vite, Vitest, oxfmt, Oxlint configurations
+## Policy
 
-Refer to /docs/ARCHITECTURE.md for detailed architecture documentation.
+- Target `v1.10.1^{}` at commit `4a5a616a21be800257dc11cef4263d0dd0412156`.
+- Do not merge or rebase linting work onto `upstream/main`. Evaluate each upstream fix as a separate, explicit backport with its own tests.
+- BMAD artifacts under `_bmad-output/` and deliberate fork documentation may be created as Markdown. Do not create incidental notes.
+- Keep linting deterministic. Do not invoke an LLM or perform semantic classification.
+- Preserve existing authentication, authorization, transaction, and information-disclosure boundaries.
+- Keep workspace-specific schemas and document IDs in server-side configuration; never hard-code private Wiki identifiers into reusable source or MCP tool descriptions.
+- Treat implementation, image publication, deployment, and production rollout as separate approval boundaries.
 
-## Instructions
+## Where things are
 
-You're an expert in the following areas:
+- Fork roadmap and acceptance criteria: `server/tools/README.md`
+- Built-in MCP tools: `server/tools/`
+- Planning and implementation artifacts: `_bmad-output/`
+- Upstream architecture reference: `docs/ARCHITECTURE.md`
 
-- TypeScript
-- React and React Router
-- MobX and MobX-React
-- Node.js and Koa
-- Sequelize ORM
-- PostgreSQL
-- Redis
-- HTML, CSS and Styled Components
-- Prosemirror (rich text editor)
-- WebSockets and real-time collaboration
+## Running and verifying
 
-## General Guidelines
+- Use the Yarn version declared by the checked-out baseline.
+- Prefer targeted Vitest files while iterating. Run broad suites only when their scope is justified.
+- Run the relevant formatting, lint, type-check, and targeted test commands declared in `package.json` before presenting implementation as complete.
+- Keep tests collocated with the code they cover; do not create new test directories.
 
-- Critical – Do not create new markdown (.md) files.
-- Use early returns for readability.
-- Emphasize type safety and static analysis.
-- Follow consistent oxfmt formatting.
-- Do not replace smart quotes ("") or ('') with simple quotes ("").
-- Do not add translation strings manually; they will be extracted automatically from the codebase.
+## Conventions that differ from defaults
 
-## Dependencies and Upgrading
+- Follow the checked-out baseline's TypeScript configuration; do not claim full strict mode where `tsconfig.json` does not enable it.
+- Implement one reusable lint engine shared by write enforcement and read-only lint tools.
+- Validate `update_document` against the fully projected post-edit document, not only the incoming fragment.
+- Return stable machine-readable issue codes. Errors block configured writes; warnings do not.
+- Failed linting must not persist partial state or externally visible side effects.
+- Unconfigured collections retain upstream behavior.
+- Never reveal inaccessible link targets or document metadata through lint results.
+- In ProseMirror `toDOM`, sanitize user-controlled `href` and `src` values with `sanitizeUrl()`.
 
-- Use yarn for all dependency management.
-- After updating dependency versions, install to update lockfiles:
+## Known pitfalls
 
-```bash
-yarn install
-```
+- `v1.10.1` is an annotated tag: `9686f7264506a910ed87a4ad8704bafd361a3393` is the tag object; `4a5a616a21be800257dc11cef4263d0dd0412156` is the source commit.
+- Tests against newer `upstream/main` do not validate the `v1.10.1` implementation.
+- Do not mix the post-`v1.10.1` patch-edit fix into the first linting change.
 
-- When adding a `resolutions` entry to address a security advisory in a transitive dependency, target only the specific vulnerable descriptors using the `name@npm:<range>` syntax rather than overriding the package globally. Inspect `yarn.lock` to find the exact ranges requested by upstream packages and add one entry per vulnerable range, e.g.:
-
-```json
-"resolutions": {
-  "qs@npm:^6.5.2": "^6.14.2",
-  "qs@npm:^6.11.0": "^6.14.2",
-  "qs@npm:^6.14.0": "^6.14.2"
-}
-```
-
-This keeps overrides scoped to the affected dependents and avoids forcing unrelated consumers onto an incompatible version.
-
-## TypeScript Usage
-
-- Use strict mode.
-- Avoid "unknown" unless absolutely necessary.
-- Never use "any".
-- Prefer type definitions; avoid type assertions (as, !).
-- Always use curly braces for if statements.
-- Avoid # for private properties.
-- Prefer interface over type for object shapes.
-
-## Classes & Code Organization
-
-### Class Member Order
-
-1. Public static variables
-2. Public static methods
-3. Public variables
-4. Public methods
-5. Protected variables & methods
-6. Private variables & methods
-
-### Exports
-
-- Exported members must appear at the top of the file.
-- Always use named exports for new components & classes.
-- Document ALL public/exported functions with JSDoc.
-
-## React Usage
-
-- Use functional components with hooks.
-- Event handlers should be prefixed with "handle", like "handleClick" for onClick.
-- Avoid unnecessary re-renders by using React.memo, useMemo, and useCallback appropriately.
-- Use descriptive prop types with TypeScript interfaces.
-- Do not import React unless it is used directly.
-- Use styled-components for component styling.
-- Ensure high accessibility (a11y) standards using ARIA roles and semantic HTML.
-
-## MobX State Management
-
-- Use MobX stores for global state management.
-- Keep stores in `app/stores/`.
-- Use `observable`, `action`, and `computed` decorators appropriately.
-- Prefer computed values over manual calculations in render.
-- Keep business logic in stores, not components.
-
-## Database & ORM
-
-- Use Sequelize models in `server/models/`.
-- Generate migrations with Sequelize CLI:
-
-```bash
-yarn sequelize migration:create --name=add-field-to-table
-```
-
-- Run migrations with `yarn db:migrate`.
-- Use transactions for multi-table operations.
-- Add appropriate indexes for query performance.
-- Always handle database errors gracefully.
-
-## API Design
-
-- RESTful endpoints under `/api/`.
-- Authentication endpoints under `/auth/`.
-- Use consistent error responses.
-- Validate request data using the validation middleware and schemas
-- Use presenters to format API responses.
-- Keep API routes thin, use model methods for business logic, or commands if logic spans multiple models.
-
-## Authentication & Authorization
-
-- JWT tokens for authentication.
-- Policies in `server/policies/` for authorization.
-- Use cancan-style ability checks.
-- Use authenticated middleware for protected routes.
-- Always verify user permissions before data access.
-
-## Real-time Collaboration
-
-- WebSocket connections for real-time updates.
-- Use Y.js for collaborative editing.
-- Handle connection state changes gracefully.
-
-## Documentation
-
-- All public/exported functions & classes must have JSDoc.
-- Include:
-  - Description
-  - @param and @return (start lowercase, end with period)
-  - @throws if applicable
-- Add a newline between the description and the @ block.
-- Use correct punctuation.
-
-## Testing
-
-- Run tests with Vitest:
-
-```bash
-# Run a specific test file (preferred)
-yarn test path/to/test.spec.ts
-
-# Run every test (avoid)
-yarn test
-
-# Run test suites (avoid)
-yarn test:app      # All frontend tests
-yarn test:server   # All backend tests
-yarn test:shared   # All shared code tests
-```
-
-- Write unit tests for utilities and business logic in a collocated .test.ts file.
-- Do not create new test directories
-- Mock external dependencies appropriately in **mocks** folder.
-- Aim for high code coverage but focus on critical paths.
-
-## Code Quality
-
-- Use Oxlint for linting: `yarn lint`
-- Format code with oxfmt: `yarn format`
-- Check types with TypeScript: `yarn tsc`
-- Pre-commit hooks run automatically via Husky.
-- Fix linting issues before committing.
-
-## Error Handling
-
-- Use custom error classes in `server/errors.ts`.
-- Always catch and handle errors appropriately.
-- Log errors with appropriate context.
-- Return user-friendly error messages.
-- Never expose sensitive information in errors.
-
-## Performance
-
-- Use React.memo for expensive components.
-- Implement pagination for large lists.
-- Use database indexes effectively.
-- Cache expensive computations.
-- Monitor performance with appropriate tools.
-- Lazy load routes and components where appropriate.
-
-## Security
-
-- Sanitize all user input.
-- Always use `sanitizeUrl()` when setting `href` or `src` from user-controlled data in ProseMirror `toDOM` methods, regardless of whether it is imported via an alias or a relative path. Unlike React components, `toDOM` writes raw DOM and does not sanitize attribute values.
-- Use CSRF protection.
-- Use rateLimiter middleware for sensitive endpoints.
-- Follow OWASP guidelines.
-- Never store sensitive data in plain text.
-- Use environment variables for secrets.
+<!-- /bmad:context -->
