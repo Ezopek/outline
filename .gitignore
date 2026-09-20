@@ -23,3 +23,12 @@ data/*
 !.yarn/releases
 .yarn/releases
 !.yarn/sdks
+
+# BMAD
+/_bmad/
+/.agents/
+/.claude/
+.bmad-loop/runs/
+.bmad-loop/cache/
+.bmad-loop/policy.toml
+_bmad/render/
