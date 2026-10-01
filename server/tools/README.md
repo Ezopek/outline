@@ -43,31 +43,45 @@ Create one reusable lint engine and call it from:
 - a new read-only `lint_document` tool; and
 - a new read-only `lint_wiki` tool, optionally accepting a collection ID.
 
+Create and update enforcement applies only when the post-operation collection's
+policy enforces writes or its configuration entry is invalid. Other collections
+keep upstream write behavior.
+
 `update_document` supports `replace`, `append`, `prepend`, and `patch`. Validation
 must inspect the complete resulting title and body after applying the requested
 edit with Outline's own transformation semantics. Linting only the incoming text
 fragment is incorrect. A failed lint must not partially save the document or
 leave externally visible side effects.
 
-Errors block MCP create and update operations. Warnings are returned but do not
-block writes. Tool responses use stable machine-readable issue codes rather than
-requiring clients to parse prose, for example:
+Errors block MCP create and update operations into collections whose policy
+enforces writes. Warnings are returned but do not block writes. Tool responses
+use stable machine-readable issue codes rather than requiring clients to parse
+prose. For example, a rejected enforced write returns this first content block
+(illustrative only; the Architecture Spine defines exact codes, locations, and
+response shapes in AD-3, AD-4, and AD-12):
 
 ```json
 {
-  "ok": false,
-  "errors": [
-    {
-      "code": "REQUIRED_FIELD_MISSING",
-      "documentId": "document-id",
-      "line": 7,
-      "path": "Document metadata.Last verified",
-      "message": "Required field `Last verified` is missing"
-    }
-  ],
-  "warnings": []
+  "success": false,
+  "validation": {
+    "status": "rejected",
+    "policySchemaVersion": 1,
+    "policyFingerprint": "sha256:<64 lowercase hex digits>",
+    "errors": [
+      {
+        "code": "REQUIRED_METADATA_FIELD_MISSING",
+        "severity": "error",
+        "message": "A required metadata field is missing.",
+        "location": { "documentId": "document-id" }
+      }
+    ],
+    "warnings": [],
+    "systemFailures": []
+  }
 }
 ```
+
+`policySchemaVersion` and `policyFingerprint` appear only when the actor can read the write's post-operation collection.
 
 Tool handlers remain responsible for existing authentication and authorization.
 Lint tools must never expose documents or link targets that the authenticated
@@ -156,9 +170,10 @@ templates, the surface document ID, and required global index IDs must be suppli
 through deterministic server-side configuration. Do not hard-code private
 workspace identifiers into reusable source or expose them in tool descriptions.
 
-Configuration errors must fail closed for hard-enforced writes in a configured
-scope and return a distinct machine-readable error. Unconfigured collections must
-retain upstream behavior until explicitly enabled.
+Configuration errors must fail closed for MCP create and update operations into
+a collection whose configuration entry is invalid and report a distinct
+machine-readable System Failure. Unconfigured and `read_only` collections must
+retain upstream write behavior.
 
 ### Required tests
 
@@ -172,7 +187,8 @@ retain upstream behavior until explicitly enabled.
   and required direct surface links;
 - Markdown/ProseMirror round-trip tests for the canonical metadata block;
 - MCP discovery tests proving the new tools appear on the same `/mcp` endpoint;
-- compatibility tests proving unconfigured collections retain upstream behavior.
+- compatibility tests proving unconfigured and `read_only` collections retain
+  upstream write behavior.
 
 Implementation is not deployment approval. Build, migration, rollback, and live
 acceptance must be handled separately against the selected Outline revision.

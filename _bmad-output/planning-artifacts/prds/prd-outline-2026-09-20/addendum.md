@@ -2,7 +2,7 @@
 title: "PRD Addendum: Deterministic Wiki Linting for Outline MCP"
 status: final
 created: 2026-09-20
-updated: 2026-09-21
+updated: 2026-09-30
 ---
 
 # PRD Addendum: Deterministic Wiki Linting for Outline MCP
@@ -23,8 +23,8 @@ This addendum preserves approved technical constraints and architecture inputs t
 - Ensure user-controlled `href` and `src` values emitted by ProseMirror `toDOM` pass through `sanitizeUrl()`.
 - Prove canonical visible metadata survives the actual Markdown/ProseMirror round trip before relying on it. Do not assign special semantics to front matter without equivalent evidence.
 - Extend Outline's existing Event/audit-log infrastructure with durable aggregate summaries for `lint_document`, `lint_wiki`, and configured write-validation attempts, including rejected and degraded outcomes. Initial acceptance must not depend on external APM or StatsD because the pilot does not currently enable such telemetry.
-- Persist only audit-safe aggregate evidence: operation and outcome, completion, duration, authorized scope kind or identifier, policy version/fingerprint, request correlation, evaluated-object counts, and Finding counts by severity and stable code. Do not persist full findings, document content or excerpts, diagnostic locations or messages, protected target metadata, raw configuration, or request bodies.
-- Isolate the added audit path from functional outcomes. Audit persistence failures must not change lint results, reject or roll back otherwise valid writes, or appear in the standard MCP response. Emit correlated operator-facing diagnostics instead; architecture must choose a failure-isolated persistence mechanism rather than widening the mutation transaction's failure domain.
+- Persist only audit-safe aggregate evidence: operation and outcome, completion, duration, audited scope kind or identifier under PRD FR-21, policy version/fingerprint, request correlation, the authenticated actor and source IP carried by the existing Event row, authentication credential type and, when reliably available, the authenticated client identifier, whether runtime fail-open was exercised, evaluated-object counts, Finding counts by severity and stable code, and System Failure counts by stable code. Do not persist full findings, document content or excerpts, diagnostic locations or messages, protected target metadata, raw configuration, or request bodies.
+- Isolate the added audit path from functional outcomes. Audit persistence failures must not change lint results, reject or roll back otherwise valid writes, or appear in the standard MCP response. PRD FR-22 names the one accepted exception: a lost HTML import-job result whose committed audit summary is also missing. Emit correlated operator-facing diagnostics instead; architecture must choose a failure-isolated persistence mechanism rather than widening the mutation transaction's failure domain.
 
 ## Intentionally Deferred Architecture Decisions
 

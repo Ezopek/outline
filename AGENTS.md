@@ -34,9 +34,9 @@ This is an operator-maintained Outline fork for deterministic Wiki linting in th
 - Follow the checked-out baseline's TypeScript configuration; do not claim full strict mode where `tsconfig.json` does not enable it.
 - Implement one reusable lint engine shared by write enforcement and read-only lint tools.
 - Validate `update_document` against the fully projected post-edit document, not only the incoming fragment.
-- Return stable machine-readable issue codes. Errors block configured writes; warnings do not.
+- Return stable machine-readable issue codes. Errors block enforced MCP writes; warnings do not.
 - Failed linting must not persist partial state or externally visible side effects.
-- Unconfigured collections retain upstream behavior.
+- Unconfigured and `read_only` collections retain upstream write behavior; an invalid collection policy in an actor-readable lint scope is a System Failure, never clean or not evaluated.
 - Never reveal inaccessible link targets or document metadata through lint results.
 - In ProseMirror `toDOM`, sanitize user-controlled `href` and `src` values with `sanitizeUrl()`.
 

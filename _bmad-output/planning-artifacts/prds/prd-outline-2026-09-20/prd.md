@@ -2,7 +2,7 @@
 title: "PRD: Deterministic Wiki Linting for Outline MCP"
 status: final
 created: 2026-09-20
-updated: 2026-09-21
+updated: 2026-10-01
 ---
 
 # PRD: Deterministic Wiki Linting for Outline MCP
@@ -52,7 +52,7 @@ The Wiki operator owns policy and release decisions rather than routine remediat
 ### 2.4 Key User Journeys
 
 - **UJ-1. An MCP agent closes a logical Wiki change batch.** After completing an authorized batch, the agent invokes `lint_wiki` for the applicable scope, receives deterministic findings, repairs errors within its existing authority, and re-runs the lint until the result is complete and contains zero errors. Warnings remain visible but do not cause an unbounded repair loop. Findings requiring judgment or additional authority are escalated to the Wiki operator.
-- **UJ-2. An MCP agent attempts an invalid document write.** The agent invokes `create_document` or `update_document`; the server evaluates the fully projected document under the configured policy before persistence. Blocking errors return precise machine-readable findings and leave no partial effects. A write that passes existing checks and validation succeeds; Warnings do not block it and remain visible to the agent.
+- **UJ-2. An MCP agent attempts an invalid document write.** The agent invokes `create_document` or `update_document`; when the post-operation collection is an Enforced Collection, the server evaluates the fully projected document under its policy before persistence. Blocking errors return precise machine-readable findings and leave no partial effects. A write that passes existing checks and validation succeeds; Warnings do not block it and remain visible to the agent.
 - **UJ-3. A Wiki operator handles validation risk.** The operator approves policy and delivery gates, receives escalated findings, and can distinguish a clean validation result from incomplete or degraded validation before deciding whether later publication, deployment, or rollout stages may proceed.
 
 ## 3. Glossary
@@ -60,15 +60,26 @@ The Wiki operator owns policy and release decisions rather than routine remediat
 - **Clean Result** — A completed lint evaluation with zero Errors. Warnings may remain. An incomplete or degraded evaluation is never a Clean Result.
 - **Configured Collection** — A collection for which a valid Policy Configuration explicitly enables linting.
 - **Degraded Validation** — An unmistakable machine-readable state indicating that a write proceeded under an explicitly enabled runtime-failure bypass. It is not a Clean Result.
+- **Enforced Collection** — A Configured Collection whose valid Policy Configuration sets `enforced` activation. A Configured Collection with `read_only` activation is not an Enforced Collection.
+- **Enforced Write** — A built-in MCP `create_document` or `update_document` operation that meets both of these conditions:
+  - as applicable and in baseline order, it passes baseline authentication, MCP input-schema validation, lookup of its target document, parent, and template, and baseline pre-write authorization; and
+  - its post-operation collection is an Enforced Collection or an Invalid-Policy Collection under the serving instance's startup Policy Configuration.
+
+  The post-operation collection is determined as for its Projected Document, at the time the request is handled. This classification is made once per request and does not change later in that operation.
 - **Error** — A conclusively proven policy violation that blocks configured MCP writes and prevents a Clean Result.
-- **Evaluated Scope** — The authorized documents and collections actually inspected by a lint operation, reported without revealing inaccessible resources.
+- **Evaluated Scope** — The authorized documents and collections actually inspected by a lint operation, plus any Invalid-Policy Collection, or document in one, that the operation reports under FR-12 with nothing inspected. It is reported without revealing inaccessible resources.
 - **Finding** — A deterministic machine-readable report of an Error or Warning, identified by a stable issue code and a safe, applicable location.
+- **Invalid-Policy Collection** — A collection whose identifiable Policy Configuration entry is invalid. For write behavior, it is neither an unconfigured collection nor a collection without enabled policy. FR-12 governs its Enforced Writes. A rejection of such a write is a validation rejection for FR-16, FR-17, FR-20, and NFR-9.
 - **Logical Change Batch** — An operator- or agent-defined group of related Wiki changes after which read-only linting is run. The MCP server does not infer this boundary.
 - **Policy Configuration** — Deterministic server-side policy that selects Configured Collections and their applicable rule settings and identifiers.
 - **Projected Document** — The complete prospective title and body after applying a requested create or update with Outline's supported transformation semantics, together with the post-operation collection scope used to select policy, but before persistence.
 - **System Failure** — A failure of configuration or runtime validation, reported separately from Errors and Warnings because it does not describe document content.
-- **Validation Status** — The explicit outcome of validation for a configured MCP write: `validated`, `validated_with_warnings`, `degraded_validation`, or `rejected`.
+- **Tool-Execution Error** — An MCP tool result marked as an error (`isError`). It is distinct from a JSON-RPC protocol error and carries no Validation Status.
+- **Validation Attempt** — An Enforced Write from its completed classification until it commits, is rejected, or aborts. Its validation decision is the point at which the validation result and the collection's policy either reject the write or let it proceed to persistence; an attempt aborts before or after that decision. A failure during classification and a collection-change conflict under FR-16 are not Validation Attempts. Lowercase "validation attempt" in this PRD and its addendum has the same meaning.
+- **Validation Status** — The explicit outcome of validation for an Enforced Write: `validated`, `validated_with_warnings`, `degraded_validation`, or `rejected`.
 - **Warning** — A non-blocking deterministic finding that remains visible but does not prevent a Clean Result or a configured MCP write.
+
+Wherever this PRD or its addendum uses "configured", in any inflection or hyphenation, to qualify an MCP write, create, update, write outcome, validation, validation attempt, Validation Status, or validation audit, it refers to an Enforced Write or to its validation. The phrase "hard-enforced write" has the same meaning. "Configured" keeps its ordinary meaning when it qualifies a collection, scope, policy, rule, parameter, or identifier.
 
 ## 4. Capabilities and Functional Requirements
 
@@ -128,7 +139,7 @@ An authenticated MCP actor can invoke `lint_document` for a document the actor m
 
 - The tool evaluates the document's current stored title and body plus only the authorized related state required by applicable rules.
 - An inaccessible document is handled through existing access boundaries and is not exposed through lint diagnostics.
-- A document outside a Configured Collection returns the explicit policy-not-configured/not-evaluated outcome.
+- A document whose collection is `null` or has no Policy Configuration entry returns the explicit policy-not-configured/not-evaluated outcome. A document in an Invalid-Policy Collection returns the System Failure FR-12 requires.
 
 #### FR-5: Deterministic document-structure rules
 
@@ -168,8 +179,8 @@ An authenticated MCP actor can invoke `lint_wiki` with an optional collection id
 
 **Consequences:**
 
-- With a collection identifier, the tool evaluates that Configured Collection only when the actor may access it.
-- Without a collection identifier, the tool evaluates all Configured Collections and documents readable by the actor.
+- With a collection identifier, the tool evaluates that collection only when the actor may access it. A Configured Collection is linted, an Invalid-Policy Collection is reported under FR-12, and any other collection is not evaluated.
+- Without a collection identifier, the tool evaluates all Configured Collections and documents readable by the actor and reports each readable Invalid-Policy Collection under FR-12.
 - The response describes the Evaluated Scope without naming or implying inaccessible collections or documents.
 - Clean applies only to the reported authorized scope, never implicitly to the entire workspace.
 
@@ -205,7 +216,7 @@ When an isolated runtime failure prevents evaluation of part of an otherwise aut
 **Capability acceptance criteria:**
 
 - Collection fixtures cover valid structure, each hierarchy defect, required direct surface links, and absent direct links.
-- Actor fixtures prove default scope is limited to readable Configured Collections and that no inaccessible identity or metadata appears in results.
+- Actor fixtures prove default scope is limited to readable Configured Collections and readable Invalid-Policy Collections and that no inaccessible identity or metadata appears in results.
 - An injected isolated runtime failure produces retained findings for completed work, a stable System Failure, `complete: false`, and no Clean Result.
 - Re-running a repaired logical batch yields a complete zero-error result for the same Evaluated Scope.
 
@@ -221,19 +232,21 @@ The system shall enable deterministic lint policy explicitly per collection thro
 
 - Workspace-specific schemas, templates, surface identifiers, and global-index identifiers remain configuration data rather than reusable source, tool descriptions, examples, or fixtures.
 - Applicability to `create_document` and `update_document` is determined by the Projected Document's post-operation collection.
-- A supported write that places a Projected Document in a Configured Collection is validated before persistence; a supported write that leaves configured scope is not blocked by the former collection's content policy.
-- Read-only requests outside Configured Collections return policy-not-configured/not-evaluated.
-- MCP writes outside Configured Collections retain upstream behavior and response compatibility.
+- An Enforced Write whose post-operation collection is an Enforced Collection is validated before persistence; a supported write whose post-operation collection is not an Enforced Collection is not blocked by a former collection's content policy.
+- Read-only requests whose actor-readable scope contains neither a Configured Collection nor an Invalid-Policy Collection return policy-not-configured/not-evaluated; an Invalid-Policy Collection in that scope follows FR-12. For `lint_document`, the actor-readable scope is the collection of the document the actor can read, even when the actor cannot read that collection itself; for `lint_wiki`, it is the requested collection when the actor can read it and, without a collection identifier, the collections the actor can read.
+- MCP writes that are not Enforced Writes retain upstream behavior and response compatibility. They include every write whose post-operation collection, when the request is handled, is `null`, has no Policy Configuration entry, or is a Configured Collection with `read_only` activation.
 
 #### FR-12: Invalid configuration handling
 
-Invalid Policy Configuration shall produce a distinct stable System Failure and shall fail closed for every hard-enforced write in the affected scope.
+Invalid Policy Configuration shall produce a distinct stable System Failure and shall fail closed for every hard-enforced write in the affected scope. A configuration defect that prevents identifying which collections the configuration covers instead stops the instance from starting, and its startup diagnostics name a stable failure code and a non-secret location of the defect without any configuration content.
 
 **Consequences:**
 
 - Invalid configuration never becomes a Warning or a content Error.
 - Invalid configuration never permits fail-open behavior.
 - Read-only operations affected by invalid configuration never report a Clean Result.
+- A read-only operation whose actor-readable scope (FR-11) contains an Invalid-Policy Collection reports it as this System Failure, or as a generic runtime System Failure when the collection's readability cannot be established, and never as not evaluated. Its collection and policy identity appear only as NFR-11 allows.
+- A configuration System Failure is an operator escalation, not an agent-repairable Finding. The agent escalates it to the Wiki operator under UJ-1 rather than repairing it, and a scope that contains one reaches a Clean Result only after the operator corrects the configuration.
 
 #### FR-13: Runtime validation failure handling
 
@@ -245,6 +258,8 @@ After valid configuration has been established, runtime validation failures shal
 - Fail-open defaults to disabled and cannot be enabled or overridden by an MCP request.
 - Fail-open applies only to runtime validation failures, never invalid configuration or known content Errors.
 - Every write admitted through fail-open returns the unmistakable `degraded_validation` Validation Status and a safe machine-readable System Failure.
+- Failures of the write's own authorization, locking, transformation, media staging, model validation, or persistence, a commit that does not take effect, and any failure that leaves the write's transaction unusable, are not runtime validation failures. They never fail open and follow the second FR-16 exception.
+- A write is admitted through fail-open only when it commits. A fail-open decision followed by an abort returns no `degraded_validation` and does not exercise fail-open. A fail-open write whose commit the server cannot establish, or whose status it cannot recover under FR-16, returns the FR-16 Tool-Execution Error instead of `degraded_validation`, and its audit follows FR-20.
 
 #### FR-23: Stable severity semantics
 
@@ -259,19 +274,19 @@ Each Finding issue code shall have one fixed severity as part of its client-visi
 
 **Capability acceptance criteria:**
 
-- Configuration fixtures prove each malformed or inconsistent configuration class produces a stable System Failure and blocks affected writes.
-- A read-only request outside configured scope returns not evaluated; a write outside configured scope matches baseline upstream behavior.
+- Configuration fixtures prove each malformed or inconsistent collection entry produces a stable System Failure and blocks affected writes. Each defect that prevents identifying the covered collections blocks startup with a stable failure code and a non-secret location and logs no configuration content.
+- A read-only request whose actor-readable scope (FR-11) contains neither a Configured Collection nor an Invalid-Policy Collection returns not evaluated. An Invalid-Policy Collection in the actor-readable scope returns the System Failure FR-12 requires, never a not-evaluated or Clean Result. In `lint_document` this includes a readable document whose collection the actor cannot read, and that result carries no collection or policy identity. In collection-scoped and default-scope `lint_wiki`, an Invalid-Policy Collection the actor cannot read contributes nothing. A write that is not an Enforced Write matches baseline upstream behavior.
 - Injected runtime failures prove default fail-closed behavior and per-collection fail-open behavior independently.
 - No request parameter or tool input can activate, widen, or override fail-open policy.
 - Severity fixtures prove each issue code has one invariant severity and that attempted configuration overrides fail closed.
 
 ### 4.5 MCP Write Enforcement
 
-**Description:** The shared lint policy evaluates the complete state a configured MCP write would persist. Known Errors and fail-closed System Failures reject the operation before externally visible effects; Warnings remain visible without blocking.
+**Description:** The shared lint policy evaluates the complete state that an Enforced Write into an Enforced Collection would persist; an Enforced Write into an Invalid-Policy Collection fails closed without evaluation. Known Errors and fail-closed System Failures reject the operation before externally visible effects; Warnings remain visible without blocking.
 
 #### FR-14: Create enforcement
 
-For `create_document` whose Projected Document belongs to a Configured Collection, the system shall validate the complete Projected Document before persistence.
+For a `create_document` Enforced Write whose Projected Document belongs to an Enforced Collection, the system shall validate the complete Projected Document before persistence.
 
 **Consequences:**
 
@@ -281,7 +296,7 @@ For `create_document` whose Projected Document belongs to a Configured Collectio
 
 #### FR-15: Complete update enforcement
 
-For `update_document` whose Projected Document belongs to a Configured Collection, the system shall validate the complete Projected Document before persistence for every supported update mode.
+For an `update_document` Enforced Write whose Projected Document belongs to an Enforced Collection, the system shall validate the complete Projected Document before persistence for every supported update mode.
 
 **Consequences:**
 
@@ -291,23 +306,31 @@ For `update_document` whose Projected Document belongs to a Configured Collectio
 
 #### FR-16: Explicit configured-write outcome
 
-Every configured MCP create or update response shall expose one Validation Status without requiring the client to infer validation from missing fields or message prose.
+Every Enforced Write response shall expose one Validation Status without requiring the client to infer validation from missing fields or message prose. This requirement has three exceptions.
+
+1. **Collection change.** Suppose an Enforced Write was classified under a valid `enforced` policy, and the server's re-check before commit then finds a post-operation collection that differs from the classified one. Whenever that difference is detected, the write fails with a Tool-Execution Error that carries a stable error identifier. It has no Validation Status and is not a Validation Attempt, and any validation already performed is discarded.
+2. **Abort or unestablished outcome.** A Validation Attempt whose response can report neither a commit nor a rejection fails with a Tool-Execution Error and has no Validation Status, whatever the attempt's eventual outcome. The error carries the message of an Outline application error that has a stable identifier, and otherwise, and always for an outcome the server cannot establish or a committed status it cannot recover, a fixed generic message. This covers the failures that FR-13 excludes from runtime validation failures, before or after the validation decision; client cancellation before the write proceeds to persistence; a requester that obtains no result from the asynchronous HTML import job; and a commit whose outcome the server cannot establish. The write is rolled back, except that when the server cannot establish whether it committed or will commit, or cannot recover a committed write's status, the error makes no claim about persistence.
+
+3. **Classification failure.** A failure during classification itself keeps baseline behavior or fails with a Tool-Execution Error that carries the fixed generic message. It has no Validation Status, is not a Validation Attempt, and records no summary.
+
+A committed Enforced Write returns its Validation Status unless the server cannot establish that it committed or, for an HTML create whose committed row is found by a later lookup or probe rather than reported by the attempt that committed it, cannot recover the status that attempt recorded. A status recovered that way may carry empty Error and Warning collections. Failure to assemble the breadcrumb, share URL, or patch-mode final-Markdown echo omits that detail, and failure to assemble the other document fields reduces the response to the document identifier and the validation object; neither turns a committed write into an error.
 
 **Consequences:**
 
 - `validated` means validation completed with zero Errors and zero Warnings.
-- `validated_with_warnings` means the write succeeded with zero Errors and one or more returned Warnings.
+- `validated_with_warnings` means the write succeeded with zero Errors and one or more Warnings, which are returned unless the status was recovered from a committed row found by a later lookup or probe (FR-16).
 - `degraded_validation` means the write succeeded only because the collection's runtime-failure fail-open policy was exercised.
 - `rejected` means the write did not persist because of Errors or a fail-closed System Failure.
 
 #### FR-17: No partial or externally visible rejected-write effects
 
-A configured MCP write rejected by validation shall not persist partial document state or produce externally visible write side effects.
+An Enforced Write whose Validation Status is `rejected` shall not persist partial document state or produce externally visible write side effects.
 
 **Consequences:**
 
 - A rejected create leaves no created document.
 - A rejected update leaves the prior document state intact.
+- A Validation Attempt that aborts under the second FR-16 exception and is rolled back persists no created document, no change to the prior document state, no attachment record, and no document mutation event; media it staged stays inaccessible through Outline. It emits no successful-mutation signal, such as a webhook, websocket message, or notification. When the attempt that issued the commit cannot establish that its own commit took effect, it withholds those signals and the related post-commit processing even though the write may have committed; the architecture records this residual.
 - Failed validation does not emit an externally visible successful mutation signal.
 - A privacy-preserving audit record of the rejected validation attempt is permitted and required under FR-20; it is evidence of rejection, not a successful mutation effect.
 
@@ -319,15 +342,50 @@ Hard validation in the initial implementation shall apply only to built-in MCP `
 
 - UI and direct-API writes remain possible and are detected by later read-only linting.
 - Expanding enforcement to shared lower-level write paths requires a separate product and blast-radius decision.
+- Built-in `move_document` and `restore_document` remain outside the initial configured-write validation-status and configured-write validation-audit contracts. Compatibility fixtures characterize their unchanged baseline behavior for collection-changing cases but do not count as CAP-5 Projected Document enforcement evidence.
 
 **Capability acceptance criteria:**
 
 - Invalid create fixtures are rejected before persistence with stable Findings and `rejected` status.
 - Each supported update mode is tested against the complete Projected Document, including a case where the incoming fragment appears valid but the resulting document is invalid.
-- Scope-transition fixtures prove that entering a Configured Collection activates enforcement before persistence and leaving configured scope is not blocked by the former collection's content policy.
-- Warnings permit persistence and are returned with `validated_with_warnings`.
+- Collection-applicability fixtures prove that policy selection uses the Projected Document's post-operation collection for every destination-selection path reachable through the selected baseline's in-scope `create_document` and `update_document` contracts. Tool-level fixtures distinguish among the following conditions: an absent policy or null collection, a valid policy with `read_only` activation, a valid policy with `enforced` activation, and an invalid-policy sentinel. An existing collectionless draft with a stable known Error is rejected before publication into an `enforced` destination, leaving its collection and publication state unchanged and producing the required minimized rejection audit. Unconfigured and `read_only` destinations preserve baseline write behavior and response shape and add no configured-write validation audit; an invalid-policy destination fails closed. Separately labeled compatibility fixtures exercise `move_document` and `restore_document` collection changes among `enforced`, unconfigured, `read_only`, and identifiable invalid-policy scopes in every direction permitted by baseline authorization, while preserving baseline authorization, persistence, response, and mutation-event behavior and adding no validation field or configured-write validation-audit summary. These compatibility fixtures provide neither Projected Document enforcement evidence nor CAP-5 enforcement evidence. Resulting out-of-band drift remains detectable by `lint_wiki` only when the destination has a valid configured policy and lies within the actor-authorized Evaluated Scope; unconfigured and invalid-policy destinations retain their approved not-evaluated or System Failure behavior.
+
+| In-scope operation path | Post-operation collection source | Required evidence |
+| --- | --- | --- |
+| `create_document` with `collectionId` | Explicit destination collection | Unconfigured, `read_only`, `enforced`, and invalid-policy outcomes select only the resolved destination policy. |
+| `create_document` with `parentDocumentId` | Authorized parent collection | The parent-derived destination follows the same four policy cases without trusting a conflicting request value. |
+| `update_document` on an existing collected document | Existing collection | Policy selection uses the retained collection for every edit mode, title-only update, publication state, and update with unchanged policy-relevant content; `collectionId` cannot move the document. |
+| `update_document` on an existing collectionless draft without publication | `null` | Baseline response behavior is preserved, no validation field or configured-write validation audit is added, and `collectionId` without `publish: true` neither moves nor attaches the draft. |
+| `update_document` publishing an existing collectionless draft | Authorized `collectionId` destination | A stable known Error proves `enforced` pre-persistence rejection; clean and Warning cases remain governed by the existing acceptance criteria. |
+| `update_document` unpublishing an existing collected document | Existing collection because `detach: false` | Policy selection uses the retained collection; the operation is not treated as leave-scope. |
+| `move_document` collection change | Destination chosen by the baseline move contract | Compatibility across `enforced`, unconfigured, `read_only`, and identifiable invalid-policy scopes only: no lint enforcement, validation field, or configured-write validation audit is added. |
+| `restore_document` collection change | Explicit or original collection under the baseline restore contract | Compatibility across `enforced`, unconfigured, `read_only`, and identifiable invalid-policy scopes only: no lint enforcement, validation field, or configured-write validation audit is added. |
+
+For all policy-bearing in-scope rows, fixtures separately cover an absent-policy state, a valid `read_only` state, a valid `enforced` state, and an identifiable invalid-policy sentinel state. Authorization failures return their baseline error content, never become lint Findings, and never admit writes on a fail-open basis.
+
+- Warnings permit persistence and are returned with `validated_with_warnings`, except in a status recovered under FR-16.
 - Rejected create and update tests prove no partial state, activity, event, or other externally visible successful-write effect remains.
 - Runtime failure tests prove default rejection and explicit per-collection degraded admission, while invalid configuration and known Errors remain unconditionally blocking.
+- Abort fixtures prove, for established aborts before and after the validation decision, that the second FR-16 exception returns a Tool-Execution Error without a Validation Status, never fails open, persists nothing as FR-17 requires, and records its aborted outcome under FR-20. They also prove that a committed write whose optional response details fail still returns its Validation Status, and that a write whose outcome cannot be established makes no persistence claim.
+- Invalid-Policy Collection fixtures cover each policy-bearing in-scope `create_document` and `update_document` path. The fixtures include:
+  - HTML-format create;
+  - template use;
+  - a `patch` whose target text is absent;
+  - an update with no changed field;
+  - an update containing embedded images; and
+  - unpublish.
+
+  They prove that once baseline authentication, input-schema validation, lookup, and pre-write authorization succeed, the write behaves as follows:
+  - It returns the modeled `rejected` Validation Status with the stable configuration System Failure.
+  - It persists nothing and creates no import job, attachment, activity, or successful-mutation signal.
+  - It exposes no fabricated valid policy identity and no raw configuration.
+  - It attempts exactly one minimized validation-audit summary. That summary's payload carries the stable System Failure code and no valid or invalid policy fingerprint.
+
+  A failed authentication, input-schema, lookup, or pre-write authorization check keeps its baseline behavior. It produces neither this outcome nor a validation-audit summary.
+- Classification fixtures prove three things:
+  - An HTML `create_document` Enforced Write may be classified under a valid `enforced` policy and then, before persistence, find a different fingerprint for the same post-operation collection. This covers worker-time `read_only`, absent, and invalid states. It then returns `rejected` with one configuration System Failure and, only when the actor can read the classified collection, its request-time valid policy identity.
+  - An Enforced Write classified under a valid `enforced` policy may have its post-operation collection change before or after validation. When the re-check before commit detects the change, the write fails with the Tool-Execution Error of the first FR-16 exception. It persists nothing and records no validation audit.
+  - A write that is not an Enforced Write when the request is handled is not reclassified by a later policy or collection change.
 - Discovery and integration tests prove the same `/mcp` endpoint exposes the lint tools and enforced write tools to supported clients.
 
 ### 4.6 Durable Audit Evidence
@@ -336,25 +394,28 @@ Hard validation in the initial implementation shall apply only to built-in MCP `
 
 #### FR-19: Read-only lint audit summary
 
-Every `lint_document` and `lint_wiki` invocation shall attempt to record one audit summary attributable to the authenticated actor and authorized scope. Under normal audit operation, exactly one retrievable summary shall be recorded per invocation.
+Every `lint_document` and `lint_wiki` invocation that returns a lint result, which is any modeled outcome including not evaluated, incomplete, and failed, shall attempt to record one audit summary attributable to the authenticated actor and authorized scope. Under normal audit operation, exactly one retrievable summary shall be recorded per such invocation.
 
 **Consequences:**
 
-- The summary identifies the lint operation, outcome, completion state, duration, scope kind, policy version or fingerprint, and server request correlation identifier.
+- The summary identifies the lint operation, outcome, completion state, duration, scope kind, and server request correlation identifier, and, when the scope is one collection or one document under a valid policy, that policy's version and fingerprint.
 - It records counts of evaluated documents and links where applicable, plus Finding counts by severity and stable code.
 - It records whether the outcome was clean, not evaluated, incomplete, or failed.
+- An invocation that ends in a Tool-Execution Error, such as an invalid call or an authorization denial, returns no lint result and records no summary.
 - It records a reliable authenticated client identifier only when one is available; it shall not trust an arbitrary client-supplied label.
 
 #### FR-20: Configured-write validation audit summary
 
-Every configured `create_document` and `update_document` validation attempt shall attempt to record one audit summary, including attempts rejected before mutation. Under normal audit operation, exactly one retrievable summary shall be recorded per validation attempt.
+Every Enforced Write Validation Attempt shall attempt to record one audit summary, including attempts rejected before mutation, rejections because the post-operation collection is an Invalid-Policy Collection, and attempts whose abort under the second FR-16 exception the server establishes. Under normal audit operation, exactly one retrievable summary shall be recorded per Validation Attempt whose outcome the server establishes; the consequence below on attempts whose outcome the server cannot establish governs them.
 
 **Consequences:**
 
-- The summary records the Validation Status, duration, policy version or fingerprint, Finding counts by severity and stable code, and whether runtime fail-open was exercised.
+- The summary records the Validation Status or, for an aborted attempt, whether it aborted before or after its validation decision, together with the duration, Finding counts by severity and stable code, and whether runtime fail-open was exercised. When the Enforced Write was classified under a valid policy, the summary also records that policy's version and fingerprint. A rejection because the post-operation collection is an Invalid-Policy Collection records its stable System Failure code and no valid or invalid policy fingerprint.
 - Successful writes remain represented by the baseline's existing document mutation events and can be correlated with their validation audit summary.
 - A rejected attempt produces no document mutation event but retains its validation audit evidence.
 - Degraded validation is identifiable both in the MCP response and in the durable audit record.
+- An aborted attempt records zero Finding and System Failure counts, records runtime fail-open as not exercised, and never counts as validation success.
+- When the server cannot establish an attempt's outcome, the request records no summary of its own. A summary recorded by the component that ended the attempt stands, and a missing summary is an accepted audit evidence gap that operators reconcile out of band as FR-22 describes.
 
 #### FR-21: Audit minimization and authorized retrieval
 
@@ -363,7 +424,7 @@ Lint and validation audit summaries shall use Outline's existing authorized audi
 **Consequences:**
 
 - Audit data excludes document bodies, excerpts, diagnostic messages, line or path locations, protected target identifiers or metadata, raw Policy Configuration, and MCP request bodies.
-- Document or collection identifiers are associated only when allowed by the existing audit authorization model and necessary to identify the actor-authorized scope.
+- Document or collection identifiers are associated only when allowed by the existing audit authorization model and necessary to identify the audited scope. For read-only lint, the audited scope is the actor-authorized scope. For an Enforced Write, it is the classified post-operation collection and, when the document row exists, the written document, recorded with the policy fields FR-20 requires whether or not the writing actor can read that collection. That collection is the write's own scope, not a protected target, and the summary is retrievable only through the authorized audit surface.
 - Authorized operators can retrieve summaries needed to calculate pilot and operational measures without direct database access.
 - External APM, StatsD, or equivalent telemetry may enrich operations later but is not required to prove initial implementation or pilot success.
 - Audit persistence state is not part of the standard MCP response contract and is not presented to the agent as a Wiki integrity concern.
@@ -376,18 +437,19 @@ Failure of the added lint or validation audit mechanism shall not alter the func
 
 - A completed read-only lint retains its actual clean, warning-bearing, incomplete, or failed outcome regardless of audit persistence.
 - Audit persistence failure does not reject, roll back, or downgrade an otherwise permitted configured write.
+- One narrow exception is accepted. When the committing attempt's result from an asynchronous HTML import job does not reach the requester and that attempt's committed audit summary is also missing, the response reports an unestablished outcome under FR-16 instead of the committed Validation Status. The write itself is unaffected, the response claims neither success nor failure, and the document remains readable through the ordinary tools.
 - A content or validation rejection remains rejected regardless of whether its audit summary can be persisted.
 - Audit persistence failures are reported through operator-facing structured server diagnostics with request correlation, not through the standard MCP response.
 - Pilot evidence collection may record an audit evidence gap out of band; the agent is not asked to diagnose internal observability infrastructure unless explicitly performing an authorized debugging task.
 
 **Capability acceptance criteria:**
 
-- Tests prove one summary is recorded for each clean, warning-bearing, not-evaluated, incomplete, failed, rejected, and degraded scenario.
+- Tests prove one summary is recorded for each clean, warning-bearing, not-evaluated, incomplete, failed, rejected, degraded, aborted-before-decision, and aborted-after-decision scenario. They prove that none is recorded for a lint invocation that ends in a Tool-Execution Error, a failure during classification, or a collection-change conflict, and that the request path records none for an attempt whose outcome the server cannot establish.
 - A rejected write produces validation audit evidence while leaving document state and successful-mutation events unchanged.
 - Audit authorization tests prove unauthorized actors cannot retrieve summaries or infer protected target information.
 - Payload fixtures prove all required aggregate fields are present and all prohibited content, request, location, and target data are absent.
 - Under normal audit operation, an authorized operator can calculate tool use, duration, completion, severity/code counts, Validation Status counts, and degraded-validation counts from the audit surface without direct database access.
-- Injected audit-write failures leave lint and write outcomes unchanged, expose no audit state in the standard MCP response, and produce a correlated operator-facing diagnostic.
+- Injected audit-write failures leave lint and write outcomes unchanged, expose no audit state in the standard MCP response, and produce a correlated operator-facing diagnostic; FR-22 names the one exception.
 
 ## 5. Cross-Cutting Non-Functional Requirements
 
@@ -413,22 +475,22 @@ Performance budgets are implementation-readiness requirements measured on an agr
 - **NFR-6 — Point-in-time meaning:** A Clean Result shall describe one coherent observed state of the Evaluated Scope. The architecture may choose the consistency mechanism, but it may not claim clean when concurrent changes make coherence unverifiable.
 - **NFR-7 — Concurrent-change handling:** If the evaluated state changes during `lint_wiki` and coherence cannot be confirmed, the operation shall return a stable System Failure and `complete: false`; the agent may re-run lint after changes settle.
 - **NFR-8 — Failure isolation:** A rule or resource failure shall not silently suppress other required checks. Read-only operations preserve safe completed work under FR-10; configured writes follow FR-12 and FR-13.
-- **NFR-9 — Rejected-write atomicity:** Validation rejection shall preserve the pre-operation externally visible state under FR-17 across every supported create and update path.
+- **NFR-9 — Rejected-write atomicity:** Validation rejection shall preserve the pre-operation externally visible state under FR-17 across every supported create and update path. A Validation Attempt that aborts and is rolled back under the second FR-16 exception shall preserve the pre-operation externally visible state.
 
 ### 5.3 Security and Information Disclosure
 
 - **NFR-10 — Existing security boundaries:** All lint and enforcement paths shall preserve the selected baseline's authentication, authorization, transaction, and information-disclosure boundaries.
-- **NFR-11 — Least disclosure:** Findings, scope summaries, System Failures, logs, and metrics shall contain no document content, target identity, title, URL identifier, collection identity, or metadata that the current actor is not authorized to access.
+- **NFR-11 — Least disclosure:** Findings, scope summaries, System Failures, logs, and metrics shall contain no document content, target identity, title, URL identifier, collection identity, or metadata that the current actor is not authorized to access. Durable audit summaries are operator evidence, not actor-facing output: FR-21 governs the identifiers they carry, and only the authorized audit surface returns them. One exception is accepted. An actor who may read or write a document but cannot read its collection may learn that collection's policy class (no policy, `read_only`, `enforced`, or invalid) from a lint result's state and System Failures, from whether a write returns a Validation Status, and from a validation correlation identifier on a mutation event the actor can see. That actor never learns the collection's identity, its policy fingerprint, or policy content beyond the Findings and System Failures that its own document produces.
 - **NFR-12 — No authority expansion:** A Finding is diagnostic evidence only. It shall not grant write authority, broaden an MCP batch, bypass single-writer coordination, or authorize repair of another document.
 - **NFR-13 — Safe rendering:** User-controlled `href` and `src` values emitted through ProseMirror `toDOM` shall be sanitized with the baseline's approved URL sanitizer.
 
 ### 5.4 Observability
 
 - **NFR-14 — Durable structured evidence:** Under normal audit operation, operators shall be able to observe lint and configured-write validation counts, durations, completion states, Validation Status values, Finding counts by severity and code, and System Failure codes through the existing authorized Event/audit-log capability. Audit persistence failures follow NFR-27.
-- **NFR-15 — Degraded-validation signal:** Under normal audit operation, every write admitted through runtime fail-open shall emit a durable operator-visible audit event in addition to the MCP response. Audit persistence failure follows NFR-27 and cannot conceal the `degraded_validation` status already returned to the agent.
+- **NFR-15 — Degraded-validation signal:** Under normal audit operation, every write admitted through runtime fail-open shall emit a durable operator-visible audit event in addition to the MCP response. Audit persistence failure follows NFR-27 and cannot conceal the `degraded_validation` status already returned to the agent. A write whose outcome the server cannot establish (FR-16) is an audit evidence gap under FR-20, not a breach of this requirement or of SM-P6.
 - **NFR-16 — Configuration health:** Invalid Policy Configuration shall be observable before or at the first affected operation with a stable failure code and enough non-secret context for an operator to locate the configuration scope.
 - **NFR-17 — Privacy-preserving observability:** Audit records, logs, and any optional telemetry shall not record document bodies, diagnostic excerpts, protected target metadata, raw requests, or reusable private Wiki identifiers in generic labels or tool descriptions.
-- **NFR-27 — Observation failure isolation:** Failure of the added audit path shall be observable to operators but shall not change validation semantics, block functional operations, or add internal audit diagnostics to standard agent-facing responses.
+- **NFR-27 — Observation failure isolation:** Failure of the added audit path shall be observable to operators but shall not change validation semantics, block functional operations, or add internal audit diagnostics to standard agent-facing responses. FR-22 names the one exception.
 
 ### 5.5 Compatibility
 
@@ -452,9 +514,9 @@ Performance budgets are implementation-readiness requirements measured on an agr
 - **SM-I1 — Capability coverage:** 100% of capability acceptance criteria covering FR-1 through FR-23 pass on the selected baseline, including all rule families, read-only surfaces, write outcomes, update modes, failure classes, authorization cases, and audit-failure isolation.
 - **SM-I2 — Deterministic contract:** Repeated evaluation of identical fixtures produces identical normalized outcomes, stable codes, safe locations, completeness, and ordering with zero nondeterministic failures across the implementation gate suite.
 - **SM-I3 — Write safety:** Every invalid configured create and update fixture is rejected before document mutation; every warning-only fixture persists successfully; rollback and externally visible state checks report zero partial mutation effects.
-- **SM-I4 — Security boundary:** Authorization and non-disclosure suites pass with zero cases in which an unauthorized actor distinguishes or obtains protected document, collection, link-target, scope, or audit information.
+- **SM-I4 — Security boundary:** Authorization and non-disclosure suites pass with zero cases in which an unauthorized actor distinguishes or obtains protected document, collection, link-target, scope, or audit information, other than the policy class that NFR-11 permits.
 - **SM-I5 — Performance:** NFR-1 through NFR-4 budgets pass on the documented reference environment and datasets, and NFR-5 normalized growth evidence is complete and inspectable; observed durations are calculated from benchmark evidence rather than lint severity.
-- **SM-I6 — Audit evidence:** Normal-operation tests produce one minimized authorized audit summary per lint and configured validation attempt; injected audit failures leave functional outcomes unchanged and produce correlated operator diagnostics only.
+- **SM-I6 — Audit evidence:** Normal-operation tests produce one minimized authorized audit summary per lint invocation that returns a lint result and per configured Validation Attempt whose outcome the server establishes; injected audit failures leave functional outcomes unchanged and produce correlated operator diagnostics only; FR-22 names the one exception.
 - **SM-I7 — Compatibility and portability:** Unconfigured collections match baseline behavior, all tools are discoverable on the same `/mcp` endpoint, and reusable artifacts contain zero pilot-environment identifiers.
 
 Implementation-readiness evidence comes from automated tests, benchmark outputs, schema/payload fixtures, and source review. It does not authorize image publication or deployment.
@@ -467,7 +529,7 @@ The initial pilot runs for at least seven days and covers at least ten explicitl
 - **SM-P2 — Clean batch closure:** 100% of closed pilot batches end with a captured `lint_wiki` result for the intended Evaluated Scope showing `complete: true` and zero Errors. An audit evidence gap does not change the lint result but must be reconciled from the restricted pilot capture before the batch counts toward this metric.
 - **SM-P3 — Actionable remediation:** At least one representative batch exercises lint–repair–re-lint and reaches SM-P2 without an unbounded Warning loop or unauthorized scope expansion.
 - **SM-P4 — No confirmed false blocking:** Every pilot `rejected` outcome is reviewed against the configured policy; zero are confirmed as valid writes incorrectly blocked by the linter.
-- **SM-P5 — No confirmed disclosure regression:** The pilot authorization scenario with actors of different visibility produces zero protected-information disclosures. Automated authorization tests remain the primary evidence; production logs alone do not satisfy this metric.
+- **SM-P5 — No confirmed disclosure regression:** The pilot authorization scenario with actors of different visibility produces zero protected-information disclosures beyond the policy class that NFR-11 permits. Automated authorization tests remain the primary evidence; production logs alone do not satisfy this metric.
 - **SM-P6 — Degraded operation control:** Every `degraded_validation` occurrence is reviewed by the Wiki operator, with zero unreviewed occurrences at pilot close. Degraded writes do not count as validated success.
 - **SM-P7 — Live performance:** Audit summaries show live pilot latency within the applicable NFR budgets, or every observed breach is triaged as an implementation issue without being reclassified as a Wiki integrity Error.
 
@@ -479,7 +541,7 @@ The initial pilot runs for at least seven days and covers at least ten explicitl
 - **SM-C4 — No authority expansion:** Faster remediation, higher closure rate, or cleaner results must not come from broader actor permissions, cross-document edits outside the authorized batch, or disclosure of inaccessible scope. Counterbalances SM-P2 through SM-P5.
 - **SM-C5 — No fail-open normalization:** A higher write-success rate achieved through runtime fail-open is not success. Degraded writes remain exceptional and operator-reviewed. Counterbalances SM-P6.
 - **SM-C6 — No client-specific fork:** Equivalent outcomes across clients must not depend on client-specific servers, prompts, adapters, or policy duplication. Counterbalances SM-P1.
-- **SM-C7 — No user-visible observability burden:** Audit coverage must not change validation outcomes, block functional operations, or expose internal audit failures to agents performing ordinary Wiki work. Counterbalances SM-I6 and SM-P1.
+- **SM-C7 — No user-visible observability burden:** Audit coverage must not change validation outcomes, block functional operations, or expose internal audit failures to agents performing ordinary Wiki work; FR-22 names the one exception. Counterbalances SM-I6 and SM-P1.
 
 ## 7. Scope and Delivery Order
 
