@@ -99,8 +99,8 @@ The first implementation should support only mechanically verifiable rules:
    - explicitly forbidden or unsupported Markdown structures.
 2. **Internal links**
    - resolve Outline document links by supported ID or URL identifier;
-   - report missing, deleted, or inaccessible targets without leaking target
-     metadata;
+   - report missing, deleted, and inaccessible targets as one indistinguishable
+     unresolved state, without leaking target metadata;
    - leave anchor validation for a later increment unless it is implemented
      without fuzzy matching.
 3. **Technical hierarchy integrity**
@@ -176,6 +176,9 @@ machine-readable System Failure. Unconfigured and `read_only` collections must
 retain upstream write behavior.
 
 ### Required tests
+
+The binding test layers are those of Architecture Spine AD-18, carried by the
+stories in `_bmad-output/planning-artifacts/epics.md`. At minimum they include:
 
 - unit tests for every lint rule and stable issue code;
 - create tests proving invalid input is rejected before persistence;

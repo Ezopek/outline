@@ -1,9 +1,9 @@
 <!-- bmad:context -->
-<!-- Verified 2026-09-20 against v1.10.1 commit 4a5a616a21be800257dc11cef4263d0dd0412156 and fork design e5e3f7905. Managed by bmad-project-context. -->
+<!-- Verified 2026-10-02 against v1.10.1 commit 4a5a616a21be800257dc11cef4263d0dd0412156 and planning baseline 936d5b738. Managed by bmad-project-context. -->
 
 ## Ezopek Outline fork
 
-This is an operator-maintained Outline fork for deterministic Wiki linting in the built-in MCP server. Product scope and acceptance criteria live in `server/tools/README.md`; BMAD artifacts live in `_bmad-output/`. Upstream documentation remains useful technical reference, but does not define this fork's product policy.
+This is an operator-maintained Outline fork for deterministic Wiki linting in the built-in MCP server. The binding contract is `_bmad-output/specs/spec-outline-mcp-wiki-linting/SPEC.md` with its companions (PRD, addendum, Architecture Spine); stories and acceptance criteria live in `_bmad-output/planning-artifacts/epics.md`, and `server/tools/README.md` summarizes the fork roadmap. Upstream documentation remains useful technical reference, but does not define this fork's product policy.
 
 ## Policy
 
@@ -17,7 +17,9 @@ This is an operator-maintained Outline fork for deterministic Wiki linting in th
 
 ## Where things are
 
-- Fork roadmap and acceptance criteria: `server/tools/README.md`
+- Binding contract: `_bmad-output/specs/spec-outline-mcp-wiki-linting/SPEC.md` and its companions
+- Stories and acceptance criteria: `_bmad-output/planning-artifacts/epics.md`
+- Fork roadmap summary: `server/tools/README.md`
 - Built-in MCP tools: `server/tools/`
 - Planning and implementation artifacts: `_bmad-output/`
 - Upstream architecture reference: `docs/ARCHITECTURE.md`
