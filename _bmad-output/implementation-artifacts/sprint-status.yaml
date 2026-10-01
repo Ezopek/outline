@@ -1,0 +1,76 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+
+# PROJECT CONVENTIONS:
+# ====================
+# - Cross-story acceptance criteria: an AC that asserts behavior delivered by a later story
+#   is verified when that later story lands, and the later story owns the integrated fixture.
+#   The earlier story is done when its own part is implemented and tested. Known cases:
+#   1.3 AC4/AC5 -> 1.4, 1.3 AC9 -> 1.8; 1.5 AC2/AC3 -> 1.6 AC12, 1.5 AC12 -> 1.7 AC7;
+#   1.7 AC7 -> 1.8; 2.1 AC10 -> 2.7, 2.1 AC11 -> 2.3/2.5; 2.3 AC2 -> 2.6, 2.3 AC11 -> 2.7;
+#   2.4 AC3 -> 2.5.
+# - This file tracks planning state only; it does not authorize implementation.
+generated: 10-02-2026 01:33
+last_updated: 10-02-2026 01:34
+project: outline
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+development_status:
+  epic-1: backlog
+  1-1-establish-the-deterministic-result-contract-and-closed-rule: backlog
+  1-2-load-and-identify-collection-policy-safely-at-startup: backlog
+  1-3-lint-one-authorized-document-for-structural-integrity: backlog
+  1-4-validate-internal-links-without-disclosing-protected-targets: backlog
+  1-5-materialize-an-authorized-wiki-scope-from-one-coherent-snaps: backlog
+  1-6-detect-authorized-hierarchy-and-global-index-defects: backlog
+  1-7-preserve-safe-work-under-timeouts-limits-and-isolated-failur: backlog
+  1-8-record-minimized-and-failure-isolated-read-only-audit-eviden: backlog
+  1-9-sanitize-user-controlled-editor-urls: backlog
+  1-10-accept-the-complete-read-only-lint-and-repair-loop: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-classify-enforced-writes-and-decide-from-post-operation-poli: backlog
+  2-2-project-the-complete-markdown-document-once: backlog
+  2-3-enforce-markdown-creates-and-updates-atomically: backlog
+  2-4-preserve-exact-mcp-write-responses-and-baseline-compatibilit: backlog
+  2-5-carry-enforced-html-projection-through-a-distinct-trusted-wo: backlog
+  2-6-materialize-staged-media-without-visible-partial-effects: backlog
+  2-7-record-correlated-and-failure-isolated-write-validation-audi: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-verify-safe-startup-and-readiness-policy-identity: backlog
+  3-2-close-layered-conformance-and-source-provenance-evidence: backlog
+  3-3-produce-reproducible-performance-growth-and-constant-derivat: backlog
+  3-4-assemble-the-gate-1-evidence-index-and-decision-record: backlog
+  epic-3-retrospective: optional
