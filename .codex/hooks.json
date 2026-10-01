@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .bmad-loop/bmad_loop_hook.py SessionStart"
+            "command": "/home/ezop/.local/bin/bmad-loop relay SessionStart"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .bmad-loop/bmad_loop_hook.py Stop"
+            "command": "/home/ezop/.local/bin/bmad-loop relay Stop"
           }
         ]
       }
