@@ -8,8 +8,10 @@ import {
   createFinding,
   createSystemFailure,
   getIssueDefinition,
+  requiredChecks,
   ruleConfigSchema,
 } from "./registry";
+import type { RuleConfig } from "./registry";
 
 const documentId = "00000000-0000-4000-8000-000000000001";
 const collectionId = "00000000-0000-4000-8000-000000000002";
@@ -635,5 +637,44 @@ describe("createSystemFailure", () => {
         documentId,
       } as unknown as ScopeLocation)
     ).toThrow(WikiLintContractError);
+  });
+});
+
+describe("requiredChecks", () => {
+  const surface = "00000000-0000-4000-8000-000000000003";
+
+  it("returns the unique checks of the enabled kinds in canonical order", () => {
+    expect(
+      requiredChecks([
+        {
+          kind: "global_index_links",
+          surfaceDocumentId: surface,
+          globalIndexDocumentIds: [surface],
+        },
+        { kind: "hierarchy_acyclic" },
+        { kind: "internal_links" },
+        { kind: "parent_document_resolved" },
+        { kind: "allowed_heading_levels", levels: [2] },
+      ])
+    ).toEqual(["documents", "hierarchy", "global_index"]);
+  });
+
+  it("returns only the checks of the enabled kinds", () => {
+    expect(requiredChecks([{ kind: "internal_links" }])).toEqual(["documents"]);
+    expect(
+      requiredChecks([
+        { kind: "published_documents_in_structure" },
+        { kind: "parent_collection_consistent" },
+      ])
+    ).toEqual(["hierarchy"]);
+    expect(requiredChecks([])).toEqual([]);
+  });
+
+  it("maps every rule kind to its code's check", () => {
+    for (const [kind, { code }] of Object.entries(RULE_REGISTRY)) {
+      expect(requiredChecks([{ kind } as RuleConfig])).toEqual([
+        getIssueDefinition(code)?.check,
+      ]);
+    }
   });
 });

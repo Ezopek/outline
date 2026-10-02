@@ -15,6 +15,7 @@ import {
 } from "@server/models";
 import { sequelize } from "@server/storage/database";
 import {
+  buildAdmin,
   buildCollection,
   buildDocument,
   buildDraftDocument,
@@ -30,9 +31,16 @@ import {
 import { getTestServer } from "@server/test/support";
 import { toCanonicalMarkdown } from "@server/wikiLint/adapters/canonicalSyntax";
 import type { LintDocumentDependencies } from "@server/wikiLint/application/lintDocument";
+import type { LintWikiReader } from "@server/wikiLint/application/lintWiki";
+import { defaultLintWikiReader } from "@server/wikiLint/application/lintWiki";
 import type { PolicySet } from "@server/wikiLint/core/policySet";
 import { buildPolicySet } from "@server/wikiLint/core/policySet";
-import { lintDocumentInputSchema, lintDocumentTool } from "./wikiLint";
+import {
+  lintDocumentInputSchema,
+  lintDocumentTool,
+  lintWikiInputSchema,
+  lintWikiTool,
+} from "./wikiLint";
 
 const server = getTestServer();
 
@@ -80,25 +88,35 @@ const clients: Client[] = [];
 
 /**
  * Connects a client to an in-test MCP server that registers `lint_document`
- * with the production input schema and handler. Every request carries the
- * user as authentication, as the `/mcp` route does.
+ * and `lint_wiki` with the production input schemas and handlers. Every
+ * request carries the user as authentication, as the `/mcp` route does.
  *
  * @param user - the acting user.
  * @param policySet - the policy set.
- * @param dependencies - other handler dependencies, such as the clock.
+ * @param dependencies - other handler dependencies, such as the clock, plus
+ *   the `lint_wiki` reader.
  * @returns the connected client.
  */
 async function connect(
   user: User,
   policySet: PolicySet,
-  dependencies: Omit<LintDocumentDependencies, "policySet"> = {}
+  dependencies: Omit<LintDocumentDependencies, "policySet"> & {
+    wikiReader?: LintWikiReader;
+  } = {}
 ): Promise<Client> {
+  const { reader, wikiReader, ...shared } = dependencies;
   const mcp = new McpServer({ name: "wiki-lint-test", version: "1.0.0" });
   mcp.registerTool(
     "lint_document",
     { inputSchema: lintDocumentInputSchema },
     (input, extra) =>
-      lintDocumentTool(input, extra, { ...dependencies, policySet })
+      lintDocumentTool(input, extra, { ...shared, reader, policySet })
+  );
+  mcp.registerTool(
+    "lint_wiki",
+    { inputSchema: lintWikiInputSchema },
+    (input, extra) =>
+      lintWikiTool(input, extra, { ...shared, reader: wikiReader, policySet })
   );
 
   const [clientTransport, serverTransport] =
@@ -1354,8 +1372,687 @@ describe("lint_document internal links", () => {
   });
 });
 
+describe("lint_wiki", () => {
+  const ORIGIN = "https://wiki.example.test";
+
+  /** Hierarchy rules only. */
+  const hierarchyPolicy = {
+    activation: "read_only",
+    rules: [{ kind: "hierarchy_acyclic" }],
+  };
+
+  /** The structure policy plus a hierarchy rule. */
+  const mixedPolicy = {
+    activation: "read_only",
+    rules: [...structurePolicy.rules, { kind: "parent_document_resolved" }],
+  };
+
+  /**
+   * Calls `lint_wiki`.
+   *
+   * @param client - the connected client.
+   * @param args - the tool arguments.
+   * @returns the tool result.
+   */
+  async function lintWikiCall(
+    client: Client,
+    args: Record<string, unknown> = {}
+  ): Promise<CallToolResult> {
+    return (await client.callTool({
+      name: "lint_wiki",
+      arguments: args,
+    })) as CallToolResult;
+  }
+
+  /**
+   * Calls `lint_wiki` and parses the modeled result.
+   *
+   * @param client - the connected client.
+   * @param args - the tool arguments.
+   * @returns the parsed result.
+   */
+  async function wikiResult(
+    client: Client,
+    args: Record<string, unknown> = {}
+  ) {
+    const result = await lintWikiCall(client, args);
+    expect(result.isError).toBeUndefined();
+    return JSON.parse(firstText(result));
+  }
+
+  /**
+   * Records the statements sent through `sequelize.query`.
+   *
+   * @returns a function that returns the recorded SQL.
+   */
+  function recordSql() {
+    const query = vi.spyOn(sequelize, "query");
+    return () =>
+      query.mock.calls.map(([sql]) =>
+        typeof sql === "string" ? sql : sql.query
+      );
+  }
+
+  /**
+   * Builds an admin and a private collection the admin can read without
+   * membership, with one published document.
+   *
+   * @returns the admin, owner, collection, and document.
+   */
+  async function buildAdminFixture() {
+    const owner = await buildUser();
+    const admin = await buildAdmin({ teamId: owner.teamId });
+    const collection = await buildCollection({
+      teamId: owner.teamId,
+      userId: owner.id,
+      permission: null,
+    });
+    const document = await buildDocument({
+      teamId: owner.teamId,
+      userId: owner.id,
+      collectionId: collection.id,
+      text: CLEAN_MARKDOWN,
+    });
+    return { admin, owner, collection, document };
+  }
+
+  it("exposes only an optional collection identifier as input", async () => {
+    const user = await buildUser();
+    const client = await connect(user, policySetFor({}));
+
+    const { tools } = await client.listTools();
+    const tool = tools.find((entry) => entry.name === "lint_wiki");
+
+    expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual([
+      "collectionId",
+    ]);
+    expect(tool?.inputSchema.properties?.collectionId).toEqual({
+      type: "string",
+      description: expect.stringContaining("UUID"),
+    });
+    expect(tool?.inputSchema.required ?? []).toEqual([]);
+  });
+
+  it("treats an empty, omitted, or extra argument as the default scope", async () => {
+    const { user, collection } = await buildFixture({ text: "# Title" });
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: structurePolicy })
+    );
+
+    const omitted = await lintWikiCall(client);
+    const empty = await lintWikiCall(client, { collectionId: "" });
+    const extended = await lintWikiCall(client, {
+      policy: invalidPolicy,
+      activation: "enforced",
+      deadlineMs: 1,
+    });
+
+    expect(omitted.isError).toBeUndefined();
+    expect(JSON.parse(firstText(omitted))).toMatchObject({
+      state: "complete",
+      scope: {
+        kind: "configured_collections",
+        collections: [
+          {
+            collectionId: collection.id,
+            evaluatedDocumentCount: 1,
+            completedChecks: ["documents"],
+          },
+        ],
+      },
+    });
+    expect(JSON.parse(firstText(omitted)).errors).not.toEqual([]);
+    expect(firstText(empty)).toBe(firstText(omitted));
+    expect(firstText(extended)).toBe(firstText(omitted));
+  });
+
+  it("keys a requested collection by its resolved lowercase ID", async () => {
+    const { user, collection } = await buildFixture({ text: "# Title" });
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: mixedPolicy })
+    );
+
+    const canonical = await lintWikiCall(client, {
+      collectionId: collection.id,
+    });
+    const parsed = JSON.parse(firstText(canonical));
+
+    expect(parsed).toMatchObject({
+      state: "incomplete",
+      systemFailures: [
+        {
+          code: "VALIDATION_RUNTIME_FAILED",
+          location: {
+            kind: "scope",
+            scopeKind: "collection",
+            collectionId: collection.id,
+          },
+        },
+      ],
+      scope: {
+        kind: "collection",
+        collectionId: collection.id,
+        evaluatedDocumentCount: 1,
+        completedChecks: ["documents"],
+      },
+      policies: [{ collectionId: collection.id, status: "valid" }],
+    });
+    for (const collectionId of [
+      collection.id.toUpperCase(),
+      collection.urlId,
+      `any-name-${collection.urlId}`,
+    ]) {
+      const result = await lintWikiCall(client, { collectionId });
+      expect(firstText(result)).toBe(firstText(canonical));
+      expect(firstText(result)).not.toContain(collection.id.toUpperCase());
+    }
+  });
+
+  it("answers missing and denied collections identically", async () => {
+    const owner = await buildUser();
+    const actor = await buildUser({ teamId: owner.teamId });
+    const privateCollection = await buildCollection({
+      teamId: owner.teamId,
+      userId: owner.id,
+      permission: null,
+    });
+    const foreign = await buildCollection({ teamId: (await buildTeam()).id });
+    const deleted = await buildCollection({
+      teamId: owner.teamId,
+      userId: owner.id,
+    });
+    await deleted.destroy({ hooks: false });
+    const client = await connect(
+      actor,
+      policySetFor({
+        [privateCollection.id]: structurePolicy,
+        [foreign.id]: invalidPolicy,
+        [deleted.id]: structurePolicy,
+      })
+    );
+
+    const responses = [];
+    for (const collectionId of [
+      "00000000-0000-4000-8000-000000000000",
+      "any-name-abcdefghij",
+      "not a collection",
+      privateCollection.id,
+      foreign.id,
+      deleted.id,
+    ]) {
+      responses.push(await lintWikiCall(client, { collectionId }));
+    }
+
+    expect(responses[0]).toEqual({
+      content: [{ type: "text", text: "Authorization error" }],
+      isError: true,
+    });
+    for (const response of responses) {
+      expect(JSON.stringify(response)).toBe(JSON.stringify(responses[0]));
+    }
+  });
+
+  it("returns the fixed failure message when the lookup is refused", async () => {
+    const { user, collection } = await buildFixture();
+    // The deadline starts at 0 ms; 59,950 ms have passed at the lookup.
+    let readings = 0;
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: structurePolicy }),
+      { clock: () => (readings++ === 0 ? 0 : 59950) }
+    );
+    const sql = recordSql();
+
+    await expect(
+      lintWikiCall(client, { collectionId: collection.id })
+    ).resolves.toEqual({
+      content: [{ type: "text", text: OPERATION_FAILED }],
+      isError: true,
+    });
+    expect(
+      sql().filter((statement) =>
+        /^(SET LOCAL|SELECT|SET TRANSACTION ISOLATION)/.test(statement)
+      )
+    ).toEqual([]);
+  });
+
+  it("returns the fixed failure message when the lookup fails", async () => {
+    const { user, collection } = await buildFixture();
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: structurePolicy })
+    );
+    vi.spyOn(Collection, "findByPk").mockRejectedValue(
+      new Error("raw database detail")
+    );
+
+    await expect(
+      lintWikiCall(client, { collectionId: collection.id })
+    ).resolves.toEqual({
+      content: [{ type: "text", text: OPERATION_FAILED }],
+      isError: true,
+    });
+  });
+
+  it("returns the fixed failure message for an unmodellable failure", async () => {
+    const user = await buildUser();
+
+    await expect(
+      lintWikiTool(
+        {},
+        { authInfo: { token: "", clientId: "", scopes: [], extra: { user } } },
+        {
+          clock: () => {
+            throw new Error("raw clock detail");
+          },
+        }
+      )
+    ).resolves.toEqual({
+      content: [{ type: "text", text: OPERATION_FAILED }],
+      isError: true,
+    });
+  });
+
+  it("times out when the first snapshot batch is refused", async () => {
+    const { user, collection } = await buildFixture({ text: "# Title" });
+    // The deadline starts and bounds the lookup at 0 ms; 59,950 ms have
+    // passed when the first snapshot batch is bounded.
+    let readings = 0;
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: structurePolicy }),
+      { clock: () => (readings++ < 2 ? 0 : 59950) }
+    );
+
+    await expect(
+      wikiResult(client, { collectionId: collection.id })
+    ).resolves.toEqual({
+      state: "failed",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [
+        {
+          code: "VALIDATION_TIMEOUT",
+          message: expect.any(String),
+          location: {
+            kind: "scope",
+            scopeKind: "collection",
+            collectionId: collection.id,
+          },
+        },
+      ],
+      scope: {
+        kind: "collection",
+        collectionId: collection.id,
+        evaluatedDocumentCount: 0,
+        evaluatedLinkCount: 0,
+        completedChecks: [],
+      },
+      policies: [
+        {
+          collectionId: collection.id,
+          status: "valid",
+          policySchemaVersion: 1,
+          policyFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+        },
+      ],
+    });
+  });
+
+  it("bounds the lookup by the 60000 ms deadline", async () => {
+    const { user, collection } = await buildFixture();
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: structurePolicy }),
+      { clock: () => 0 }
+    );
+    const sql = recordSql();
+
+    await wikiResult(client, { collectionId: collection.id });
+
+    expect(
+      sql()
+        .filter((statement) => statement.startsWith("SET LOCAL"))
+        .slice(0, 2)
+    ).toEqual([
+      "SET LOCAL lock_timeout = 60000",
+      "SET LOCAL statement_timeout = 60000",
+    ]);
+  });
+
+  describe("an admin who can read a private collection without membership", () => {
+    it("fails its graph checks without reading its structure", async () => {
+      const { admin, collection } = await buildAdminFixture();
+      const client = await connect(
+        admin,
+        policySetFor({ [collection.id]: hierarchyPolicy })
+      );
+      const sql = recordSql();
+
+      await expect(wikiResult(client)).resolves.toEqual({
+        state: "failed",
+        complete: false,
+        clean: false,
+        errors: [],
+        warnings: [],
+        systemFailures: [
+          {
+            code: "VALIDATION_RUNTIME_FAILED",
+            message: expect.any(String),
+            location: {
+              kind: "scope",
+              scopeKind: "collection",
+              collectionId: collection.id,
+            },
+          },
+        ],
+        scope: {
+          kind: "configured_collections",
+          collections: [
+            {
+              collectionId: collection.id,
+              evaluatedDocumentCount: 0,
+              evaluatedLinkCount: 0,
+              completedChecks: [],
+            },
+          ],
+        },
+        policies: [expect.objectContaining({ collectionId: collection.id })],
+      });
+      expect(sql().join("\n")).not.toContain("documentStructure");
+    });
+
+    it("is clean with document rules only and nothing readable", async () => {
+      const { admin, collection } = await buildAdminFixture();
+      const client = await connect(
+        admin,
+        policySetFor({ [collection.id]: structurePolicy })
+      );
+
+      await expect(wikiResult(client)).resolves.toMatchObject({
+        state: "complete",
+        clean: true,
+        scope: {
+          collections: [
+            {
+              collectionId: collection.id,
+              evaluatedDocumentCount: 0,
+              evaluatedLinkCount: 0,
+              completedChecks: ["documents"],
+            },
+          ],
+        },
+      });
+    });
+
+    it("evaluates a document readable through membership", async () => {
+      const { admin, owner, collection, document } = await buildAdminFixture();
+      await UserMembership.create({
+        documentId: document.id,
+        userId: admin.id,
+        createdById: owner.id,
+        permission: DocumentPermission.Read,
+      });
+      const client = await connect(
+        admin,
+        policySetFor({ [collection.id]: structurePolicy })
+      );
+
+      await expect(wikiResult(client)).resolves.toMatchObject({
+        state: "complete",
+        clean: true,
+        scope: {
+          collections: [
+            { collectionId: collection.id, evaluatedDocumentCount: 1 },
+          ],
+        },
+      });
+    });
+  });
+
+  it("keeps a requested collection that becomes unreadable before the snapshot", async () => {
+    const { user: owner, collection } = await buildFixture({
+      text: CLEAN_MARKDOWN,
+    });
+    const shared = await buildDocument({
+      teamId: owner.teamId,
+      userId: owner.id,
+      collectionId: collection.id,
+      text: CLEAN_MARKDOWN,
+    });
+    const actor = await buildUser({ teamId: owner.teamId });
+    await UserMembership.create({
+      documentId: shared.id,
+      userId: actor.id,
+      createdById: owner.id,
+      permission: DocumentPermission.Read,
+    });
+    const wikiReader: LintWikiReader = {
+      ...defaultLintWikiReader,
+      async authorizeLintCollection(input) {
+        const resolved =
+          await defaultLintWikiReader.authorizeLintCollection(input);
+        await Collection.update(
+          { permission: null },
+          { where: { id: collection.id }, hooks: false }
+        );
+        return resolved;
+      },
+    };
+    const client = await connect(
+      actor,
+      policySetFor({ [collection.id]: mixedPolicy }),
+      { wikiReader }
+    );
+
+    const result = await wikiResult(client, { collectionId: collection.id });
+
+    expect(result).toMatchObject({
+      state: "incomplete",
+      errors: [],
+      systemFailures: [
+        {
+          code: "VALIDATION_RUNTIME_FAILED",
+          location: {
+            kind: "scope",
+            scopeKind: "collection",
+            collectionId: collection.id,
+          },
+        },
+      ],
+      scope: {
+        kind: "collection",
+        collectionId: collection.id,
+        evaluatedDocumentCount: 1,
+        completedChecks: ["documents"],
+      },
+    });
+  });
+
+  it("neither names nor counts unreadable configured collections", async () => {
+    const { user: actor, collection: valid } = await buildFixture({
+      text: "# Title",
+    });
+    const sentinel = await buildCollection({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    const owner = await buildUser({ teamId: actor.teamId });
+    const hidden = [];
+    for (let index = 0; index < 2; index++) {
+      const collection = await buildCollection({
+        teamId: owner.teamId,
+        userId: owner.id,
+        permission: null,
+      });
+      await buildDocument({
+        teamId: owner.teamId,
+        userId: owner.id,
+        collectionId: collection.id,
+      });
+      hidden.push(collection.id);
+    }
+    const visible = {
+      [valid.id]: structurePolicy,
+      [sentinel.id]: invalidPolicy,
+    };
+
+    const withHidden = await lintWikiCall(
+      await connect(
+        actor,
+        policySetFor({
+          ...visible,
+          [hidden[0]]: structurePolicy,
+          [hidden[1]]: invalidPolicy,
+        })
+      )
+    );
+    const withoutHidden = await lintWikiCall(
+      await connect(actor, policySetFor(visible))
+    );
+
+    expect(JSON.parse(firstText(withHidden))).toMatchObject({
+      state: "incomplete",
+      policies: [
+        expect.objectContaining({ collectionId: expect.any(String) }),
+        expect.objectContaining({ collectionId: expect.any(String) }),
+      ],
+    });
+    expect(firstText(withHidden)).toBe(firstText(withoutHidden));
+    for (const collectionId of hidden) {
+      expect(firstText(withHidden)).not.toContain(collectionId);
+    }
+  });
+
+  it("resolves links to drafts and archived documents without evaluating them", async () => {
+    const user = await buildUser();
+    const collection = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    const draft = await buildDraftDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+    });
+    const archived = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+      archivedAt: new Date(),
+    });
+    await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+      text: `[draft](/doc/${draft.id})\n\n[archived](/doc/${archived.urlId})`,
+    });
+    const client = await connect(
+      user,
+      policySetFor({
+        [collection.id]: {
+          activation: "read_only",
+          rules: [{ kind: "internal_links" }],
+        },
+      }),
+      { instanceOrigin: ORIGIN }
+    );
+
+    await expect(wikiResult(client)).resolves.toMatchObject({
+      state: "complete",
+      clean: true,
+      errors: [],
+      scope: {
+        collections: [
+          {
+            collectionId: collection.id,
+            evaluatedDocumentCount: 1,
+            evaluatedLinkCount: 2,
+          },
+        ],
+      },
+    });
+  });
+
+  it("keeps point-in-time meaning when commits follow the snapshot", async () => {
+    const { user, collection, document } = await buildFixture({
+      text: "# Title",
+    });
+    const policySet = policySetFor({ [collection.id]: structurePolicy });
+    const before = firstText(
+      await lintWikiCall(await connect(user, policySet))
+    );
+
+    const wikiReader: LintWikiReader = {
+      ...defaultLintWikiReader,
+      async readWikiSnapshot(input) {
+        const read = await defaultLintWikiReader.readWikiSnapshot(input);
+        await Document.unscoped().update(
+          { content: parser.parse(CLEAN_MARKDOWN)?.toJSON() },
+          { where: { id: document.id }, hooks: false }
+        );
+        await buildDocument({
+          teamId: user.teamId,
+          userId: user.id,
+          collectionId: collection.id,
+          text: CLEAN_MARKDOWN,
+        });
+        return read;
+      },
+    };
+    const during = firstText(
+      await lintWikiCall(await connect(user, policySet, { wikiReader }))
+    );
+    const after = JSON.parse(
+      firstText(await lintWikiCall(await connect(user, policySet)))
+    );
+
+    expect(JSON.parse(before).errors).not.toEqual([]);
+    expect(during).toBe(before);
+    expect(after).toMatchObject({
+      state: "complete",
+      clean: true,
+      scope: { collections: [{ evaluatedDocumentCount: 2 }] },
+    });
+  });
+
+  it("mutates nothing and is byte-stable for identical state", async () => {
+    const { user, collection } = await buildFixture({
+      text: "# Title\n\n## Details\n\n#### Deep",
+    });
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: mixedPolicy })
+    );
+    const eventCount = await Event.count({ where: { teamId: user.teamId } });
+    const sql = recordSql();
+
+    const first = await lintWikiCall(client);
+    const second = await lintWikiCall(client);
+
+    expect(JSON.parse(firstText(first)).errors.length).toBeGreaterThan(1);
+    expect(firstText(second)).toBe(firstText(first));
+    const statements = sql();
+    expect(statements.join("\n")).toContain("SET TRANSACTION READ ONLY");
+    expect(
+      statements.filter((statement) =>
+        /^\s*(INSERT|UPDATE|DELETE)\b/i.test(statement)
+      )
+    ).toEqual([]);
+    expect(statements.join("\n")).not.toMatch(/"document"\."text"/);
+    vi.restoreAllMocks();
+    await expect(Event.count({ where: { teamId: user.teamId } })).resolves.toBe(
+      eventCount
+    );
+  });
+});
+
 describe("POST /mcp/ tools/list", () => {
-  it("does not register lint_document yet", async () => {
+  it("does not register the lint tools yet", async () => {
     const { accessToken } = await buildOAuthUser();
     const { body } = mcpRequest("tools/list");
 
@@ -1371,5 +2068,6 @@ describe("POST /mcp/ tools/list", () => {
     ).map((tool) => tool.name);
     expect(names).toContain("fetch");
     expect(names).not.toContain("lint_document");
+    expect(names).not.toContain("lint_wiki");
   });
 });

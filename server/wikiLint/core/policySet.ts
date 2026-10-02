@@ -68,6 +68,27 @@ export type PolicySetResult =
       location: number | "file";
     };
 
+/**
+ * Builds the AD-12 identity of a policy set entry, without its policy.
+ *
+ * @param entry - the entry.
+ * @returns the identity.
+ */
+export function policyIdentity(entry: PolicySetEntry): PolicyIdentity {
+  return entry.status === "valid"
+    ? {
+        collectionId: entry.collectionId,
+        status: "valid",
+        policySchemaVersion: entry.policySchemaVersion,
+        policyFingerprint: entry.policyFingerprint,
+      }
+    : {
+        collectionId: entry.collectionId,
+        status: "invalid",
+        invalidFingerprint: entry.invalidFingerprint,
+      };
+}
+
 /** Computes the lowercase hexadecimal SHA-256 digest of some bytes. */
 export type Sha256Hex = (bytes: Uint8Array) => string;
 

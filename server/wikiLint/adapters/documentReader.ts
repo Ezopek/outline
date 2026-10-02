@@ -1,4 +1,4 @@
-import { DatabaseError, Op, Transaction } from "sequelize";
+import { DatabaseError, Op, Transaction, type WhereOptions } from "sequelize";
 import { Collection, Document, type User } from "@server/models";
 import { can } from "@server/policies";
 import { isQueryCanceledError, sequelize } from "@server/storage/database";
@@ -75,7 +75,7 @@ export function isDatabaseTimeout(error: unknown): boolean {
  * @param run - the work to run inside the transaction.
  * @returns the work's result, after commit.
  */
-function readOnlyTransaction<T>(
+export function readOnlyTransaction<T>(
   options: { isolationLevel?: Transaction.ISOLATION_LEVELS },
   run: (transaction: Transaction) => Promise<T>
 ): Promise<T> {
@@ -93,7 +93,7 @@ function readOnlyTransaction<T>(
  * @throws DeadlineFloorError when the remainder is below the floor; no
  *   statement is sent.
  */
-async function boundBatch(
+export async function boundBatch(
   transaction: Transaction,
   deadline: Deadline
 ): Promise<void> {
@@ -181,6 +181,35 @@ export function authorizeLintTarget(input: {
 }
 
 /**
+ * Finds the documents matching a condition that the actor can read, with one
+ * membership-aware `findAll` within the actor's team, whose separate
+ * membership includes may add statements. Drafts and archived documents are
+ * included; deleted documents are not. The caller bounds the batch.
+ *
+ * @param input.where - the condition, ANDed with the actor's team.
+ * @param input.actor - the acting user.
+ * @param input.transaction - the transaction the query runs in.
+ * @returns the matching rows that pass `can(actor, "read", row)`, without
+ *   content.
+ */
+export async function findReadableDocuments(input: {
+  where: WhereOptions<Document>;
+  actor: User;
+  transaction: Transaction;
+}): Promise<Document[]> {
+  const { where, actor, transaction } = input;
+  const rows = await Document.scope([
+    "withDrafts",
+    "withoutContent",
+    { method: ["withMembership", actor.id] },
+  ]).findAll({
+    where: { teamId: actor.teamId, [Op.and]: [where] },
+    transaction,
+  });
+  return rows.filter((row) => can(actor, "read", row));
+}
+
+/**
  * Resolves internal-link lookup keys for an actor inside a snapshot
  * transaction. Each batch is bounded, then resolved by one membership-aware
  * `findAll` within the actor's team, whose separate membership includes may
@@ -213,22 +242,16 @@ export async function resolveLinkTargets(input: {
       .map((key) => key.key);
 
     await boundBatch(transaction, deadline);
-    const rows = await Document.scope([
-      "withDrafts",
-      "withoutContent",
-      { method: ["withMembership", actor.id] },
-    ]).findAll({
+    const readable = await findReadableDocuments({
       where: {
-        teamId: actor.teamId,
         [Op.or]: [
           ...(ids.length ? [{ id: ids }] : []),
           ...(urlIds.length ? [{ urlId: urlIds }] : []),
         ],
       },
+      actor,
       transaction,
     });
-
-    const readable = rows.filter((row) => can(actor, "read", row));
     const readableIds = new Set(readable.map((row) => row.id));
     const readableUrlIds = new Set(readable.map((row) => row.urlId));
     for (const { key, keyKind } of batch) {

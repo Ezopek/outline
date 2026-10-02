@@ -11,7 +11,8 @@ import {
   documentSurfaceRules,
   evaluateDocumentRules,
 } from "../core/documentRules";
-import type { PolicySet, PolicySetEntry } from "../core/policySet";
+import type { PolicySet } from "../core/policySet";
+import { policyIdentity } from "../core/policySet";
 import { createSystemFailure } from "../core/registry";
 import { buildReadOnlyResult } from "../core/result";
 import { CanonicalMarkdownError } from "../adapters/canonicalSyntax";
@@ -114,27 +115,6 @@ function documentLocation(
   return collectionId === undefined
     ? { kind: "scope", scopeKind: "document", documentId }
     : { kind: "scope", scopeKind: "document", documentId, collectionId };
-}
-
-/**
- * Builds the AD-12 identity of a policy set entry, without its policy.
- *
- * @param entry - the entry.
- * @returns the identity.
- */
-function policyIdentity(entry: PolicySetEntry): PolicyIdentity {
-  return entry.status === "valid"
-    ? {
-        collectionId: entry.collectionId,
-        status: "valid",
-        policySchemaVersion: entry.policySchemaVersion,
-        policyFingerprint: entry.policyFingerprint,
-      }
-    : {
-        collectionId: entry.collectionId,
-        status: "invalid",
-        invalidFingerprint: entry.invalidFingerprint,
-      };
 }
 
 /**

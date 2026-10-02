@@ -425,6 +425,24 @@ export type RuleKind = keyof typeof RULE_REGISTRY;
 
 export type RuleConfig = z.infer<typeof ruleConfigSchema>;
 
+/**
+ * Returns the checks the enabled rule kinds belong to.
+ *
+ * @param rules - the configured rules.
+ * @returns the unique checks, in the order `documents`, `hierarchy`,
+ *   `global_index`.
+ */
+export function requiredChecks(rules: readonly RuleConfig[]): CheckName[] {
+  const checks = new Set(
+    rules.map(
+      (rule) => getIssueDefinition(RULE_REGISTRY[rule.kind].code)?.check
+    )
+  );
+  return (["documents", "hierarchy", "global_index"] as const).filter((check) =>
+    checks.has(check)
+  );
+}
+
 const identifier = z.string().min(1);
 const positiveInteger = z.number().int().min(1);
 

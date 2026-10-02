@@ -252,6 +252,83 @@ export interface ResolvedLinks {
 }
 
 /**
+ * The parent edge of an evaluated document. Missing, deleted, and
+ * inaccessible parents are all `unresolved`; `sameCollection` never exposes
+ * the parent's collection.
+ */
+export type WikiParentEdge =
+  | { state: "none" }
+  | { state: "unresolved" }
+  | { state: "resolved"; documentId: string; sameCollection: boolean };
+
+/** An actor-readable, published document of an evaluated collection. */
+export interface WikiSnapshotDocument {
+  documentId: string;
+  /**
+   * The canonical syntax and recognized internal links; null when the
+   * `documents` check is not required, `unavailable` when they could not be
+   * produced. `links` is null when `internal_links` is not enabled.
+   */
+  content:
+    | {
+        syntax: CanonicalSyntax;
+        links: readonly InternalLinkReference[] | null;
+      }
+    | "unavailable"
+    | null;
+  /** Null unless the collection graph is authorized. */
+  parent: WikiParentEdge | null;
+}
+
+/** The global-index inputs of an authorized collection graph. */
+export interface WikiGlobalIndexInput {
+  /** The configured surface; null when it is unreadable or unavailable. */
+  surface: {
+    documentId: string;
+    links: readonly InternalLinkReference[];
+  } | null;
+  /** The readable configured global indexes, sorted by document ID. */
+  indexes: readonly { documentId: string; urlId: string }[];
+}
+
+/**
+ * The graph inputs of an evaluated collection. `authorized: false` means the
+ * actor lacks `readDocument` on the collection, which is distinct from an
+ * empty graph.
+ */
+export type WikiCollectionGraph =
+  | { authorized: false }
+  | {
+      authorized: true;
+      /** The sorted unique document IDs of the collection structure. */
+      structureDocumentIds: readonly string[];
+      /** Null when the `global_index` check is not required. */
+      globalIndex: WikiGlobalIndexInput | null;
+    };
+
+/** An evaluated collection of a Wiki snapshot. */
+export interface WikiSnapshotCollection {
+  collectionId: string;
+  /** Sorted by document ID. */
+  documents: readonly WikiSnapshotDocument[];
+  /** Null when neither graph check is required. */
+  graph: WikiCollectionGraph | null;
+}
+
+/**
+ * One point-in-time, actor-authorized snapshot of a Wiki scope. It holds no
+ * unreadable identity except configured IDs taken from the policy itself.
+ */
+export interface WikiSnapshot {
+  /** The evaluated collections, sorted by collection ID. */
+  collections: readonly WikiSnapshotCollection[];
+  /** The actor-readable invalid-policy collections, sorted. */
+  sentinelCollectionIds: readonly string[];
+  /** The state of each recognized internal-link key, keyed as in `ResolvedLinks`. */
+  targets: ReadonlyMap<string, LinkTargetState>;
+}
+
+/**
  * Thrown when a core contract or invariant is violated by its caller. Its
  * message is fixed and never contains content, identifiers, or configuration.
  */
