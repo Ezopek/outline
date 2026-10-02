@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { EventHelper } from "@shared/utils/EventHelper";
 import { BaseSchema } from "@server/routes/api/schema";
+import { WIKI_LINT_AUDIT_EVENTS } from "@server/wikiLint/adapters/auditEvents";
 
 export const EventsListSchema = BaseSchema.extend({
   body: z.object({
@@ -10,6 +11,7 @@ export const EventsListSchema = BaseSchema.extend({
         z.union([
           z.enum(EventHelper.ACTIVITY_EVENTS),
           z.enum(EventHelper.AUDIT_EVENTS),
+          z.enum(WIKI_LINT_AUDIT_EVENTS),
         ])
       )
       .optional(),
@@ -25,6 +27,9 @@ export const EventsListSchema = BaseSchema.extend({
 
     /** Whether to include audit events */
     auditLog: z.boolean().prefault(false),
+
+    /** Whether to list only Wiki lint audit summaries; takes precedence over auditLog */
+    auditWikiLint: z.boolean().prefault(false),
 
     /** @deprecated, use 'events' parameter instead
      * Name of the event to retrieve

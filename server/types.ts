@@ -62,6 +62,8 @@ export type Authentication = {
   service?: string;
   /** The OAuth scopes granted for this session, if applicable. */
   scope?: string[];
+  /** The public ID of the OAuth client the access token was issued to; OAuth only. */
+  clientId?: string;
 };
 
 export type Pagination = {

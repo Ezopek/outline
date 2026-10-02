@@ -31,6 +31,9 @@ export class Deadline {
 
   private readonly expiresAt: number;
 
+  /** The clock reading at which the deadline started. */
+  readonly startedAt: number;
+
   /**
    * Starts a deadline.
    *
@@ -39,7 +42,8 @@ export class Deadline {
    */
   constructor(budgetMs: number, clock: MonotonicClock = monotonicClock) {
     this.clock = clock;
-    this.expiresAt = clock() + budgetMs;
+    this.startedAt = clock();
+    this.expiresAt = this.startedAt + budgetMs;
   }
 
   /**

@@ -7,6 +7,7 @@ import { DocumentPermission, type ProsemirrorData } from "@shared/types";
 import { parser } from "@server/editor";
 import env from "@server/env";
 import { ClientClosedRequestError } from "@server/errors";
+import Logger from "@server/logging/Logger";
 import {
   Collection,
   Document,
@@ -14,14 +15,18 @@ import {
   type User,
   UserMembership,
 } from "@server/models";
+import { globalEventQueue } from "@server/queues";
 import { sequelize } from "@server/storage/database";
 import {
   buildAdmin,
   buildCollection,
   buildDocument,
   buildDraftDocument,
+  buildGuestUser,
   buildTeam,
   buildUser,
+  buildViewer,
+  buildWebhookSubscription,
 } from "@server/test/factories";
 import {
   buildOAuthUser,
@@ -34,10 +39,19 @@ import {
   parseCanonicalMarkdown,
   toCanonicalMarkdown,
 } from "@server/wikiLint/adapters/canonicalSyntax";
+import type { AuditEventWriter } from "@server/wikiLint/adapters/auditEvents";
+import {
+  WIKI_LINT_AUDIT_EVENTS,
+  insertAuditEvent,
+} from "@server/wikiLint/adapters/auditEvents";
 import type { WikiSnapshotRead } from "@server/wikiLint/adapters/wikiReader";
 import { lintWikiAdmission } from "@server/wikiLint/application/admission";
-import { DeadlineFloorError } from "@server/wikiLint/application/deadline";
+import {
+  AUDIT_WRITE_BOUND_MS,
+  DeadlineFloorError,
+} from "@server/wikiLint/application/deadline";
 import type { LintDocumentDependencies } from "@server/wikiLint/application/lintDocument";
+import { defaultLintDocumentReader } from "@server/wikiLint/application/lintDocument";
 import type { LintWikiReader } from "@server/wikiLint/application/lintWiki";
 import {
   LINT_WIKI_DEADLINE_MS,
@@ -104,12 +118,25 @@ function policySetFor(collections: Record<string, unknown>): PolicySet {
   return result.policySet;
 }
 
+/**
+ * Returns the mutating statements among recorded SQL.
+ *
+ * @param statements - the recorded SQL.
+ * @returns the INSERT, UPDATE, and DELETE statements.
+ */
+const mutationsOf = (statements: readonly string[]) =>
+  statements.filter((sql) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql));
+
+/** The audit summary insert, the only mutation a lint result makes. */
+const auditInsert = expect.stringMatching(/^\s*INSERT INTO events\b/);
+
 const clients: Client[] = [];
 
 /**
  * Connects a client to an in-test MCP server that registers `lint_document`
  * and `lint_wiki` with the production input schemas and handlers. Every
- * request carries the user as authentication, as the `/mcp` route does.
+ * request carries the user and the audit attribution of an API key, as the
+ * `/mcp` route does.
  *
  * @param user - the acting user.
  * @param policySet - the policy set.
@@ -149,7 +176,7 @@ async function connect(
         token: "test",
         clientId: "test",
         scopes: [],
-        extra: { user },
+        extra: { user, requestId: randomUUID(), credentialAuthType: "api" },
       },
     });
 
@@ -231,7 +258,7 @@ async function buildFixture(
  * Builds a document in a private collection and a user who can read only
  * the document.
  *
- * @returns the reader, collection, and document.
+ * @returns the reader, owner, collection, and document.
  */
 async function buildDocumentOnlyReader() {
   const owner = await buildUser();
@@ -253,7 +280,7 @@ async function buildDocumentOnlyReader() {
     createdById: owner.id,
     permission: DocumentPermission.Read,
   });
-  return { reader, collection, document };
+  return { reader, owner, collection, document };
 }
 
 /**
@@ -626,7 +653,7 @@ describe("lint_document", () => {
     });
   });
 
-  it("mutates nothing", async () => {
+  it("mutates nothing but its audit summary", async () => {
     const { user, collection, document } = await buildFixture({
       text: "# Title",
     });
@@ -647,9 +674,7 @@ describe("lint_document", () => {
       typeof sql === "string" ? sql : sql.query
     );
     expect(statements.length).toBeGreaterThan(0);
-    expect(
-      statements.filter((sql) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql))
-    ).toEqual([]);
+    expect(mutationsOf(statements)).toEqual([auditInsert]);
     query.mockRestore();
 
     const after = await Document.findByPk(document.id, {
@@ -658,8 +683,13 @@ describe("lint_document", () => {
     expect(after.updatedAt).toEqual(before.updatedAt);
     expect(after.revisionCount).toBe(before.revisionCount);
     await expect(Event.count({ where: { teamId: user.teamId } })).resolves.toBe(
-      eventCount
+      eventCount + 1
     );
+    await expect(
+      Event.count({
+        where: { teamId: user.teamId, name: "wikiLint.document" },
+      })
+    ).resolves.toBe(1);
   });
 
   it("bounds the first database batch by the 9000 ms deadline", async () => {
@@ -1187,7 +1217,7 @@ describe("lint_document internal links", () => {
     expect(result.scope.evaluatedLinkCount).toBe(1);
   });
 
-  it("mutates nothing while resolving links", async () => {
+  it("mutates nothing but its audit summary while resolving links", async () => {
     const { reader, collection, protectedTarget, policySet } =
       await buildActors();
     const source = await buildDocument({
@@ -1205,9 +1235,7 @@ describe("lint_document internal links", () => {
     const statements = query.mock.calls.map(([sql]) =>
       typeof sql === "string" ? sql : sql.query
     );
-    expect(
-      statements.filter((sql) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql))
-    ).toEqual([]);
+    expect(mutationsOf(statements)).toEqual([auditInsert]);
 
     // The link-target SELECT ran inside the read-only snapshot transaction.
     const target = statements.findIndex(
@@ -2032,7 +2060,7 @@ describe("lint_wiki", () => {
     });
   });
 
-  it("mutates nothing and is byte-stable for identical state", async () => {
+  it("mutates nothing but its audit summaries and is byte-stable for identical state", async () => {
     const { user, collection } = await buildFixture({
       text: "# Title\n\n## Details\n\n#### Deep",
     });
@@ -2050,16 +2078,15 @@ describe("lint_wiki", () => {
     expect(firstText(second)).toBe(firstText(first));
     const statements = sql();
     expect(statements.join("\n")).toContain("SET TRANSACTION READ ONLY");
-    expect(
-      statements.filter((statement) =>
-        /^\s*(INSERT|UPDATE|DELETE)\b/i.test(statement)
-      )
-    ).toEqual([]);
+    expect(mutationsOf(statements)).toEqual([auditInsert, auditInsert]);
     expect(statements.join("\n")).not.toMatch(/"document"\."text"/);
     vi.restoreAllMocks();
     await expect(Event.count({ where: { teamId: user.teamId } })).resolves.toBe(
-      eventCount
+      eventCount + 2
     );
+    await expect(
+      Event.count({ where: { teamId: user.teamId, name: "wikiLint.wiki" } })
+    ).resolves.toBe(2);
   });
   describe("hierarchy and global index", () => {
     /** Every hierarchy rule kind. */
@@ -3068,6 +3095,1018 @@ describe("lint_wiki", () => {
         ).resolves.toMatchObject({ state: "complete" });
       }
     );
+  });
+});
+
+describe("audit summary", () => {
+  /** Dependencies a test passes to both lint tools. */
+  type AuditDependencies = Omit<LintDocumentDependencies, "policySet"> & {
+    wikiReader?: LintWikiReader;
+  };
+
+  /** Structure rules plus a discouraged blockquote, which is a Warning. */
+  const warningPolicy = {
+    activation: "read_only",
+    rules: [
+      ...structurePolicy.rules,
+      { kind: "discouraged_markdown_structures", structures: ["blockquote"] },
+    ],
+  };
+
+  /**
+   * Calls `lint_wiki`.
+   *
+   * @param client - the connected client.
+   * @param args - the tool arguments.
+   * @returns the tool result.
+   */
+  const lintWikiCall = async (
+    client: Client,
+    args: Record<string, unknown> = {}
+  ) =>
+    (await client.callTool({
+      name: "lint_wiki",
+      arguments: args,
+    })) as CallToolResult;
+
+  /**
+   * Returns the valid policy fields of a collection.
+   *
+   * @param set - the policy set.
+   * @param collectionId - the collection.
+   * @returns the AD-14 policy fields.
+   */
+  const policyFieldsOf = (set: PolicySet, collectionId: string) => {
+    const entry = set.entries.find((e) => e.collectionId === collectionId);
+    if (entry?.status !== "valid") {
+      throw new Error("Expected a valid test policy");
+    }
+    return {
+      policySchemaVersion: entry.policySchemaVersion,
+      policyFingerprint: entry.policyFingerprint,
+    };
+  };
+
+  /**
+   * Reads the stored Wiki lint audit Events of a team.
+   *
+   * @param teamId - the team.
+   * @returns the stored columns of each Event, oldest first.
+   */
+  async function auditRows(teamId: string) {
+    const events = await Event.findAll({
+      where: { teamId, name: [...WIKI_LINT_AUDIT_EVENTS] },
+      order: [
+        ["createdAt", "ASC"],
+        ["id", "ASC"],
+      ],
+    });
+    return events.map((event) => ({
+      id: event.id,
+      name: event.name,
+      teamId: event.teamId,
+      actorId: event.actorId,
+      userId: event.userId,
+      modelId: event.modelId,
+      documentId: event.documentId,
+      collectionId: event.collectionId,
+      ip: event.ip,
+      authType: event.authType,
+      changes: event.changes,
+      data: event.data,
+    }));
+  }
+
+  /**
+   * Builds an expected audit Event.
+   *
+   * @param input.id - the Event ID.
+   * @param input.user - the actor.
+   * @param input.name - the Event name.
+   * @param input.documentId - the document column.
+   * @param input.collectionId - the collection column.
+   * @param data - the data fields that differ from a clean, complete,
+   *   zero-count `lint_document` result without a policy.
+   * @returns the expected stored columns.
+   */
+  const expectedRow = (
+    input: {
+      id: string;
+      user: User;
+      name?: string;
+      documentId?: string;
+      collectionId?: string;
+    },
+    data: Record<string, unknown>
+  ) => ({
+    id: input.id,
+    name: input.name ?? "wikiLint.document",
+    teamId: input.user.teamId,
+    actorId: input.user.id,
+    userId: null,
+    modelId: null,
+    documentId: input.documentId ?? null,
+    collectionId: input.collectionId ?? null,
+    ip: null,
+    authType: "mcp",
+    changes: null,
+    data: {
+      schemaVersion: 1,
+      requestId: expect.any(String),
+      operation: "lint_document",
+      outcome: "clean",
+      complete: true,
+      durationMs: expect.any(Number),
+      scopeKind: "document",
+      evaluatedDocumentCount: 0,
+      evaluatedLinkCount: 0,
+      counts: { errors: 0, warnings: 0, systemFailures: 0, byCode: {} },
+      runtimeFailOpenExercised: false,
+      credentialAuthType: "api",
+      ...data,
+    },
+  });
+
+  /**
+   * Runs a call with the production writer, recording the Event IDs it
+   * writes, then runs it again without audit and checks the results match.
+   *
+   * @param call - makes the call with the given dependencies.
+   * @returns the audited result and the IDs written.
+   */
+  async function auditedCall(
+    call: (dependencies: AuditDependencies) => Promise<CallToolResult>
+  ) {
+    const ids: string[] = [];
+    const result = await call({
+      writeAudit: async (row, statementTimeoutMs) => {
+        ids.push(row.id);
+        await insertAuditEvent(row, statementTimeoutMs);
+      },
+    });
+    const unaudited = await call({ writeAudit: async () => undefined });
+    expect(JSON.stringify(unaudited)).toBe(JSON.stringify(result));
+    return { result, ids };
+  }
+
+  /**
+   * Builds the context of a direct tool call, as the `/mcp` route fills it.
+   *
+   * @param user - the actor.
+   * @returns the context.
+   */
+  const contextOf = (user: User) => ({
+    authInfo: {
+      token: "",
+      clientId: "",
+      scopes: [],
+      extra: { user, requestId: randomUUID(), credentialAuthType: "api" },
+    },
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("of lint_document", () => {
+    it("records a clean document with its policy and without its collection", async () => {
+      const { user, collection, document } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+
+      const { result, ids } = await auditedCall(async (dependencies) =>
+        lint(await connect(user, policySet, dependencies), {
+          id: document.id,
+        })
+      );
+
+      expect(JSON.parse(firstText(result)).state).toBe("complete");
+      expect(ids).toHaveLength(1);
+      expect(await auditRows(user.teamId)).toStrictEqual([
+        expectedRow(
+          { id: ids[0], user, documentId: document.id },
+          {
+            ...policyFieldsOf(policySet, collection.id),
+            evaluatedDocumentCount: 1,
+          }
+        ),
+      ]);
+    });
+
+    it("records the counts of Errors and Warnings", async () => {
+      const { user, collection, document } = await buildFixture({
+        text: "# Title\n\n> Quote",
+      });
+      const policySet = policySetFor({ [collection.id]: warningPolicy });
+
+      const { result, ids } = await auditedCall(async (dependencies) =>
+        lint(await connect(user, policySet, dependencies), {
+          id: document.id,
+        })
+      );
+
+      const parsed = JSON.parse(firstText(result));
+      expect(parsed.errors.length).toBeGreaterThan(0);
+      expect(parsed.warnings.length).toBeGreaterThan(0);
+      const byCode: Record<string, number> = {};
+      for (const { code } of [...parsed.errors, ...parsed.warnings]) {
+        byCode[code] = (byCode[code] ?? 0) + 1;
+      }
+      expect(await auditRows(user.teamId)).toStrictEqual([
+        expectedRow(
+          { id: ids[0], user, documentId: document.id },
+          {
+            outcome: "findings",
+            ...policyFieldsOf(policySet, collection.id),
+            evaluatedDocumentCount: 1,
+            counts: {
+              errors: parsed.errors.length,
+              warnings: parsed.warnings.length,
+              systemFailures: 0,
+              byCode,
+            },
+          }
+        ),
+      ]);
+    });
+
+    it.each([
+      ["an unconfigured collection", true],
+      ["no collection", false],
+    ])(
+      "records a document in %s as not evaluated without a policy",
+      async (_name, inCollection) => {
+        const fixture = await buildFixture({ text: CLEAN_MARKDOWN });
+        const { user } = fixture;
+        const document = inCollection
+          ? fixture.document
+          : await buildDraftDocument({
+              teamId: user.teamId,
+              userId: user.id,
+              collectionId: null,
+              text: CLEAN_MARKDOWN,
+            });
+        const policySet = policySetFor({
+          [randomUUID()]: structurePolicy,
+        });
+
+        const { result, ids } = await auditedCall(async (dependencies) =>
+          lint(await connect(user, policySet, dependencies), {
+            id: document.id,
+          })
+        );
+
+        expect(JSON.parse(firstText(result)).state).toBe("not_evaluated");
+        expect(await auditRows(user.teamId)).toStrictEqual([
+          expectedRow(
+            { id: ids[0], user, documentId: document.id },
+            { outcome: "not_evaluated", complete: false }
+          ),
+        ]);
+      }
+    );
+
+    it("records a sentinel as failed without a policy", async () => {
+      const { user, collection, document } = await buildFixture();
+      const policySet = policySetFor({ [collection.id]: invalidPolicy });
+
+      const { ids } = await auditedCall(async (dependencies) =>
+        lint(await connect(user, policySet, dependencies), {
+          id: document.id,
+        })
+      );
+
+      expect(await auditRows(user.teamId)).toStrictEqual([
+        expectedRow(
+          { id: ids[0], user, documentId: document.id },
+          {
+            outcome: "failed",
+            complete: false,
+            counts: {
+              errors: 0,
+              warnings: 0,
+              systemFailures: 1,
+              byCode: { POLICY_CONFIGURATION_INVALID: 1 },
+            },
+          }
+        ),
+      ]);
+    });
+
+    it("records the same summary for a reader without collection access", async () => {
+      const { reader, owner, collection, document } =
+        await buildDocumentOnlyReader();
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+
+      const byReader = await auditedCall(async (dependencies) =>
+        lint(await connect(reader, policySet, dependencies), {
+          id: document.id,
+        })
+      );
+      const byOwner = await auditedCall(async (dependencies) =>
+        lint(await connect(owner, policySet, dependencies), {
+          id: document.id,
+        })
+      );
+
+      expect(JSON.parse(firstText(byReader.result)).policies).toEqual([]);
+      const rows = await auditRows(owner.teamId);
+      const readerRow = rows.find((row) => row.actorId === reader.id);
+      const ownerRow = rows.find((row) => row.actorId === owner.id);
+      expect(rows).toHaveLength(2);
+      expect(readerRow).toStrictEqual(
+        expectedRow(
+          { id: byReader.ids[0], user: reader, documentId: document.id },
+          {
+            outcome: "findings",
+            ...policyFieldsOf(policySet, collection.id),
+            evaluatedDocumentCount: 1,
+            counts: ownerRow?.data?.counts,
+          }
+        )
+      );
+      /**
+       * Drops the fields that may differ between the two actors.
+       *
+       * @param row - the stored row.
+       * @returns the comparable row.
+       */
+      const comparable = (row: typeof readerRow) => {
+        const { id: _id, actorId: _actor, ip: _ip, data, ...columns } = row!;
+        const {
+          requestId: _request,
+          durationMs: _duration,
+          ...rest
+        } = data as Record<string, unknown>;
+        return { ...columns, data: rest };
+      };
+      expect(comparable(readerRow)).toStrictEqual(comparable(ownerRow));
+      expect(ownerRow?.id).toBe(byOwner.ids[0]);
+    });
+
+    it("records the policy when collection readability cannot be established", async () => {
+      const { user, collection, document } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+      vi.spyOn(Collection, "findByPk").mockRejectedValue(new Error("lookup"));
+
+      const { result, ids } = await auditedCall(async (dependencies) =>
+        lint(await connect(user, policySet, dependencies), {
+          id: document.id,
+        })
+      );
+
+      expect(JSON.parse(firstText(result)).scope).not.toHaveProperty(
+        "collectionId"
+      );
+      expect(await auditRows(user.teamId)).toStrictEqual([
+        expectedRow(
+          { id: ids[0], user, documentId: document.id },
+          {
+            ...policyFieldsOf(policySet, collection.id),
+            evaluatedDocumentCount: 1,
+          }
+        ),
+      ]);
+    });
+
+    it("records each access role as its own actor", async () => {
+      const { user, collection, document } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const admin = await buildAdmin({ teamId: user.teamId });
+      const viewer = await buildViewer({ teamId: user.teamId });
+      const guest = await buildGuestUser({ teamId: user.teamId });
+      await UserMembership.create({
+        documentId: document.id,
+        userId: guest.id,
+        createdById: user.id,
+        permission: DocumentPermission.Read,
+      });
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+
+      for (const actor of [admin, user, viewer, guest]) {
+        const result = await lint(await connect(actor, policySet), {
+          id: document.id,
+        });
+        expect(result.isError).toBeUndefined();
+      }
+
+      const rows = await auditRows(user.teamId);
+      expect(rows.map((row) => row.actorId)).toEqual([
+        admin.id,
+        user.id,
+        viewer.id,
+        guest.id,
+      ]);
+      for (const [index, actor] of [admin, user, viewer, guest].entries()) {
+        expect(rows[index]).toStrictEqual(
+          expectedRow(
+            { id: rows[index].id, user: actor, documentId: document.id },
+            {
+              ...policyFieldsOf(policySet, collection.id),
+              evaluatedDocumentCount: 1,
+            }
+          )
+        );
+      }
+    });
+
+    /** A missing target linked from a table header and a nested notice. */
+    const missingTarget = randomUUID();
+
+    /**
+     * Builds linked text to the missing target.
+     *
+     * @param text - the text.
+     * @returns the text node.
+     */
+    const missingLink = (text: string) =>
+      linkedText(text, `/doc/${missingTarget}`);
+
+    it.each([
+      [
+        "a snapshot that times out",
+        structurePolicy.rules,
+        { text: CLEAN_MARKDOWN },
+        {
+          reader: {
+            ...defaultLintDocumentReader,
+            readDocumentSnapshot: async () => {
+              throw new DeadlineFloorError();
+            },
+          },
+        },
+        {
+          outcome: "failed",
+          complete: false,
+          counts: {
+            errors: 0,
+            warnings: 0,
+            systemFailures: 1,
+            byCode: { VALIDATION_TIMEOUT: 1 },
+          },
+        },
+      ],
+      [
+        "a policy without document rules",
+        [{ kind: "hierarchy_acyclic" }],
+        { text: "# Title" },
+        {},
+        {},
+      ],
+      [
+        "a rule kind that fails",
+        [...structurePolicy.rules, { kind: "internal_links" }],
+        {
+          content: {
+            type: "doc",
+            content: [
+              {
+                type: "heading",
+                attrs: { level: 1 },
+                content: [{ type: "text", text: "Title" }],
+              },
+              {
+                type: "table",
+                content: [
+                  {
+                    type: "tr",
+                    content: [
+                      {
+                        type: "th",
+                        content: [paragraphOf(missingLink("head"))],
+                      },
+                    ],
+                  },
+                  {
+                    type: "tr",
+                    content: [
+                      {
+                        type: "td",
+                        content: [
+                          {
+                            type: "container_notice",
+                            attrs: { style: "info" },
+                            content: [paragraphOf(missingLink("noted"))],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        {},
+        {
+          outcome: "failed",
+          complete: false,
+          counts: {
+            errors: 4,
+            warnings: 0,
+            systemFailures: 1,
+            byCode: {
+              HEADING_LEVEL_NOT_ALLOWED: 1,
+              INTERNAL_LINK_TARGET_UNRESOLVED: 1,
+              REQUIRED_SECTION_MISSING: 2,
+              VALIDATION_RUNTIME_FAILED: 1,
+            },
+          },
+        },
+      ],
+    ] as const)(
+      "records the policy of %s",
+      async (_name, rules, documentOverrides, dependencies, data) => {
+        const user = await buildUser();
+        const collection = await buildCollection({
+          teamId: user.teamId,
+          userId: user.id,
+        });
+        const document = await buildDocument({
+          teamId: user.teamId,
+          userId: user.id,
+          collectionId: collection.id,
+          ...(documentOverrides as Parameters<typeof buildDocument>[0]),
+        });
+        const policySet = policySetFor({
+          [collection.id]: { activation: "read_only", rules },
+        });
+
+        const { ids } = await auditedCall(async (audit) =>
+          lint(
+            await connect(user, policySet, {
+              ...(dependencies as AuditDependencies),
+              ...audit,
+            }),
+            { id: document.id }
+          )
+        );
+
+        expect(await auditRows(user.teamId)).toStrictEqual([
+          expectedRow(
+            { id: ids[0], user, documentId: document.id },
+            { ...policyFieldsOf(policySet, collection.id), ...data }
+          ),
+        ]);
+      }
+    );
+
+    it("measures the duration from the handler's first clock reading", async () => {
+      const { user, collection, document } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+      let readings = 0;
+
+      await lint(
+        await connect(user, policySet, {
+          clock: () => (readings++ === 0 ? 5000 : 5012),
+        }),
+        { id: document.id }
+      );
+
+      const rows = await auditRows(user.teamId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].data?.durationMs).toBe(12);
+    });
+
+    it("is retrievable by a team admin through events.list", async () => {
+      const { user, collection, document } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const admin = await buildAdmin({ teamId: user.teamId });
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+      await lint(await connect(user, policySet), { id: document.id });
+      const [summary] = await auditRows(user.teamId);
+
+      const res = await server.post("/api/events.list", admin, {
+        body: { auditWikiLint: true },
+      });
+      const body = await res.json();
+
+      expect(res.status).toEqual(200);
+      expect(body.data).toHaveLength(1);
+      expect(body.data[0]).toMatchObject({
+        id: summary.id,
+        name: "wikiLint.document",
+      });
+      expect(body.data[0].data).toStrictEqual(summary.data);
+      expect(summary).toStrictEqual(
+        expectedRow(
+          { id: summary.id, user, documentId: document.id },
+          {
+            ...policyFieldsOf(policySet, collection.id),
+            evaluatedDocumentCount: 1,
+          }
+        )
+      );
+    });
+
+    it("keeps the first summary when the same invocation is written twice", async () => {
+      const { user, collection, document } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+      const ids: string[] = [];
+      const retrying: AuditEventWriter = async (row, statementTimeoutMs) => {
+        ids.push(row.id);
+        await insertAuditEvent(row, statementTimeoutMs);
+        await insertAuditEvent(
+          { ...row, data: { ...row.data, outcome: "findings" } },
+          statementTimeoutMs
+        );
+      };
+
+      await lint(await connect(user, policySet, { writeAudit: retrying }), {
+        id: document.id,
+      });
+
+      expect(await auditRows(user.teamId)).toStrictEqual([
+        expectedRow(
+          { id: ids[0], user, documentId: document.id },
+          {
+            ...policyFieldsOf(policySet, collection.id),
+            evaluatedDocumentCount: 1,
+          }
+        ),
+      ]);
+    });
+  });
+
+  describe("of lint_wiki", () => {
+    it("records an incomplete collection run with its policy", async () => {
+      const { user, collection } = await buildFixture();
+      const [d1, d2, d3] = [1, 2, 3].map(
+        (index) => `00000000-0000-4000-8000-0000000000d${index}`
+      );
+      const documentOf = (documentId: string, markdown: string) => ({
+        documentId,
+        content: { syntax: parseCanonicalMarkdown(markdown), links: null },
+        parent: null,
+      });
+      const wikiReader: LintWikiReader = {
+        authorizeLintCollection: async () => collection.id,
+        readWikiSnapshot: async () => ({
+          ok: true,
+          snapshot: {
+            collections: [
+              {
+                collectionId: collection.id,
+                documents: [
+                  documentOf(d1, "## Overview\n\nBody"),
+                  documentOf(d2, CLEAN_MARKDOWN),
+                  documentOf(d3, CLEAN_MARKDOWN),
+                ],
+                graph: null,
+              },
+            ],
+            sentinelCollectionIds: [],
+            targets: new Map(),
+          },
+        }),
+      };
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+
+      const { result, ids } = await auditedCall(async (dependencies) => {
+        // The deadline start, the post-snapshot expiry check, and the checks
+        // before the first two units read 0 ms; the check before the third
+        // unit finds less than the stop margin left.
+        let readings = 0;
+        return lintWikiCall(
+          await connect(user, policySet, {
+            ...dependencies,
+            wikiReader,
+            clock: () =>
+              readings++ < 4
+                ? 0
+                : LINT_WIKI_DEADLINE_MS - LINT_WIKI_STOP_MARGIN_MS + 1,
+          }),
+          { collectionId: collection.id }
+        );
+      });
+
+      expect(JSON.parse(firstText(result)).state).toBe("incomplete");
+      expect(await auditRows(user.teamId)).toStrictEqual([
+        expectedRow(
+          {
+            id: ids[0],
+            user,
+            name: "wikiLint.wiki",
+            collectionId: collection.id,
+          },
+          {
+            operation: "lint_wiki",
+            outcome: "incomplete",
+            complete: false,
+            scopeKind: "collection",
+            ...policyFieldsOf(policySet, collection.id),
+            evaluatedDocumentCount: 2,
+            counts: {
+              errors: 1,
+              warnings: 0,
+              systemFailures: 1,
+              byCode: { REQUIRED_SECTION_MISSING: 1, VALIDATION_TIMEOUT: 1 },
+            },
+          }
+        ),
+      ]);
+    });
+
+    it("records admission rejections of a collection and of the default scope", async () => {
+      const { user, collection } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+      const holder = lintWikiAdmission.lease();
+      expect(holder.acquire()).toBe(true);
+      let scoped: { result: CallToolResult; ids: string[] };
+      let unscoped: { result: CallToolResult; ids: string[] };
+      try {
+        scoped = await auditedCall(async (dependencies) =>
+          lintWikiCall(await connect(user, policySet, dependencies), {
+            collectionId: collection.id,
+          })
+        );
+        unscoped = await auditedCall(async (dependencies) =>
+          lintWikiCall(await connect(user, policySet, dependencies))
+        );
+      } finally {
+        holder.release();
+      }
+
+      const rejected = {
+        operation: "lint_wiki",
+        outcome: "failed",
+        complete: false,
+        counts: {
+          errors: 0,
+          warnings: 0,
+          systemFailures: 1,
+          byCode: { VALIDATION_RESOURCE_LIMIT_EXCEEDED: 1 },
+        },
+      };
+      expect(await auditRows(user.teamId)).toStrictEqual([
+        expectedRow(
+          {
+            id: scoped.ids[0],
+            user,
+            name: "wikiLint.wiki",
+            collectionId: collection.id,
+          },
+          {
+            ...rejected,
+            scopeKind: "collection",
+            ...policyFieldsOf(policySet, collection.id),
+          }
+        ),
+        expectedRow(
+          { id: unscoped.ids[0], user, name: "wikiLint.wiki" },
+          { ...rejected, scopeKind: "configured_collections" }
+        ),
+      ]);
+    });
+
+    it("records not-evaluated scopes without claiming admission", async () => {
+      const { user, collection } = await buildFixture();
+      const policySet = policySetFor({});
+      const admit = vi.fn(() => true);
+      vi.spyOn(lintWikiAdmission, "lease").mockImplementation(() => ({
+        acquire: admit,
+        release: () => undefined,
+      }));
+
+      const scoped = await auditedCall(async (dependencies) =>
+        lintWikiCall(await connect(user, policySet, dependencies), {
+          collectionId: collection.id,
+        })
+      );
+      const unscoped = await auditedCall(async (dependencies) =>
+        lintWikiCall(await connect(user, policySet, dependencies))
+      );
+
+      expect(admit).not.toHaveBeenCalled();
+      const notEvaluated = {
+        operation: "lint_wiki",
+        outcome: "not_evaluated",
+        complete: false,
+      };
+      expect(await auditRows(user.teamId)).toStrictEqual([
+        expectedRow(
+          {
+            id: scoped.ids[0],
+            user,
+            name: "wikiLint.wiki",
+            collectionId: collection.id,
+          },
+          { ...notEvaluated, scopeKind: "collection" }
+        ),
+        expectedRow(
+          { id: unscoped.ids[0], user, name: "wikiLint.wiki" },
+          { ...notEvaluated, scopeKind: "configured_collections" }
+        ),
+      ]);
+    });
+
+    it("holds the scan slot until a pending audit write settles", async () => {
+      const { user, collection } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const policySet = policySetFor({ [collection.id]: structurePolicy });
+      let entered: () => void = () => undefined;
+      const writing = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const blocked: AuditEventWriter = async (row, statementTimeoutMs) => {
+        entered();
+        await held;
+        await insertAuditEvent(row, statementTimeoutMs);
+      };
+      const client = await connect(user, policySet);
+
+      const pending = lintWikiCall(
+        await connect(user, policySet, { writeAudit: blocked }),
+        { collectionId: collection.id }
+      );
+      let concurrent: CallToolResult;
+      try {
+        await writing;
+        concurrent = await lintWikiCall(client, {
+          collectionId: collection.id,
+        });
+      } finally {
+        release();
+      }
+      const first = await pending;
+
+      expect(JSON.parse(firstText(first)).state).toBe("complete");
+      expect(JSON.parse(firstText(concurrent)).systemFailures).toEqual([
+        createSystemFailure("VALIDATION_RESOURCE_LIMIT_EXCEEDED", {
+          kind: "scope",
+          scopeKind: "collection",
+          collectionId: collection.id,
+        }),
+      ]);
+      const next = await lintWikiCall(client, {
+        collectionId: collection.id,
+      });
+      expect(JSON.parse(firstText(next)).state).toBe("complete");
+      expect(
+        (await auditRows(user.teamId)).map((row) => row.data?.outcome)
+      ).toEqual(["failed", "clean", "clean"]);
+    });
+  });
+
+  it("records nothing for tool-execution errors", async () => {
+    const { user, collection, document } = await buildFixture();
+    const policySet = policySetFor({ [collection.id]: structurePolicy });
+    const client = await connect(user, policySet);
+    const eventCount = await Event.count({ where: { teamId: user.teamId } });
+    /**
+     * Returns a clock whose readings after the first are near the deadline,
+     * so the first lookup batch is refused below the floor.
+     *
+     * @param deadlineMs - the deadline.
+     * @returns the clock.
+     */
+    const lateClock = (deadlineMs: number) => {
+      let readings = 0;
+      return () => (readings++ === 0 ? 0 : deadlineMs - 50);
+    };
+
+    const results = [
+      await client.callTool({ name: "lint_document", arguments: { id: 1 } }),
+      await client.callTool({
+        name: "lint_wiki",
+        arguments: { collectionId: 1 },
+      }),
+      await lint(client, { id: randomUUID() }),
+      await lintWikiCall(client, { collectionId: randomUUID() }),
+      await lint(await connect(user, policySet, { clock: lateClock(9000) }), {
+        id: document.id,
+      }),
+      await lint(
+        await connect(user, policySet, { clock: () => Number.MAX_VALUE }),
+        { id: document.id }
+      ),
+      await lintWikiCall(
+        await connect(user, policySet, {
+          clock: lateClock(LINT_WIKI_DEADLINE_MS),
+        }),
+        { collectionId: collection.id }
+      ),
+    ];
+    vi.spyOn(Document, "findByPk").mockRejectedValueOnce(new Error("lookup"));
+    results.push(await lint(client, { id: document.id }));
+    vi.spyOn(Collection, "findByPk").mockRejectedValueOnce(new Error("lookup"));
+    results.push(await lintWikiCall(client, { collectionId: collection.id }));
+
+    expect(results.map((result) => result.isError)).toEqual(
+      results.map(() => true)
+    );
+    await expect(auditRows(user.teamId)).resolves.toEqual([]);
+    await expect(Event.count({ where: { teamId: user.teamId } })).resolves.toBe(
+      eventCount
+    );
+  });
+
+  describe("when the audit write fails", () => {
+    /**
+     * Returns the audit failure diagnostics logged so far.
+     *
+     * @param warn - the `Logger.warn` spy.
+     * @returns the logged extras.
+     */
+    const diagnostics = (warn: { mock: { calls: unknown[][] } }) =>
+      warn.mock.calls
+        .filter(([message]) => message === "Wiki lint audit write failed")
+        .map(([, extra]) => extra);
+
+    it.each([
+      [
+        "rejects",
+        "error",
+        (async () => {
+          throw new Error("raw SQL detail");
+        }) as AuditEventWriter,
+      ],
+      [
+        "never settles",
+        "timeout",
+        (() => {
+          // Fake only the timers started from here on, then expire the bound.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          setImmediate(() => vi.advanceTimersByTime(AUDIT_WRITE_BOUND_MS));
+          return new Promise<void>(() => undefined);
+        }) as AuditEventWriter,
+      ],
+    ])(
+      "returns the audited result and logs once when the writer %s",
+      async (_name, reason, writeAudit) => {
+        const { user, collection, document } = await buildFixture({
+          text: "# Title",
+        });
+        const policySet = policySetFor({ [collection.id]: structurePolicy });
+        const audited = await lintDocumentTool(
+          { id: document.id },
+          contextOf(user),
+          { policySet }
+        );
+        const warn = vi.spyOn(Logger, "warn");
+        const context = contextOf(user);
+
+        const failed = await lintDocumentTool({ id: document.id }, context, {
+          policySet,
+          writeAudit,
+        });
+        vi.useRealTimers();
+
+        expect(JSON.stringify(failed)).toBe(JSON.stringify(audited));
+        expect(diagnostics(warn)).toStrictEqual([
+          {
+            requestId: context.authInfo.extra.requestId,
+            invocationId: expect.stringMatching(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+            ),
+            reason,
+          },
+        ]);
+        await expect(auditRows(user.teamId)).resolves.toHaveLength(1);
+      }
+    );
+  });
+
+  it("never reaches the global Event queue", async () => {
+    const { user, collection, document } = await buildFixture({
+      text: CLEAN_MARKDOWN,
+    });
+    await buildWebhookSubscription({
+      teamId: user.teamId,
+      createdById: user.id,
+      events: ["*"],
+    });
+    const policySet = policySetFor({ [collection.id]: structurePolicy });
+    const client = await connect(user, policySet);
+    const add = vi.spyOn(globalEventQueue(), "add");
+
+    await lint(client, { id: document.id });
+    await lintWikiCall(client, { collectionId: collection.id });
+
+    expect(
+      (await auditRows(user.teamId)).map((row) => row.name).sort()
+    ).toEqual(["wikiLint.document", "wikiLint.wiki"]);
+    expect(
+      add.mock.calls.filter(([event]) =>
+        String((event as { name?: unknown }).name).startsWith("wikiLint.")
+      )
+    ).toEqual([]);
   });
 });
 

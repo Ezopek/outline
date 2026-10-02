@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -5,7 +6,10 @@ import env from "@server/env";
 import { AuthorizationError } from "@server/errors";
 import { getPolicySet } from "@server/wikiLint/adapters/policyConfig";
 import { lintWikiAdmission } from "@server/wikiLint/application/admission";
-import { Deadline } from "@server/wikiLint/application/deadline";
+import {
+  Deadline,
+  monotonicClock,
+} from "@server/wikiLint/application/deadline";
 import type {
   LintDocumentDependencies,
   LintDocumentOutcome,
@@ -21,6 +25,7 @@ import {
   defaultLintWikiReader,
   lintWiki,
 } from "@server/wikiLint/application/lintWiki";
+import { recordReadAudit } from "@server/wikiLint/application/readAudit";
 import { error, getActorFromContext, optionalString, success } from "./util";
 
 /** The fixed message of an unmodellable failure. */
@@ -61,7 +66,8 @@ function toolResult(outcome: LintDocumentOutcome): CallToolResult {
 }
 
 /**
- * Handles a `lint_document` call. The tool is not registered here.
+ * Handles a `lint_document` call. The tool is not registered here. A lint
+ * result is audited before it is returned; the audit never changes it.
  *
  * @param input - the validated input.
  * @param context - the MCP request context carrying the authenticated user.
@@ -75,18 +81,33 @@ export async function lintDocumentTool(
   dependencies: LintDocumentDependencies = {}
 ): Promise<CallToolResult> {
   try {
-    const deadline = new Deadline(
-      LINT_DOCUMENT_DEADLINE_MS,
-      dependencies.clock
-    );
+    const invocationId = randomUUID();
+    const clock = dependencies.clock ?? monotonicClock;
+    // The deadline takes the handler's first clock reading.
+    const deadline = new Deadline(LINT_DOCUMENT_DEADLINE_MS, clock);
+    const actor = getActorFromContext(context);
     const outcome = await lintDocument({
       id: input.id,
-      actor: getActorFromContext(context),
+      actor,
       policySet: dependencies.policySet ?? getPolicySet(),
       deadline,
       reader: dependencies.reader ?? defaultLintDocumentReader,
       instanceOrigin: dependencies.instanceOrigin ?? env.URL,
     });
+    if (outcome.kind === "result") {
+      await recordReadAudit(
+        {
+          operation: "lint_document",
+          outcome,
+          actor,
+          extra: context.authInfo?.extra,
+          invocationId,
+          enteredAt: deadline.startedAt,
+          clock,
+        },
+        dependencies.writeAudit
+      );
+    }
     return toolResult(outcome);
   } catch {
     return error(OPERATION_FAILED);
@@ -95,7 +116,8 @@ export async function lintDocumentTool(
 
 /**
  * Handles a `lint_wiki` call. The tool is not registered here. The call
- * holds the per-process scan slot from its admission until it returns.
+ * holds the per-process scan slot from its admission until it returns, so
+ * also while its lint result is audited; the audit never changes the result.
  *
  * @param input - the validated input; an omitted collection selects every
  *   readable configured collection.
@@ -111,16 +133,34 @@ export async function lintWikiTool(
 ): Promise<CallToolResult> {
   const lease = lintWikiAdmission.lease();
   try {
-    const deadline = new Deadline(LINT_WIKI_DEADLINE_MS, dependencies.clock);
+    const invocationId = randomUUID();
+    const clock = dependencies.clock ?? monotonicClock;
+    // The deadline takes the handler's first clock reading.
+    const deadline = new Deadline(LINT_WIKI_DEADLINE_MS, clock);
+    const actor = getActorFromContext(context);
     const outcome = await lintWiki({
       collectionId: input.collectionId,
-      actor: getActorFromContext(context),
+      actor,
       policySet: dependencies.policySet ?? getPolicySet(),
       deadline,
       reader: dependencies.reader ?? defaultLintWikiReader,
       instanceOrigin: dependencies.instanceOrigin ?? env.URL,
       admit: lease.acquire,
     });
+    if (outcome.kind === "result") {
+      await recordReadAudit(
+        {
+          operation: "lint_wiki",
+          outcome,
+          actor,
+          extra: context.authInfo?.extra,
+          invocationId,
+          enteredAt: deadline.startedAt,
+          clock,
+        },
+        dependencies.writeAudit
+      );
+    }
     return toolResult(outcome);
   } catch {
     return error(OPERATION_FAILED);

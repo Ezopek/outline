@@ -16,6 +16,7 @@ import { policyIdentity } from "../core/policySet";
 import { createSystemFailure } from "../core/registry";
 import { buildReadOnlyResult } from "../core/result";
 import { CanonicalMarkdownError } from "../adapters/canonicalSyntax";
+import type { AuditEventWriter } from "../adapters/auditEvents";
 import type { DocumentSnapshot, LintTarget } from "../adapters/documentReader";
 import {
   authorizeLintTarget,
@@ -62,11 +63,22 @@ export interface LintDocumentDependencies {
   reader?: LintDocumentReader;
   /** The instance origin that internal links are recognized against. */
   instanceOrigin?: string;
+  /** Writes the audit summary of a lint result. */
+  writeAudit?: AuditEventWriter;
 }
 
 /** The outcome of linting one document. */
 export type LintDocumentOutcome =
-  | { kind: "result"; result: ReadOnlyResult }
+  | {
+      kind: "result";
+      result: ReadOnlyResult;
+      /**
+       * The valid policy identity of the document's collection, whether or
+       * not the actor can read that collection. It is for the audit summary
+       * only and never enters the result.
+       */
+      auditPolicy?: PolicyIdentity;
+    }
   | { kind: "denied" }
   | { kind: "failed" };
 
@@ -123,20 +135,24 @@ function documentLocation(
  * @param input.items - the Findings kept and the System Failure.
  * @param input.scope - the zero-count scope.
  * @param input.policies - the visible policy identities.
+ * @param input.auditPolicy - the valid policy identity, for the audit only.
  * @returns the result outcome.
  */
 function failedResult(input: {
   items: readonly IssueItem[];
   scope: DocumentScope;
   policies: readonly PolicyIdentity[];
+  auditPolicy?: PolicyIdentity;
 }): LintDocumentOutcome {
+  const { auditPolicy, ...rest } = input;
   return {
     kind: "result",
     result: buildReadOnlyResult({
       requiredUnits: 1,
       completedUnits: 0,
-      ...input,
+      ...rest,
     }),
+    ...(auditPolicy ? { auditPolicy } : {}),
   };
 }
 
@@ -222,6 +238,7 @@ export async function lintDocument(input: {
     });
   }
 
+  const auditPolicy = policyIdentity(entry);
   const rules = documentSurfaceRules(entry.policy.rules);
   if (rules.length === 0) {
     return {
@@ -233,6 +250,7 @@ export async function lintDocument(input: {
         scope: zeroScope,
         policies,
       }),
+      auditPolicy,
     };
   }
 
@@ -252,6 +270,7 @@ export async function lintDocument(input: {
       ],
       scope: zeroScope,
       policies,
+      auditPolicy,
     });
 
   const hasInternalLinks = rules.some((rule) => rule.kind === "internal_links");
@@ -299,6 +318,7 @@ export async function lintDocument(input: {
       ],
       scope: zeroScope,
       policies,
+      auditPolicy,
     });
   }
 
@@ -316,5 +336,6 @@ export async function lintDocument(input: {
       ),
       policies,
     }),
+    auditPolicy,
   };
 }

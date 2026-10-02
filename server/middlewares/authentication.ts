@@ -57,7 +57,7 @@ export default function auth(options: AuthenticationOptions = {}) {
     }
 
     try {
-      const { type, token, user, service, scope } =
+      const { type, token, user, service, scope, clientId } =
         await validateAuthentication(ctx, options);
 
       await Promise.all([
@@ -71,6 +71,7 @@ export default function auth(options: AuthenticationOptions = {}) {
         type,
         service,
         scope,
+        clientId,
       };
 
       if (tracer) {
@@ -163,6 +164,7 @@ async function validateAuthentication(
   type: AuthenticationType;
   service?: string;
   scope?: string[];
+  clientId?: string;
 }> {
   const { token, transport } = parseAuthentication(ctx);
 
@@ -174,6 +176,7 @@ async function validateAuthentication(
   let type: AuthenticationType;
   let service: string | undefined;
   let scope: string[] | undefined;
+  let clientId: string | undefined;
 
   if (OAuthAuthentication.match(token)) {
     if (transport !== "header") {
@@ -218,6 +221,7 @@ async function validateAuthentication(
     }
 
     scope = authentication.scope;
+    clientId = authentication.oauthClient.clientId;
     await authentication.updateActiveAt();
   } else if (ApiKey.match(token)) {
     if (transport === "cookie") {
@@ -309,5 +313,6 @@ async function validateAuthentication(
     token,
     service,
     scope,
+    clientId,
   };
 }

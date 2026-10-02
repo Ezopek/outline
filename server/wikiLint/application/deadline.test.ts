@@ -26,6 +26,17 @@ describe("Deadline", () => {
     expect(deadline.remainingMs()).toBe(5999.5);
   });
 
+  it("keeps its single start reading", () => {
+    let readings = 0;
+    const deadline = new Deadline(9000, () => {
+      readings++;
+      return 1234.5;
+    });
+
+    expect(deadline.startedAt).toBe(1234.5);
+    expect(readings).toBe(1);
+  });
+
   it("expires when no time remains", () => {
     const { clock, set } = manualClock(0);
     const deadline = new Deadline(500, clock);

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import Koa from "koa";
 import bodyParser from "koa-body";
 import Router from "koa-router";
@@ -161,7 +162,7 @@ router.post(
     ],
   }),
   async (ctx) => {
-    const { user, token, scope } = ctx.state.auth;
+    const { user, token, scope, type, clientId } = ctx.state.auth;
 
     if (!user.team.getPreference(TeamPreference.MCP)) {
       throw NotFoundError();
@@ -188,12 +189,23 @@ router.post(
     await server.connect(transport);
 
     // Attach auth info to the raw request so the MCP transport
-    // passes it through as `extra.authInfo` to tool handlers.
+    // passes it through as `extra.authInfo` to tool handlers. The audit
+    // attribution comes only from the private authentication result, never
+    // from client-supplied headers, metadata, or arguments.
     (ctx.req as typeof ctx.req & { auth: AuthInfo }).auth = {
       token,
       clientId: "",
       scopes: scope ?? [],
-      extra: { user, scope: scope ?? [], ip: ctx.request.ip },
+      extra: {
+        user,
+        scope: scope ?? [],
+        ip: ctx.request.ip,
+        requestId: randomUUID(),
+        credentialAuthType: type,
+        ...(type === AuthenticationType.OAUTH && clientId
+          ? { authenticatedClientId: clientId }
+          : {}),
+      },
     };
 
     ctx.respond = false;

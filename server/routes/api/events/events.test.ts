@@ -1,3 +1,5 @@
+import sharedEnv from "@shared/env";
+import env from "@server/env";
 import {
   buildAdmin,
   buildCollection,
@@ -6,6 +8,7 @@ import {
   buildUser,
 } from "@server/test/factories";
 import { getTestServer } from "@server/test/support";
+import { WIKI_LINT_AUDIT_EVENTS } from "@server/wikiLint/adapters/auditEvents";
 
 const server = getTestServer();
 
@@ -484,5 +487,179 @@ describe("#events.list", () => {
     expect(res.status).toEqual(200);
     expect(body.data.length).toEqual(1);
     expect(body.data[0].id).toEqual(event.id);
+  });
+});
+
+describe("#events.list auditWikiLint", () => {
+  /** A self-hosted URL, on which the full audit log is unavailable. */
+  const SELF_HOSTED_URL = "https://wiki.example.test";
+
+  /**
+   * Builds a team with Wiki lint, audit, and activity Events, and another
+   * team with Wiki lint Events.
+   *
+   * @returns the team's admin, member, document, and Events.
+   */
+  async function buildFixture() {
+    const admin = await buildAdmin();
+    const member = await buildUser({ teamId: admin.teamId });
+    const collection = await buildCollection({
+      teamId: admin.teamId,
+      userId: member.id,
+    });
+    const document = await buildDocument({
+      teamId: admin.teamId,
+      userId: member.id,
+      collectionId: collection.id,
+    });
+    const wikiLint = [];
+    for (const name of WIKI_LINT_AUDIT_EVENTS) {
+      wikiLint.push(
+        await buildEvent({
+          name,
+          teamId: admin.teamId,
+          actorId: member.id,
+          documentId: document.id,
+          data: { schemaVersion: 1 },
+        })
+      );
+    }
+    await buildEvent({
+      name: "users.promote",
+      teamId: admin.teamId,
+      actorId: admin.id,
+      userId: member.id,
+    });
+    await buildEvent({
+      name: "documents.publish",
+      teamId: admin.teamId,
+      actorId: member.id,
+      documentId: document.id,
+      collectionId: collection.id,
+    });
+    const other = await buildAdmin();
+    for (const name of WIKI_LINT_AUDIT_EVENTS) {
+      await buildEvent({ name, teamId: other.teamId, actorId: other.id });
+    }
+    return { admin, member, document, wikiLint };
+  }
+
+  /**
+   * Returns the sorted IDs of listed Events.
+   *
+   * @param body - the response body.
+   * @returns the IDs.
+   */
+  const idsOf = (body: { data: { id: string }[] }) =>
+    body.data.map((event) => event.id).sort();
+
+  it.each([
+    ["a cloud", undefined],
+    ["a self-hosted", SELF_HOSTED_URL],
+  ])(
+    "lists only the team's summaries to an admin on %s URL",
+    async (_name, url) => {
+      const { admin, wikiLint } = await buildFixture();
+      if (url) {
+        env.URL = sharedEnv.URL = url;
+      }
+
+      const res = await server.post("/api/events.list", admin, {
+        body: { auditWikiLint: true },
+      });
+      const body = await res.json();
+
+      expect(res.status).toEqual(200);
+      expect(idsOf(body)).toEqual(wikiLint.map((event) => event.id).sort());
+      expect(body.data[0].actorIpAddress).toEqual("127.0.0.1");
+    }
+  );
+
+  it.each([
+    ["a cloud", undefined],
+    ["a self-hosted", SELF_HOSTED_URL],
+  ])("takes precedence over the audit log on %s URL", async (_name, url) => {
+    const { admin, wikiLint } = await buildFixture();
+    if (url) {
+      env.URL = sharedEnv.URL = url;
+    }
+
+    const res = await server.post("/api/events.list", admin, {
+      body: { auditWikiLint: true, auditLog: true },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(idsOf(body)).toEqual(wikiLint.map((event) => event.id).sort());
+  });
+
+  it("intersects the requested names with the summaries", async () => {
+    const { admin, wikiLint } = await buildFixture();
+
+    const res = await server.post("/api/events.list", admin, {
+      body: {
+        auditWikiLint: true,
+        events: ["wikiLint.document", "documents.publish"],
+      },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(idsOf(body)).toEqual([wikiLint[0].id]);
+  });
+
+  it.each([
+    ["without", false],
+    ["with", true],
+  ])("forbids a member %s a document", async (_name, withDocument) => {
+    const { member, document } = await buildFixture();
+
+    const res = await server.post("/api/events.list", member, {
+      body: {
+        auditWikiLint: true,
+        ...(withDocument ? { documentId: document.id } : {}),
+      },
+    });
+
+    expect(res.status).toEqual(403);
+  });
+
+  it("keeps the summaries out of the audit log and activity listings", async () => {
+    const { admin, member, document } = await buildFixture();
+
+    const listings = [
+      await server.post("/api/events.list", admin, {
+        body: { auditLog: true },
+      }),
+      await server.post("/api/events.list", admin),
+      await server.post("/api/events.list", admin, {
+        body: { events: ["wikiLint.document", "documents.publish"] },
+      }),
+      await server.post("/api/events.list", member, {
+        body: { documentId: document.id },
+      }),
+    ];
+
+    for (const res of listings) {
+      const body = await res.json();
+      expect(res.status).toEqual(200);
+      expect(body.data.length).toBeGreaterThan(0);
+      expect(
+        body.data.filter((event: { name: string }) =>
+          event.name.startsWith("wikiLint.")
+        )
+      ).toEqual([]);
+    }
+  });
+
+  it("keeps the audit log forbidden on a self-hosted URL", async () => {
+    const { admin } = await buildFixture();
+    env.URL = sharedEnv.URL = SELF_HOSTED_URL;
+
+    const res = await server.post("/api/events.list", admin, {
+      body: { auditLog: true },
+    });
+
+    expect(res.status).toEqual(403);
   });
 });

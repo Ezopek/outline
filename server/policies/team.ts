@@ -49,6 +49,10 @@ allow(User, ["delete", "audit"], Team, (actor, team) =>
   )
 );
 
+// Wiki lint audit summaries are available to team admins on every deployment,
+// unlike the full audit log.
+allow(User, "auditWikiLint", Team, isTeamAdmin);
+
 allow(User, ["createTemplate", "updateTemplate"], Team, (actor, team) =>
   and(
     //

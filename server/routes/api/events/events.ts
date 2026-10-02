@@ -9,6 +9,7 @@ import { Event, User, Collection, Document } from "@server/models";
 import { authorize } from "@server/policies";
 import { presentEvent } from "@server/presenters";
 import type { APIContext } from "@server/types";
+import { WIKI_LINT_AUDIT_EVENTS } from "@server/wikiLint/adapters/auditEvents";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
@@ -25,6 +26,7 @@ router.post(
       name,
       events,
       auditLog,
+      auditWikiLint,
       actorId,
       documentId,
       collectionId,
@@ -37,7 +39,12 @@ router.post(
       actorId: { [Op.ne]: null },
     };
 
-    if (auditLog) {
+    if (auditWikiLint) {
+      authorize(user, "auditWikiLint", user.team);
+      where.name = events
+        ? intersection(WIKI_LINT_AUDIT_EVENTS, events)
+        : [...WIKI_LINT_AUDIT_EVENTS];
+    } else if (auditLog) {
       authorize(user, "audit", user.team);
       where.name = events
         ? intersection(EventHelper.AUDIT_EVENTS, events)
@@ -96,7 +103,9 @@ router.post(
 
     ctx.body = {
       pagination: ctx.state.pagination,
-      data: loadedEvents.map((event) => presentEvent(event, auditLog)),
+      data: loadedEvents.map((event) =>
+        presentEvent(event, auditWikiLint || auditLog)
+      ),
     };
   }
 );
