@@ -230,9 +230,11 @@ const trimmedString = z
 
 const headingLevel = z.number().int().min(1).max(6);
 
-const uuid = z
-  .string()
-  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+/** A lowercase canonical 8-4-4-4-12 hexadecimal UUID. */
+export const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const uuid = z.string().regex(UUID_PATTERN);
 
 const hasUniqueItems = (items: readonly unknown[]) =>
   new Set(items).size === items.length;

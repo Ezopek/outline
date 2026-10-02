@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "collections": {
+    "00000000-0000-4000-8000-000000000001": {
+      "activation": "read_only",
+      "rules": [
+        {
+          "kind": "required_sections",
+          "headingLevel": 2,
+          "headings": ["Overview", "Details"]
+        },
+        { "kind": "allowed_heading_levels", "levels": [2, 3] },
+        { "kind": "internal_links" }
+      ]
+    }
+  }
+}

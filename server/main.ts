@@ -25,6 +25,7 @@ import { RedisPrefixHelper } from "./utils/RedisPrefixHelper";
 import ShutdownHelper, { ShutdownOrder } from "./utils/ShutdownHelper";
 import { getSSLOptions } from "./utils/ssl";
 import { checkUpdates } from "./utils/updates";
+import { getPolicySet } from "./wikiLint/adapters/policyConfig";
 
 /**
  * Starts a single forked service process. This is where the heavy dependency
@@ -37,6 +38,9 @@ import { checkUpdates } from "./utils/updates";
 export async function start(id: number, disconnect: () => void) {
   // Ensure plugins are loaded
   PluginManager.loadPlugins();
+
+  // Build the lint policy set from the bytes exported by the master
+  getPolicySet();
 
   // Clear unfurl cache in development so code changes take effect immediately
   if (env.isDevelopment) {

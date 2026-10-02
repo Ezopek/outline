@@ -12,6 +12,7 @@ import {
   checkPendingMigrations,
   configureChildHeapLimit,
 } from "./utils/startup";
+import { initializePolicyConfiguration } from "./wikiLint/adapters/policyConfig";
 
 // The number of processes to run, defaults to the number of CPU's available
 // for the web service, and 1 for collaboration unless REDIS_COLLABORATION_URL is set.
@@ -32,6 +33,9 @@ if (env.SERVICES.includes("collaboration") && !env.REDIS_COLLABORATION_URL) {
 // connection and migration checks run in a short-lived child process so that
 // the long-lived master never loads the (heavy) Sequelize models graph.
 async function master() {
+  // Loads the lint policy before anything else and exports it to the workers
+  // forked after this function resolves, or exits on a fatal defect.
+  initializePolicyConfiguration();
   await checkPendingMigrations();
   await printEnv();
 }
