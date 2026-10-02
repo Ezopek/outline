@@ -10,7 +10,7 @@ import type {
 } from "./contracts";
 import { WikiLintContractError } from "./contracts";
 import type { MarkdownStructure, RuleConfig, RuleKind } from "./registry";
-import { RULE_REGISTRY, createFinding } from "./registry";
+import { RULE_REGISTRY, createFinding, getIssueDefinition } from "./registry";
 
 type StructureRuleKind =
   | "required_sections"
@@ -310,6 +310,22 @@ function evaluateRule(rule: RuleConfig, context: RuleContext): void {
     default:
       throw new WikiLintContractError("Not a document structure rule");
   }
+}
+
+/**
+ * Selects the rules that run on the document surface: those whose registry
+ * code's surface is `document`.
+ *
+ * @param rules - the configured rules.
+ * @returns the document-surface rules, in configured order.
+ */
+export function documentSurfaceRules(
+  rules: readonly RuleConfig[]
+): RuleConfig[] {
+  return rules.filter(
+    (rule) =>
+      getIssueDefinition(RULE_REGISTRY[rule.kind].code)?.surfaces === "document"
+  );
 }
 
 /**

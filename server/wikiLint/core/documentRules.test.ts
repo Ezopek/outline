@@ -1,7 +1,11 @@
 import { parseCanonicalMarkdown } from "../adapters/canonicalSyntax";
 import type { CanonicalSyntax } from "./contracts";
 import { WikiLintContractError } from "./contracts";
-import { evaluateDocumentRules, isIsoDate } from "./documentRules";
+import {
+  documentSurfaceRules,
+  evaluateDocumentRules,
+  isIsoDate,
+} from "./documentRules";
 import type { RuleConfig } from "./registry";
 import { ruleConfigSchema } from "./registry";
 
@@ -548,5 +552,57 @@ describe("evaluateDocumentRules", () => {
       expect(issue.location).not.toHaveProperty("column");
       expect(issue.location).not.toHaveProperty("relationshipKind");
     }
+  });
+});
+
+describe("documentSurfaceRules", () => {
+  const structureRules = [
+    rule({ kind: "discouraged_markdown_structures", structures: ["table"] }),
+    rule({ kind: "required_sections", headingLevel: 2, headings: ["A"] }),
+    rule({ kind: "section_order", headingLevel: 2, headings: ["A", "B"] }),
+    rule({ kind: "allowed_heading_levels", levels: [2] }),
+    rule({ kind: "required_metadata_fields", metadataSection, fields: ["F"] }),
+    rule({
+      kind: "metadata_field_formats",
+      metadataSection,
+      fields: [{ name: "F", format: "iso_date" }],
+    }),
+    rule({ kind: "unsupported_markdown_structures", structures: ["table"] }),
+  ];
+  const wikiRules = [
+    rule({ kind: "parent_document_resolved" }),
+    rule({ kind: "hierarchy_acyclic" }),
+    rule({ kind: "published_documents_in_structure" }),
+    rule({ kind: "parent_collection_consistent" }),
+    rule({
+      kind: "global_index_links",
+      surfaceDocumentId: documentId,
+      globalIndexDocumentIds: ["00000000-0000-4000-8000-000000000002"],
+    }),
+  ];
+  const links = rule({ kind: "internal_links" });
+
+  it("keeps the structure kinds and internal links in configured order", () => {
+    const rules = [
+      wikiRules[0],
+      structureRules[0],
+      links,
+      ...wikiRules.slice(1),
+      ...structureRules.slice(1),
+    ];
+
+    expect(documentSurfaceRules(rules)).toEqual([
+      structureRules[0],
+      links,
+      ...structureRules.slice(1),
+    ]);
+  });
+
+  it("drops hierarchy and global-index kinds", () => {
+    expect(documentSurfaceRules(wikiRules)).toEqual([]);
+  });
+
+  it("returns an empty selection for no rules", () => {
+    expect(documentSurfaceRules([])).toEqual([]);
   });
 });
