@@ -28,12 +28,6 @@ import {
   buildViewer,
   buildWebhookSubscription,
 } from "@server/test/factories";
-import {
-  buildOAuthUser,
-  mcpHeaders,
-  mcpRequest,
-  parseMcpResponse,
-} from "@server/test/McpHelper";
 import { getTestServer } from "@server/test/support";
 import {
   parseCanonicalMarkdown,
@@ -4107,26 +4101,5 @@ describe("audit summary", () => {
         String((event as { name?: unknown }).name).startsWith("wikiLint.")
       )
     ).toEqual([]);
-  });
-});
-
-describe("POST /mcp/ tools/list", () => {
-  it("does not register the lint tools yet", async () => {
-    const { accessToken } = await buildOAuthUser();
-    const { body } = mcpRequest("tools/list");
-
-    const res = await server.post("/mcp/", {
-      headers: mcpHeaders(accessToken),
-      body,
-    });
-    expect(res.status).toEqual(200);
-
-    const parsed = await parseMcpResponse(res);
-    const names = (
-      (parsed?.result as { tools?: { name: string }[] })?.tools ?? []
-    ).map((tool) => tool.name);
-    expect(names).toContain("fetch");
-    expect(names).not.toContain("lint_document");
-    expect(names).not.toContain("lint_wiki");
   });
 });

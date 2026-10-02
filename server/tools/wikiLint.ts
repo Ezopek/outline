@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import AuthenticationHelper from "@shared/helpers/AuthenticationHelper";
 import env from "@server/env";
 import { AuthorizationError } from "@server/errors";
 import { getPolicySet } from "@server/wikiLint/adapters/policyConfig";
@@ -26,7 +28,13 @@ import {
   lintWiki,
 } from "@server/wikiLint/application/lintWiki";
 import { recordReadAudit } from "@server/wikiLint/application/readAudit";
-import { error, getActorFromContext, optionalString, success } from "./util";
+import {
+  error,
+  getActorFromContext,
+  optionalString,
+  success,
+  withTracing,
+} from "./util";
 
 /** The fixed message of an unmodellable failure. */
 const OPERATION_FAILED = "The operation could not be completed";
@@ -66,8 +74,8 @@ function toolResult(outcome: LintDocumentOutcome): CallToolResult {
 }
 
 /**
- * Handles a `lint_document` call. The tool is not registered here. A lint
- * result is audited before it is returned; the audit never changes it.
+ * Handles a `lint_document` call; `wikiLintTools` registers it. A lint result
+ * is audited before it is returned; the audit never changes it.
  *
  * @param input - the validated input.
  * @param context - the MCP request context carrying the authenticated user.
@@ -115,9 +123,9 @@ export async function lintDocumentTool(
 }
 
 /**
- * Handles a `lint_wiki` call. The tool is not registered here. The call
- * holds the per-process scan slot from its admission until it returns, so
- * also while its lint result is audited; the audit never changes the result.
+ * Handles a `lint_wiki` call; `wikiLintTools` registers it. The call holds
+ * the per-process scan slot from its admission until it returns, so also
+ * while its lint result is audited; the audit never changes the result.
  *
  * @param input - the validated input; an omitted collection selects every
  *   readable configured collection.
@@ -166,5 +174,56 @@ export async function lintWikiTool(
     return error(OPERATION_FAILED);
   } finally {
     lease.release();
+  }
+}
+
+/**
+ * Registers the read-only Wiki lint tools on the given server, filtered by
+ * the scopes granted to the current token: `lint_document` needs document
+ * read access, and `lint_wiki` needs document listing plus collection
+ * listing and collection document access.
+ *
+ * @param server - the MCP server instance to register on.
+ * @param scopes - the scopes granted to the access token.
+ */
+export function wikiLintTools(server: McpServer, scopes: string[]) {
+  if (AuthenticationHelper.canAccess("documents.info", scopes)) {
+    server.registerTool(
+      "lint_document",
+      {
+        title: "Lint document",
+        description:
+          "Checks one readable document against the lint policy of its collection and returns a deterministic JSON result with stable issue codes. The result is clean only when it is complete with zero Errors; Warnings are advisory and never affect it. Repair each Error, then lint again to confirm. Hierarchy and global-index checks run only in lint_wiki, so confirm their repairs with lint_wiki. A document in a collection without a policy is not evaluated. A POLICY_CONFIGURATION_INVALID System Failure means the collection policy itself is invalid: do not edit documents to resolve it, escalate it to an operator. Other System Failures are not repaired by editing documents: lint again later.",
+        annotations: {
+          readOnlyHint: true,
+          idempotentHint: true,
+        },
+        inputSchema: lintDocumentInputSchema,
+      },
+      withTracing("lint_document", (input, extra) =>
+        lintDocumentTool(input, extra)
+      )
+    );
+  }
+
+  if (
+    AuthenticationHelper.canAccess("documents.list", scopes) &&
+    AuthenticationHelper.canAccess("collections.list", scopes) &&
+    AuthenticationHelper.canAccess("collections.documents", scopes)
+  ) {
+    server.registerTool(
+      "lint_wiki",
+      {
+        title: "Lint wiki",
+        description:
+          "Checks one readable collection, or every readable collection with a lint policy when collectionId is omitted, and returns a deterministic JSON result with stable issue codes covering document structure, internal links, hierarchy, and global-index coverage. The result is clean only when it is complete with zero Errors; Warnings are advisory and never affect it. Repair each Error, then lint again to confirm. A collection without a policy, or a default scope with no readable collection that has one, is not evaluated. A POLICY_CONFIGURATION_INVALID System Failure means a collection policy itself is invalid: do not edit documents to resolve it, escalate it to an operator. Other System Failures are not repaired by editing documents: lint again later.",
+        annotations: {
+          readOnlyHint: true,
+          idempotentHint: true,
+        },
+        inputSchema: lintWikiInputSchema,
+      },
+      withTracing("lint_wiki", (input, extra) => lintWikiTool(input, extra))
+    );
   }
 }

@@ -26,6 +26,7 @@ import { fetchTool } from "@server/tools/fetch";
 import { templateTools } from "@server/tools/templates";
 import { userTools } from "@server/tools/users";
 import { iconNamesResourceUri } from "@server/tools/util";
+import { wikiLintTools } from "@server/tools/wikiLint";
 import { version } from "../../../package.json";
 
 /**
@@ -147,6 +148,7 @@ function createMcpServer(scopes: string[], guidance?: string): McpServer {
   fetchTool(server, scopes);
   templateTools(server, scopes);
   userTools(server, scopes);
+  wikiLintTools(server, scopes);
 
   return server;
 }

@@ -43,3 +43,19 @@ source_spec: `spec-1-7-preserve-safe-work-under-timeouts-limits-and-isolated-fai
 severity: medium
 reason: `readOnlyTransaction` calls `sequelize.transaction`, which waits for a pool connection up to `pool.acquire = 30000` (`server/storage/database.ts:169`) before the first `boundBatch` checks the remainder. AD-11 requires connection acquisition to be charged to the phase it serves. This has been pre-existing since Story 1.5, which introduced `readOnlyTransaction`. Settle it by bounding acquisition by `deadline.remainingMs()`, or by checking the floor before opening the transaction, with a fixture that holds the pool. Raised by the Edge Case Hunter in the 2026-10-02 review pass.
 status: open
+
+### DW-7: The fork README's visible-metadata example uses `- ` bullets, but the v1.10.1 serializer emits every bullet as `* `, so the example does not round-trip byte for byte.
+origin: spec-deferred 4a4cbba2a02c
+location: server/tools/README.md (Templates and visible metadata)
+source_spec: `spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md`
+severity: low
+reason: server/tools/README.md presents "- Status: Active" / "- Last verified: 2026-09-20" as the shape that survives the Markdown/ProseMirror round trip. Story 1.10's HTTP suite (server/routes/mcp/wikiLint.test.ts, "round trip") shows MCP create_document + fetch return "* Status: Active"; the fields stay valid and lint clean, but agents copying the example as patch findText would miss. The README is a companion of the binding SPEC, so the edit needs a deliberate contract update rather than an unattended story change.
+status: open
+
+### DW-8: The lint-repair-relint loop needs repair knowledge that Findings do not carry: a missing metadata field value or a missing configured global index is not identified by the AD-12 Finding.
+origin: spec-deferred 656e36dfb1ba
+location: server/wikiLint/core/registry.ts (issue messages); server/wikiLint/core/graphRules.ts (globalIndexLinks emit); Architecture Spine AD-12
+source_spec: `spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md`
+severity: medium
+reason: Story 1.10's acceptance loop (server/routes/mcp/wikiLint.test.ts, "repair loop") reaches a Clean Result only because the test agent is given the collection's documented conventions (field values, global index id); the Finding is fixed to {code, severity, message, location} with a generic registry message. This is the pre-existing DW-2/DW-3 gap (deferred-work ledger), now observed at the accepted MCP surface; settling it needs an architecture decision on readability-gated detail.
+status: open

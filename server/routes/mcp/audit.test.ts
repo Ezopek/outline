@@ -1,4 +1,3 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Scope } from "@shared/types";
 import { Event, OAuthClient, type User } from "@server/models";
 import {
@@ -15,20 +14,6 @@ import {
 } from "@server/test/McpHelper";
 import { getTestServer } from "@server/test/support";
 import { UUID_PATTERN } from "@server/wikiLint/core/registry";
-
-vi.mock("@server/tools/users", async () => {
-  const { lintDocumentInputSchema, lintDocumentTool } =
-    await import("@server/tools/wikiLint");
-  return {
-    userTools: (server: McpServer) => {
-      server.registerTool(
-        "lint_document",
-        { inputSchema: lintDocumentInputSchema },
-        (input, extra) => lintDocumentTool(input, extra)
-      );
-    },
-  };
-});
 
 const server = getTestServer();
 
