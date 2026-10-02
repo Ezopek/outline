@@ -163,17 +163,21 @@ export default class Mention extends Node {
               ? node.type.name
               : `${node.type.name} use-hover-preview`,
           id: node.attrs.id,
+          // Every emitted href, the internal templates included, goes through
+          // the sanitizer.
           href:
             node.attrs.type === MentionType.User ||
             node.attrs.type === MentionType.Date
               ? undefined
-              : node.attrs.type === MentionType.Document
-                ? `${env.URL}/doc/${node.attrs.modelId}${
-                    node.attrs.anchorId ? `#${node.attrs.anchorId}` : ""
-                  }`
-                : node.attrs.type === MentionType.Collection
-                  ? `${env.URL}/collection/${node.attrs.modelId}`
-                  : sanitizeUrl(node.attrs.href),
+              : sanitizeUrl(
+                  node.attrs.type === MentionType.Document
+                    ? `${env.URL}/doc/${node.attrs.modelId}${
+                        node.attrs.anchorId ? `#${node.attrs.anchorId}` : ""
+                      }`
+                    : node.attrs.type === MentionType.Collection
+                      ? `${env.URL}/collection/${node.attrs.modelId}`
+                      : node.attrs.href
+                ),
           "data-type": node.attrs.type,
           "data-id": node.attrs.modelId,
           "data-actorid": node.attrs.actorId,

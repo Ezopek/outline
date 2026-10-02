@@ -54,7 +54,7 @@ development_status:
   1-6-detect-authorized-hierarchy-and-global-index-defects: done
   1-7-preserve-safe-work-under-timeouts-limits-and-isolated-failur: done
   1-8-record-minimized-and-failure-isolated-read-only-audit-eviden: done
-  1-9-sanitize-user-controlled-editor-urls: backlog
+  1-9-sanitize-user-controlled-editor-urls: done
   1-10-accept-the-complete-read-only-lint-and-repair-loop: backlog
   epic-1-retrospective: optional
 
