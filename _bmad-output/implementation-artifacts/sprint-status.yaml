@@ -51,7 +51,7 @@ development_status:
   1-3-lint-one-authorized-document-for-structural-integrity: done
   1-4-validate-internal-links-without-disclosing-protected-targets: done
   1-5-materialize-an-authorized-wiki-scope-from-one-coherent-snaps: done
-  1-6-detect-authorized-hierarchy-and-global-index-defects: backlog
+  1-6-detect-authorized-hierarchy-and-global-index-defects: done
   1-7-preserve-safe-work-under-timeouts-limits-and-isolated-failur: backlog
   1-8-record-minimized-and-failure-isolated-read-only-audit-eviden: backlog
   1-9-sanitize-user-controlled-editor-urls: backlog

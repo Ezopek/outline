@@ -8,12 +8,16 @@ import type {
   PolicyIdentity,
   ScopeLocation,
   SystemFailureCode,
+  WikiSnapshot,
+  WikiSnapshotCollection,
+  WikiSnapshotDocument,
 } from "../core/contracts";
 import { WikiLintContractError } from "../core/contracts";
 import {
   documentSurfaceRules,
   evaluateDocumentRules,
 } from "../core/documentRules";
+import { evaluateGraphCheck } from "../core/graphRules";
 import type { PolicySet, PolicySetEntry } from "../core/policySet";
 import { policyIdentity } from "../core/policySet";
 import { createSystemFailure, requiredChecks } from "../core/registry";
@@ -124,12 +128,56 @@ const notEvaluated = (scope: EvaluatedScope): LintWikiOutcome => ({
   }),
 });
 
+/** One atomic unit of a `lint_wiki` run. */
+export interface WikiUnit {
+  collection: WikiSnapshotCollection;
+  check: CheckName;
+  /** The evaluated document of a `documents` unit; absent for a vacuous one. */
+  document?: WikiSnapshotDocument;
+}
+
+/**
+ * Lists the atomic units of a snapshot in the fixed AD-11 order: first every
+ * `documents` unit, by collection and then document, with one vacuous unit
+ * for a collection without documents; then, per collection, its `hierarchy`
+ * unit followed by its `global_index` unit. Only required checks get units.
+ *
+ * @param snapshot - the snapshot, whose collections and documents are sorted.
+ * @param checksOf - the required checks of a collection, in canonical order.
+ * @returns the units.
+ */
+export function wikiUnits(
+  snapshot: WikiSnapshot,
+  checksOf: (collectionId: string) => readonly CheckName[]
+): WikiUnit[] {
+  const units: WikiUnit[] = [];
+  for (const collection of snapshot.collections) {
+    if (checksOf(collection.collectionId).includes("documents")) {
+      if (collection.documents.length === 0) {
+        units.push({ collection, check: "documents" });
+      }
+      for (const document of collection.documents) {
+        units.push({ collection, check: "documents", document });
+      }
+    }
+  }
+  for (const collection of snapshot.collections) {
+    for (const check of checksOf(collection.collectionId)) {
+      if (check !== "documents") {
+        units.push({ collection, check });
+      }
+    }
+  }
+  return units;
+}
+
 /**
  * Lints the Wiki scope of one readable collection, or by default of every
  * readable configured collection, from one coherent snapshot. Denied and
  * missing collections are indistinguishable, and unreadable collections
- * contribute nothing. Hierarchy and global-index checks fail closed until
- * their rules exist.
+ * contribute nothing. Each graph check runs over its collection's authorized
+ * graph; without `readDocument` on the collection it fails with one generic
+ * System Failure and its rules never run.
  *
  * @param input.collectionId - the requested collection identifier, or
  *   undefined for the default scope.
@@ -322,29 +370,59 @@ export async function lintWiki(input: {
 
   const { snapshot } = read;
   const items: IssueItem[] = [];
-  const collections: ConfiguredCollectionEntry[] = [];
   const policies: PolicyIdentity[] = [];
+  const accounts = new Map(
+    snapshot.collections.map(({ collectionId }) => {
+      const entry = entryOf(collectionId, "valid");
+      policies.push(policyIdentity(entry));
+      const { rules } = entry.policy;
+      const documentRules = documentSurfaceRules(rules);
+      return [
+        collectionId,
+        {
+          rules,
+          checks: requiredChecks(rules),
+          documentRules,
+          linksEnabled: documentRules.some(
+            (rule) => rule.kind === "internal_links"
+          ),
+          failedChecks: new Set<CheckName>(),
+          evaluatedDocumentCount: 0,
+          evaluatedLinkCount: 0,
+        },
+      ];
+    })
+  );
+
+  /**
+   * Returns the accounting of a snapshot collection.
+   *
+   * @param collectionId - the collection.
+   * @returns the accounting.
+   */
+  const accountOf = (collectionId: string) => {
+    const account = accounts.get(collectionId);
+    if (!account) {
+      throw new WikiLintContractError("Unexpected snapshot collection");
+    }
+    return account;
+  };
+
   let requiredUnits = 0;
   let completedUnits = 0;
-  for (const collection of snapshot.collections) {
+  for (const { collection, check, document } of wikiUnits(
+    snapshot,
+    (collectionId) => accountOf(collectionId).checks
+  )) {
     const { collectionId } = collection;
-    const entry = entryOf(collectionId, "valid");
-    policies.push(policyIdentity(entry));
-    const checks = requiredChecks(entry.policy.rules);
-    const completedChecks: CheckName[] = [];
-    let evaluatedDocumentCount = 0;
-    let evaluatedLinkCount = 0;
+    const account = accountOf(collectionId);
+    requiredUnits++;
+    let completed: boolean;
 
-    if (checks.includes("documents")) {
-      const rules = documentSurfaceRules(entry.policy.rules);
-      const linksEnabled = rules.some((rule) => rule.kind === "internal_links");
-      let allCompleted = true;
-      if (collection.documents.length === 0) {
-        requiredUnits++;
-        completedUnits++;
-      }
-      for (const { documentId, content } of collection.documents) {
-        requiredUnits++;
+    if (check === "documents") {
+      completed = true;
+      if (document) {
+        const { documentId, content } = document;
         const failure = {
           issue: createSystemFailure("VALIDATION_RUNTIME_FAILED", {
             kind: "scope",
@@ -355,42 +433,49 @@ export async function lintWiki(input: {
         };
         if (content === null || content === "unavailable") {
           items.push(failure);
-          allCompleted = false;
-          continue;
+          completed = false;
+        } else {
+          const { findings, failedKinds } = evaluateDocumentRules({
+            documentId,
+            syntax: content.syntax,
+            rules: account.documentRules,
+            links:
+              content.links === null
+                ? undefined
+                : { references: [...content.links], targets: snapshot.targets },
+          });
+          for (const finding of findings) {
+            items.push({ ...finding, sortCollectionId: collectionId });
+          }
+          if (failedKinds.length > 0) {
+            items.push(failure);
+            completed = false;
+          } else {
+            account.evaluatedDocumentCount++;
+            if (account.linksEnabled) {
+              account.evaluatedLinkCount += content.links?.length ?? 0;
+            }
+          }
         }
-        const { findings, failedKinds } = evaluateDocumentRules({
-          documentId,
-          syntax: content.syntax,
-          rules,
-          links:
-            content.links === null
-              ? undefined
-              : { references: [...content.links], targets: snapshot.targets },
+      }
+    } else {
+      // A graph check runs only over an authorized graph; otherwise it fails
+      // generically without invoking its rules.
+      const { graph } = collection;
+      completed = false;
+      if (graph?.authorized === true) {
+        const result = evaluateGraphCheck({
+          check,
+          documents: collection.documents,
+          graph,
+          rules: account.rules,
         });
-        for (const finding of findings) {
+        for (const finding of result.findings) {
           items.push({ ...finding, sortCollectionId: collectionId });
         }
-        if (failedKinds.length > 0) {
-          items.push(failure);
-          allCompleted = false;
-          continue;
-        }
-        completedUnits++;
-        evaluatedDocumentCount++;
-        if (linksEnabled) {
-          evaluatedLinkCount += content.links?.length ?? 0;
-        }
+        completed = result.complete;
       }
-      if (allCompleted) {
-        completedChecks.push("documents");
-      }
-    }
-
-    // Graph checks fail closed until their rules exist (Story 1.6), whether
-    // or not the actor may read the collection graph.
-    for (const check of checks) {
-      if (check !== "documents") {
-        requiredUnits++;
+      if (!completed) {
         items.push({
           issue: createSystemFailure(
             "VALIDATION_RUNTIME_FAILED",
@@ -400,13 +485,26 @@ export async function lintWiki(input: {
       }
     }
 
-    collections.push({
-      collectionId,
-      evaluatedDocumentCount,
-      evaluatedLinkCount,
-      completedChecks,
-    });
+    if (completed) {
+      completedUnits++;
+    } else {
+      account.failedChecks.add(check);
+    }
   }
+
+  const collections: ConfiguredCollectionEntry[] = snapshot.collections.map(
+    ({ collectionId }) => {
+      const account = accountOf(collectionId);
+      return {
+        collectionId,
+        evaluatedDocumentCount: account.evaluatedDocumentCount,
+        evaluatedLinkCount: account.evaluatedLinkCount,
+        completedChecks: account.checks.filter(
+          (check) => !account.failedChecks.has(check)
+        ),
+      };
+    }
+  );
 
   let evaluatedScope: EvaluatedScope;
   if (scope.kind === "collection") {

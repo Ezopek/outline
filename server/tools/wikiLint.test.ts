@@ -236,6 +236,30 @@ async function buildDocumentOnlyReader() {
   return { reader, collection, document };
 }
 
+/**
+ * Builds a paragraph.
+ *
+ * @param content - the inline content.
+ * @returns the paragraph node.
+ */
+const paragraphOf = (...content: ProsemirrorData[]): ProsemirrorData => ({
+  type: "paragraph",
+  content,
+});
+
+/**
+ * Builds linked text.
+ *
+ * @param text - the text.
+ * @param href - the link destination.
+ * @returns the text node.
+ */
+const linkedText = (text: string, href: string): ProsemirrorData => ({
+  type: "text",
+  text,
+  marks: [{ type: "link", attrs: { href } }],
+});
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(clients.splice(0).map((client) => client.close()));
@@ -1186,30 +1210,6 @@ describe("lint_document internal links", () => {
     rules: [{ kind: "internal_links" }],
   };
 
-  /**
-   * Builds a paragraph.
-   *
-   * @param content - the inline content.
-   * @returns the paragraph node.
-   */
-  const paragraphOf = (...content: ProsemirrorData[]): ProsemirrorData => ({
-    type: "paragraph",
-    content,
-  });
-
-  /**
-   * Builds linked text.
-   *
-   * @param text - the text.
-   * @param href - the link destination.
-   * @returns the text node.
-   */
-  const linkedText = (text: string, href: string): ProsemirrorData => ({
-    type: "text",
-    text,
-    marks: [{ type: "link", attrs: { href } }],
-  });
-
   it("reports recognized forms end to end and ignores the others", async () => {
     const { reader, collection } = await buildActors();
     const missing = randomUUID();
@@ -1520,22 +1520,14 @@ describe("lint_wiki", () => {
     const parsed = JSON.parse(firstText(canonical));
 
     expect(parsed).toMatchObject({
-      state: "incomplete",
-      systemFailures: [
-        {
-          code: "VALIDATION_RUNTIME_FAILED",
-          location: {
-            kind: "scope",
-            scopeKind: "collection",
-            collectionId: collection.id,
-          },
-        },
-      ],
+      state: "complete",
+      clean: false,
+      systemFailures: [],
       scope: {
         kind: "collection",
         collectionId: collection.id,
         evaluatedDocumentCount: 1,
-        completedChecks: ["documents"],
+        completedChecks: ["documents", "hierarchy"],
       },
       policies: [{ collectionId: collection.id, status: "valid" }],
     });
@@ -2048,6 +2040,602 @@ describe("lint_wiki", () => {
     await expect(Event.count({ where: { teamId: user.teamId } })).resolves.toBe(
       eventCount
     );
+  });
+  describe("hierarchy and global index", () => {
+    /** Every hierarchy rule kind. */
+    const fullHierarchyPolicy = {
+      activation: "read_only",
+      rules: [
+        { kind: "parent_document_resolved" },
+        { kind: "hierarchy_acyclic" },
+        { kind: "published_documents_in_structure" },
+        { kind: "parent_collection_consistent" },
+      ],
+    };
+
+    /**
+     * Builds a policy that enables only `global_index_links`.
+     *
+     * @param surfaceDocumentId - the surface.
+     * @param globalIndexDocumentIds - the global indexes.
+     * @returns the policy entry.
+     */
+    const globalIndexPolicy = (
+      surfaceDocumentId: string,
+      globalIndexDocumentIds: string[]
+    ) => ({
+      activation: "read_only",
+      rules: [
+        {
+          kind: "global_index_links",
+          surfaceDocumentId,
+          globalIndexDocumentIds,
+        },
+      ],
+    });
+
+    /**
+     * Builds a published document in a collection.
+     *
+     * @param user - the author.
+     * @param collectionId - the collection.
+     * @param overrides - other document attributes.
+     * @returns the document, which is not added to the collection structure.
+     */
+    const publishedIn = (
+      user: User,
+      collectionId: string,
+      overrides: Parameters<typeof buildDocument>[0] = {}
+    ) =>
+      buildDocument({
+        teamId: user.teamId,
+        userId: user.id,
+        collectionId,
+        ...overrides,
+      });
+
+    /**
+     * Adds parentless documents to the root of a collection structure.
+     *
+     * @param collection - the collection.
+     * @param documents - the documents.
+     */
+    async function addToStructure(
+      collection: Collection,
+      documents: Document[]
+    ) {
+      for (const document of documents) {
+        await collection.addDocumentToStructure(document);
+      }
+    }
+
+    /**
+     * Sets a document's parent without hooks or structure changes.
+     *
+     * @param document - the child.
+     * @param parent - the parent.
+     */
+    async function setParent(document: Document, parent: Document) {
+      await Document.unscoped().update(
+        { parentDocumentId: parent.id },
+        { where: { id: document.id }, hooks: false }
+      );
+    }
+
+    /**
+     * Builds an expected relationship-located Error.
+     *
+     * @param code - the code.
+     * @param documentId - the location document.
+     * @param relationshipKind - the relationship kind.
+     * @returns the expected Finding.
+     */
+    const relationshipError = (
+      code: string,
+      documentId: string,
+      relationshipKind: string
+    ) => ({
+      code,
+      severity: "error",
+      message: expect.any(String),
+      location: { kind: "relationship", documentId, relationshipKind },
+    });
+
+    /**
+     * Builds the expected generic System Failure of a collection.
+     *
+     * @param collectionId - the collection.
+     * @returns the expected System Failure.
+     */
+    const collectionFailure = (collectionId: string) => ({
+      code: "VALIDATION_RUNTIME_FAILED",
+      message: expect.any(String),
+      location: { kind: "scope", scopeKind: "collection", collectionId },
+    });
+
+    it("reports hierarchy defects in AD-4 order without disclosing protected parents", async () => {
+      const user = await buildUser();
+      const collection = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const elsewhere = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const owner = await buildUser({ teamId: user.teamId });
+      const privateCollection = await buildCollection({
+        teamId: owner.teamId,
+        userId: owner.id,
+        permission: null,
+      });
+      const root = await publishedIn(user, collection.id);
+      const child = await publishedIn(user, collection.id);
+      const deletedParent = await publishedIn(user, collection.id);
+      const ofDeleted = await publishedIn(user, collection.id);
+      const protectedParent = await publishedIn(owner, privateCollection.id);
+      const ofProtected = await publishedIn(user, collection.id);
+      const sharedParent = await publishedIn(owner, privateCollection.id);
+      await UserMembership.create({
+        documentId: sharedParent.id,
+        userId: user.id,
+        createdById: owner.id,
+        permission: DocumentPermission.Read,
+      });
+      const ofShared = await publishedIn(user, collection.id);
+      const otherParent = await publishedIn(user, elsewhere.id);
+      const ofOther = await publishedIn(user, collection.id);
+      const draftParent = await buildDraftDocument({
+        teamId: user.teamId,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const ofDraft = await publishedIn(user, collection.id);
+      const archivedParent = await publishedIn(user, collection.id, {
+        archivedAt: new Date(),
+      });
+      const ofArchived = await publishedIn(user, collection.id);
+      const cycleA = await publishedIn(user, collection.id);
+      const cycleB = await publishedIn(user, collection.id);
+      const missing = await publishedIn(user, collection.id);
+      await buildDraftDocument({
+        teamId: user.teamId,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      await addToStructure(collection, [
+        root,
+        child,
+        ofDeleted,
+        ofProtected,
+        ofShared,
+        ofOther,
+        ofDraft,
+        ofArchived,
+        cycleA,
+        cycleB,
+      ]);
+      for (const [document, parent] of [
+        [child, root],
+        [ofDeleted, deletedParent],
+        [ofProtected, protectedParent],
+        [ofShared, sharedParent],
+        [ofOther, otherParent],
+        [ofDraft, draftParent],
+        [ofArchived, archivedParent],
+        [cycleA, cycleB],
+        [cycleB, cycleA],
+      ]) {
+        await setParent(document, parent);
+      }
+      await Document.unscoped().update(
+        { deletedAt: new Date() },
+        { where: { id: deletedParent.id }, hooks: false }
+      );
+      const client = await connect(
+        user,
+        policySetFor({ [collection.id]: fullHierarchyPolicy })
+      );
+
+      const first = await lintWikiCall(client, { collectionId: collection.id });
+      const second = await lintWikiCall(client, {
+        collectionId: collection.id,
+      });
+
+      const expected = [
+        relationshipError("PARENT_DOCUMENT_UNRESOLVED", ofDeleted.id, "parent"),
+        relationshipError(
+          "PARENT_DOCUMENT_UNRESOLVED",
+          ofProtected.id,
+          "parent"
+        ),
+        relationshipError("PARENT_COLLECTION_MISMATCH", ofShared.id, "parent"),
+        relationshipError("PARENT_COLLECTION_MISMATCH", ofOther.id, "parent"),
+        relationshipError("HIERARCHY_CYCLE", cycleA.id, "parent"),
+        relationshipError("HIERARCHY_CYCLE", cycleB.id, "parent"),
+        relationshipError(
+          "PUBLISHED_DOCUMENT_MISSING_FROM_STRUCTURE",
+          missing.id,
+          "collection_structure"
+        ),
+      ].sort((a, b) =>
+        a.location.documentId < b.location.documentId ? -1 : 1
+      );
+      expect(first.isError).toBeUndefined();
+      expect(JSON.parse(firstText(first))).toEqual({
+        state: "complete",
+        complete: true,
+        clean: false,
+        errors: expected,
+        warnings: [],
+        systemFailures: [],
+        scope: {
+          kind: "collection",
+          collectionId: collection.id,
+          evaluatedDocumentCount: 0,
+          evaluatedLinkCount: 0,
+          completedChecks: ["hierarchy"],
+        },
+        policies: [
+          expect.objectContaining({
+            collectionId: collection.id,
+            status: "valid",
+          }),
+        ],
+      });
+      for (const hidden of [
+        protectedParent.id,
+        sharedParent.id,
+        deletedParent.id,
+        privateCollection.id,
+      ]) {
+        expect(firstText(first)).not.toContain(hidden);
+      }
+      expect(firstText(second)).toBe(firstText(first));
+    });
+
+    it("completes a vacuous hierarchy check", async () => {
+      const user = await buildUser();
+      const collection = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      await buildDraftDocument({
+        teamId: user.teamId,
+        userId: user.id,
+        collectionId: collection.id,
+      });
+      const client = await connect(
+        user,
+        policySetFor({ [collection.id]: fullHierarchyPolicy })
+      );
+
+      await expect(
+        wikiResult(client, { collectionId: collection.id })
+      ).resolves.toEqual({
+        state: "complete",
+        complete: true,
+        clean: true,
+        errors: [],
+        warnings: [],
+        systemFailures: [],
+        scope: {
+          kind: "collection",
+          collectionId: collection.id,
+          evaluatedDocumentCount: 0,
+          evaluatedLinkCount: 0,
+          completedChecks: ["hierarchy"],
+        },
+        policies: [expect.objectContaining({ collectionId: collection.id })],
+      });
+    });
+
+    /**
+     * Builds a surface that links four of eight indexes in recognized forms,
+     * three only in unrecognized forms, and one only through another
+     * document; plus an index and a surface in a private collection the
+     * user cannot read.
+     *
+     * @returns the fixture.
+     */
+    async function buildGlobalIndexFixture() {
+      const user = await buildUser();
+      const collection = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const indexes: Document[] = [];
+      for (let index = 0; index < 8; index++) {
+        indexes.push(await publishedIn(user, collection.id));
+      }
+      const [l2, l5, l6, l7, l8, l9, l10, transitive] = indexes;
+      const intermediate = await publishedIn(user, collection.id, {
+        content: {
+          type: "doc",
+          content: [paragraphOf(linkedText("next", `/doc/${transitive.id}`))],
+        },
+      });
+      const surface = await publishedIn(user, collection.id, {
+        content: {
+          type: "doc",
+          content: [
+            paragraphOf(linkedText("L2", `/doc/any-title-${l2.urlId}`)),
+            paragraphOf(linkedText("L5", `${ORIGIN}/doc/${l5.id}`)),
+            paragraphOf({
+              type: "mention",
+              attrs: {
+                type: "document",
+                label: "L6",
+                modelId: l6.id,
+                id: randomUUID(),
+                anchorId: "anchor",
+              },
+            }),
+            paragraphOf(linkedText("L7", `/d/${l7.id}`)),
+            paragraphOf(
+              linkedText("L8", `https://other.example.test/doc/${l8.id}`)
+            ),
+            paragraphOf(linkedText("L9", `//wiki.example.test/doc/${l9.id}`)),
+            paragraphOf(
+              linkedText("L10", `/s/share-id/doc/any-title-${l10.urlId}`)
+            ),
+            paragraphOf(linkedText("via", `/doc/${intermediate.id}`)),
+          ],
+        },
+      });
+      const owner = await buildUser({ teamId: user.teamId });
+      const privateCollection = await buildCollection({
+        teamId: owner.teamId,
+        userId: owner.id,
+        permission: null,
+      });
+      const hiddenIndex = await publishedIn(owner, privateCollection.id);
+      const hiddenSurface = await publishedIn(owner, privateCollection.id, {
+        content: {
+          type: "doc",
+          content: [paragraphOf(linkedText("L1", `/doc/${l2.id}`))],
+        },
+      });
+      return {
+        user,
+        collection,
+        privateCollection,
+        surface,
+        indexIds: indexes.map(({ id }) => id),
+        hiddenIndex,
+        hiddenSurface,
+      };
+    }
+
+    it("reports each global index the surface does not link directly", async () => {
+      const { user, collection, surface, indexIds } =
+        await buildGlobalIndexFixture();
+      const client = await connect(
+        user,
+        policySetFor({
+          [collection.id]: globalIndexPolicy(surface.id, indexIds),
+        }),
+        { instanceOrigin: ORIGIN }
+      );
+
+      const missing = relationshipError(
+        "GLOBAL_INDEX_LINK_MISSING",
+        surface.id,
+        "global_index"
+      );
+      await expect(
+        wikiResult(client, { collectionId: collection.id })
+      ).resolves.toEqual({
+        state: "complete",
+        complete: true,
+        clean: false,
+        errors: [missing, missing, missing, missing],
+        warnings: [],
+        systemFailures: [],
+        scope: {
+          kind: "collection",
+          collectionId: collection.id,
+          evaluatedDocumentCount: 0,
+          evaluatedLinkCount: 0,
+          completedChecks: ["global_index"],
+        },
+        policies: [expect.objectContaining({ collectionId: collection.id })],
+      });
+      // The four recognized forms alone leave nothing missing.
+      const recognized = await connect(
+        user,
+        policySetFor({
+          [collection.id]: globalIndexPolicy(surface.id, indexIds.slice(0, 4)),
+        }),
+        { instanceOrigin: ORIGIN }
+      );
+      await expect(
+        wikiResult(recognized, { collectionId: collection.id })
+      ).resolves.toMatchObject({ state: "complete", clean: true, errors: [] });
+    });
+
+    it("keeps provable Findings and fails generically for an unreadable index", async () => {
+      const {
+        user,
+        collection,
+        privateCollection,
+        surface,
+        indexIds,
+        hiddenIndex,
+      } = await buildGlobalIndexFixture();
+      const client = await connect(
+        user,
+        policySetFor({
+          [collection.id]: globalIndexPolicy(surface.id, [
+            ...indexIds,
+            hiddenIndex.id,
+          ]),
+        }),
+        { instanceOrigin: ORIGIN }
+      );
+
+      const text = firstText(
+        await lintWikiCall(client, { collectionId: collection.id })
+      );
+
+      const missing = relationshipError(
+        "GLOBAL_INDEX_LINK_MISSING",
+        surface.id,
+        "global_index"
+      );
+      expect(JSON.parse(text)).toEqual({
+        state: "failed",
+        complete: false,
+        clean: false,
+        errors: [missing, missing, missing, missing],
+        warnings: [],
+        systemFailures: [collectionFailure(collection.id)],
+        scope: {
+          kind: "collection",
+          collectionId: collection.id,
+          evaluatedDocumentCount: 0,
+          evaluatedLinkCount: 0,
+          completedChecks: [],
+        },
+        policies: [expect.objectContaining({ collectionId: collection.id })],
+      });
+      expect(text).not.toContain(hiddenIndex.id);
+      expect(text).not.toContain(privateCollection.id);
+    });
+
+    it("reports no missing link for an unreadable surface", async () => {
+      const { user, collection, privateCollection, indexIds, hiddenSurface } =
+        await buildGlobalIndexFixture();
+      const client = await connect(
+        user,
+        policySetFor({
+          [collection.id]: globalIndexPolicy(hiddenSurface.id, indexIds),
+        }),
+        { instanceOrigin: ORIGIN }
+      );
+
+      const text = firstText(
+        await lintWikiCall(client, { collectionId: collection.id })
+      );
+
+      expect(JSON.parse(text)).toMatchObject({
+        state: "failed",
+        clean: false,
+        errors: [],
+        systemFailures: [collectionFailure(collection.id)],
+        scope: { completedChecks: [] },
+      });
+      expect(text).not.toContain(hiddenSurface.id);
+      expect(text).not.toContain(privateCollection.id);
+    });
+
+    it("fails the graph checks of an admin without membership without reading the structure", async () => {
+      const { admin, owner, collection, document } = await buildAdminFixture();
+      await UserMembership.create({
+        documentId: document.id,
+        userId: admin.id,
+        createdById: owner.id,
+        permission: DocumentPermission.Read,
+      });
+      const client = await connect(
+        admin,
+        policySetFor({
+          [collection.id]: {
+            activation: "read_only",
+            rules: [
+              ...structurePolicy.rules,
+              { kind: "published_documents_in_structure" },
+              {
+                kind: "global_index_links",
+                surfaceDocumentId: document.id,
+                globalIndexDocumentIds: [randomUUID()],
+              },
+            ],
+          },
+        })
+      );
+      const sql = recordSql();
+
+      const result = await wikiResult(client);
+
+      expect(result).toMatchObject({
+        state: "incomplete",
+        errors: [],
+        systemFailures: [
+          collectionFailure(collection.id),
+          collectionFailure(collection.id),
+        ],
+        scope: {
+          kind: "configured_collections",
+          collections: [
+            {
+              collectionId: collection.id,
+              evaluatedDocumentCount: 1,
+              evaluatedLinkCount: 0,
+              completedChecks: ["documents"],
+            },
+          ],
+        },
+      });
+      expect(sql().join("\n")).not.toContain("documentStructure");
+    });
+
+    it("completes every check of a clean collection", async () => {
+      const user = await buildUser();
+      const collection = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const index = await publishedIn(user, collection.id, {
+        text: CLEAN_MARKDOWN,
+      });
+      const surface = await publishedIn(user, collection.id, {
+        text: `## Overview\n\nSee [index](/doc/${index.id})\n\n## Details\n\nBody`,
+      });
+      await addToStructure(collection, [surface, index]);
+      await setParent(index, surface);
+      const client = await connect(
+        user,
+        policySetFor({
+          [collection.id]: {
+            activation: "read_only",
+            rules: [
+              ...structurePolicy.rules,
+              { kind: "internal_links" },
+              ...fullHierarchyPolicy.rules,
+              ...globalIndexPolicy(surface.id, [index.id]).rules,
+            ],
+          },
+        }),
+        { instanceOrigin: ORIGIN }
+      );
+
+      await expect(
+        wikiResult(client, { collectionId: collection.id })
+      ).resolves.toEqual({
+        state: "complete",
+        complete: true,
+        clean: true,
+        errors: [],
+        warnings: [],
+        systemFailures: [],
+        scope: {
+          kind: "collection",
+          collectionId: collection.id,
+          evaluatedDocumentCount: 2,
+          evaluatedLinkCount: 1,
+          completedChecks: ["documents", "hierarchy", "global_index"],
+        },
+        policies: [
+          {
+            collectionId: collection.id,
+            status: "valid",
+            policySchemaVersion: 1,
+            policyFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+          },
+        ],
+      });
+    });
   });
 });
 

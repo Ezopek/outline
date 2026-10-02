@@ -12,24 +12,40 @@ import type {
   ScopeLocation,
   SystemFailureCode,
   WikiCollectionGraph,
+  WikiGlobalIndexInput,
+  WikiParentEdge,
   WikiSnapshotCollection,
   WikiSnapshotDocument,
 } from "../core/contracts";
 import type * as DocumentRules from "../core/documentRules";
 import { evaluateDocumentRules } from "../core/documentRules";
+import type * as GraphRules from "../core/graphRules";
+import { evaluateGraphCheck } from "../core/graphRules";
 import { extractInternalLinks } from "../core/internalLinks";
 import type { PolicySet } from "../core/policySet";
 import { buildPolicySet, policyIdentity } from "../core/policySet";
-import { createFinding, createSystemFailure } from "../core/registry";
+import {
+  createFinding,
+  createSystemFailure,
+  requiredChecks,
+} from "../core/registry";
 import { Deadline, DeadlineFloorError } from "./deadline";
 import type { LintWikiOutcome, LintWikiReader } from "./lintWiki";
-import { LINT_WIKI_DEADLINE_MS, lintWiki } from "./lintWiki";
+import { LINT_WIKI_DEADLINE_MS, lintWiki, wikiUnits } from "./lintWiki";
 
 vi.mock("../core/documentRules", async (importOriginal) => {
   const actual = await importOriginal<typeof DocumentRules>();
   return {
     ...actual,
     evaluateDocumentRules: vi.fn(actual.evaluateDocumentRules),
+  };
+});
+
+vi.mock("../core/graphRules", async (importOriginal) => {
+  const actual = await importOriginal<typeof GraphRules>();
+  return {
+    ...actual,
+    evaluateGraphCheck: vi.fn(actual.evaluateGraphCheck),
   };
 });
 
@@ -41,6 +57,8 @@ const LINKS = "00000000-0000-4000-8000-0000000000c2";
 const HIERARCHY = "00000000-0000-4000-8000-0000000000c3";
 /** Structure, hierarchy, and global-index rules. */
 const ALL_CHECKS = "00000000-0000-4000-8000-0000000000c4";
+/** The same rules as `ALL_CHECKS`. */
+const ALL_CHECKS_2 = "00000000-0000-4000-8000-0000000000c8";
 /** An invalid entry. */
 const INVALID = "00000000-0000-4000-8000-0000000000c5";
 /** A second invalid entry. */
@@ -63,6 +81,20 @@ const requiredSections = {
   kind: "required_sections",
   headingLevel: 2,
   headings: ["Overview", "Details"],
+};
+
+/** DOC_1 is the surface of the indexes DOC_2 and DOC_3. */
+const allChecksPolicy = {
+  activation: "read_only",
+  rules: [
+    {
+      kind: "global_index_links",
+      surfaceDocumentId: DOC_1,
+      globalIndexDocumentIds: [DOC_3, DOC_2],
+    },
+    requiredSections,
+    { kind: "parent_document_resolved" },
+  ],
 };
 
 /**
@@ -93,20 +125,13 @@ const policySet = policySetFor({
   },
   [HIERARCHY]: {
     activation: "read_only",
-    rules: [{ kind: "hierarchy_acyclic" }],
-  },
-  [ALL_CHECKS]: {
-    activation: "read_only",
     rules: [
-      {
-        kind: "global_index_links",
-        surfaceDocumentId: DOC_1,
-        globalIndexDocumentIds: [DOC_2],
-      },
-      requiredSections,
-      { kind: "parent_document_resolved" },
+      { kind: "hierarchy_acyclic" },
+      { kind: "published_documents_in_structure" },
     ],
   },
+  [ALL_CHECKS]: allChecksPolicy,
+  [ALL_CHECKS_2]: allChecksPolicy,
   [INVALID]: { activation: "read_only", rules: [] },
   [INVALID_2]: { activation: "enforced", rules: [] },
 });
@@ -161,6 +186,54 @@ function documentOf(
     parent: null,
   };
 }
+
+const NONE: WikiParentEdge = { state: "none" };
+
+/**
+ * Gives a document the parent edge of an authorized graph.
+ *
+ * @param document - the snapshot document.
+ * @param parent - its parent edge.
+ * @returns the document with the edge.
+ */
+const withParent = (
+  document: WikiSnapshotDocument,
+  parent: WikiParentEdge = NONE
+): WikiSnapshotDocument => ({ ...document, parent });
+
+/**
+ * The global-index inputs of `allChecksPolicy`: the surface DOC_1 links DOC_2
+ * by ID and DOC_3 by URL identifier.
+ */
+const LINKED_INDEXES: WikiGlobalIndexInput = {
+  surface: {
+    documentId: DOC_1,
+    links: [
+      { key: DOC_2, keyKind: "id", position: null },
+      { key: "UrlIdOfDoc3", keyKind: "urlId", position: null },
+    ],
+  },
+  indexes: [
+    { documentId: DOC_2, urlId: "UrlIdOfDoc2" },
+    { documentId: DOC_3, urlId: "UrlIdOfDoc3" },
+  ],
+};
+
+/**
+ * Builds an authorized collection graph.
+ *
+ * @param structureDocumentIds - the structure's document IDs.
+ * @param globalIndex - the global-index inputs.
+ * @returns the graph.
+ */
+const graphOf = (
+  structureDocumentIds: string[],
+  globalIndex: WikiGlobalIndexInput | null = null
+): WikiCollectionGraph => ({
+  authorized: true,
+  structureDocumentIds,
+  globalIndex,
+});
 
 /**
  * Builds a snapshot collection.
@@ -341,6 +414,7 @@ const databaseError = (code: string) =>
 beforeEach(() => {
   now = 0;
   vi.mocked(evaluateDocumentRules).mockClear();
+  vi.mocked(evaluateGraphCheck).mockClear();
 });
 
 describe("collection scope", () => {
@@ -433,45 +507,180 @@ describe("collection scope", () => {
     expect(reader.readWikiSnapshot).not.toHaveBeenCalled();
   });
 
-  it("fails graph checks closed whether or not the graph is authorized", async () => {
-    for (const graph of [
-      { authorized: false } as const,
-      {
-        authorized: true,
-        structureDocumentIds: [],
-        globalIndex: { surface: null, indexes: [] },
-      } as const,
-    ]) {
-      const reader = fakeReader(
-        ALL_CHECKS,
-        snapshotRead([
-          collectionOf(ALL_CHECKS, [documentOf(DOC_1, CLEAN)], graph),
-        ])
-      );
+  it("completes every check of an authorized graph", async () => {
+    const reader = fakeReader(
+      ALL_CHECKS,
+      snapshotRead([
+        collectionOf(
+          ALL_CHECKS,
+          [
+            withParent(documentOf(DOC_1, CLEAN)),
+            withParent(documentOf(DOC_2, CLEAN), {
+              state: "resolved",
+              documentId: DOC_1,
+              sameCollection: true,
+            }),
+            withParent(documentOf(DOC_3, CLEAN)),
+          ],
+          graphOf([DOC_1, DOC_2, DOC_3], LINKED_INDEXES)
+        ),
+      ])
+    );
 
-      await expect(resultOf(reader, ALL_CHECKS)).resolves.toStrictEqual({
-        state: "incomplete",
-        complete: false,
-        clean: false,
-        errors: [],
-        warnings: [],
-        systemFailures: [
-          failure("VALIDATION_RUNTIME_FAILED", cs(ALL_CHECKS)),
-          failure("VALIDATION_RUNTIME_FAILED", cs(ALL_CHECKS)),
-        ],
-        scope: {
-          kind: "collection",
-          collectionId: ALL_CHECKS,
-          evaluatedDocumentCount: 1,
-          evaluatedLinkCount: 0,
-          completedChecks: ["documents"],
-        },
-        policies: [identityOf(ALL_CHECKS)],
-      });
-    }
+    await expect(resultOf(reader, ALL_CHECKS)).resolves.toStrictEqual({
+      state: "complete",
+      complete: true,
+      clean: true,
+      errors: [],
+      warnings: [],
+      systemFailures: [],
+      scope: {
+        kind: "collection",
+        collectionId: ALL_CHECKS,
+        evaluatedDocumentCount: 3,
+        evaluatedLinkCount: 0,
+        completedChecks: ["documents", "hierarchy", "global_index"],
+      },
+      policies: [identityOf(ALL_CHECKS)],
+    });
+    expect(
+      vi.mocked(evaluateGraphCheck).mock.calls.map(([{ check }]) => check)
+    ).toEqual(["hierarchy", "global_index"]);
   });
 
-  it("fails a graph-only collection that is no longer readable", async () => {
+  it("keeps the Findings of a partially provable check", async () => {
+    const reader = fakeReader(
+      ALL_CHECKS,
+      snapshotRead([
+        collectionOf(
+          ALL_CHECKS,
+          [withParent(documentOf(DOC_1, CLEAN))],
+          graphOf([DOC_1], {
+            surface: { documentId: DOC_1, links: [] },
+            indexes: [{ documentId: DOC_2, urlId: "UrlIdOfDoc2" }],
+          })
+        ),
+      ])
+    );
+
+    const result = await resultOf(reader, ALL_CHECKS);
+
+    expect(result).toStrictEqual({
+      state: "incomplete",
+      complete: false,
+      clean: false,
+      errors: [
+        createFinding("GLOBAL_INDEX_LINK_MISSING", {
+          kind: "relationship",
+          documentId: DOC_1,
+          relationshipKind: "global_index",
+        }),
+      ],
+      warnings: [],
+      systemFailures: [failure("VALIDATION_RUNTIME_FAILED", cs(ALL_CHECKS))],
+      scope: {
+        kind: "collection",
+        collectionId: ALL_CHECKS,
+        evaluatedDocumentCount: 1,
+        evaluatedLinkCount: 0,
+        completedChecks: ["documents", "hierarchy"],
+      },
+      policies: [identityOf(ALL_CHECKS)],
+    });
+    expect(JSON.stringify(result)).not.toContain(DOC_3);
+  });
+
+  it("fails a check whose rule kind throws and keeps the other kind's Findings", async () => {
+    const reader = fakeReader(
+      HIERARCHY,
+      snapshotRead([
+        collectionOf(
+          HIERARCHY,
+          [
+            { documentId: DOC_1, content: null, parent: null },
+            { documentId: DOC_2, content: null, parent: NONE },
+          ],
+          graphOf([DOC_1])
+        ),
+      ])
+    );
+
+    await expect(resultOf(reader, HIERARCHY)).resolves.toStrictEqual({
+      state: "failed",
+      complete: false,
+      clean: false,
+      errors: [
+        createFinding("PUBLISHED_DOCUMENT_MISSING_FROM_STRUCTURE", {
+          kind: "relationship",
+          documentId: DOC_2,
+          relationshipKind: "collection_structure",
+        }),
+      ],
+      warnings: [],
+      systemFailures: [failure("VALIDATION_RUNTIME_FAILED", cs(HIERARCHY))],
+      scope: { kind: "collection", ...zeroEntry(HIERARCHY) },
+      policies: [identityOf(HIERARCHY)],
+    });
+  });
+
+  it("completes a vacuous hierarchy check", async () => {
+    const reader = fakeReader(
+      HIERARCHY,
+      snapshotRead([collectionOf(HIERARCHY, [], graphOf([DOC_1]))])
+    );
+
+    await expect(resultOf(reader, HIERARCHY)).resolves.toStrictEqual({
+      state: "complete",
+      complete: true,
+      clean: true,
+      errors: [],
+      warnings: [],
+      systemFailures: [],
+      scope: {
+        kind: "collection",
+        collectionId: HIERARCHY,
+        evaluatedDocumentCount: 0,
+        evaluatedLinkCount: 0,
+        completedChecks: ["hierarchy"],
+      },
+      policies: [identityOf(HIERARCHY)],
+    });
+    expect(evaluateGraphCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails the graph checks of an unauthorized graph without evaluating them", async () => {
+    const reader = fakeReader(
+      ALL_CHECKS,
+      snapshotRead([
+        collectionOf(ALL_CHECKS, [documentOf(DOC_1, CLEAN)], {
+          authorized: false,
+        }),
+      ])
+    );
+
+    await expect(resultOf(reader, ALL_CHECKS)).resolves.toStrictEqual({
+      state: "incomplete",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [
+        failure("VALIDATION_RUNTIME_FAILED", cs(ALL_CHECKS)),
+        failure("VALIDATION_RUNTIME_FAILED", cs(ALL_CHECKS)),
+      ],
+      scope: {
+        kind: "collection",
+        collectionId: ALL_CHECKS,
+        evaluatedDocumentCount: 1,
+        evaluatedLinkCount: 0,
+        completedChecks: ["documents"],
+      },
+      policies: [identityOf(ALL_CHECKS)],
+    });
+    expect(evaluateGraphCheck).not.toHaveBeenCalled();
+  });
+
+  it("fails a graph-only collection that is no longer readable, not vacuously", async () => {
     const reader = fakeReader(
       HIERARCHY,
       snapshotRead([collectionOf(HIERARCHY, [], { authorized: false })])
@@ -483,6 +692,7 @@ describe("collection scope", () => {
       scope: { kind: "collection", ...zeroEntry(HIERARCHY) },
       policies: [identityOf(HIERARCHY)],
     });
+    expect(evaluateGraphCheck).not.toHaveBeenCalled();
   });
 
   it("completes a vacuous documents check", async () => {
@@ -760,6 +970,134 @@ describe("default scope", () => {
         },
       ],
     });
+  });
+
+  it("lists and evaluates units in the AD-11 order", async () => {
+    const snapshot = snapshotRead([
+      collectionOf(STRUCTURE, [documentOf(DOC_3, CLEAN)]),
+      collectionOf(HIERARCHY, [], { authorized: false }),
+      collectionOf(
+        ALL_CHECKS,
+        [
+          withParent(documentOf(DOC_1, CLEAN)),
+          withParent(documentOf(DOC_2, CLEAN)),
+        ],
+        graphOf([DOC_1, DOC_2], LINKED_INDEXES)
+      ),
+      collectionOf(ALL_CHECKS_2, [], graphOf([], LINKED_INDEXES)),
+    ]);
+    if (!snapshot.ok) {
+      throw new Error("Expected a snapshot");
+    }
+
+    const units = wikiUnits(snapshot.snapshot, (collectionId) => {
+      const entry = policySet.entries.find(
+        (candidate) => candidate.collectionId === collectionId
+      );
+      if (entry?.status !== "valid") {
+        throw new Error("Expected a valid entry");
+      }
+      return requiredChecks(entry.policy.rules);
+    });
+
+    expect(
+      units.map(({ collection, check, document }) => [
+        collection.collectionId,
+        check,
+        document?.documentId,
+      ])
+    ).toEqual([
+      [STRUCTURE, "documents", DOC_3],
+      [ALL_CHECKS, "documents", DOC_1],
+      [ALL_CHECKS, "documents", DOC_2],
+      [ALL_CHECKS_2, "documents", undefined],
+      [HIERARCHY, "hierarchy", undefined],
+      [ALL_CHECKS, "hierarchy", undefined],
+      [ALL_CHECKS, "global_index", undefined],
+      [ALL_CHECKS_2, "hierarchy", undefined],
+      [ALL_CHECKS_2, "global_index", undefined],
+    ]);
+
+    const result = await resultOf(fakeReader(null, snapshot));
+
+    const documentCalls = vi.mocked(evaluateDocumentRules).mock;
+    const graphCalls = vi.mocked(evaluateGraphCheck).mock;
+    expect(documentCalls.calls.map(([{ documentId }]) => documentId)).toEqual([
+      DOC_3,
+      DOC_1,
+      DOC_2,
+    ]);
+    expect(
+      graphCalls.calls.map(([{ check, documents }]) => [
+        check,
+        documents.map(({ documentId }) => documentId),
+      ])
+    ).toEqual([
+      ["hierarchy", [DOC_1, DOC_2]],
+      ["global_index", [DOC_1, DOC_2]],
+      ["hierarchy", []],
+      ["global_index", []],
+    ]);
+    expect(Math.max(...documentCalls.invocationCallOrder)).toBeLessThan(
+      Math.min(...graphCalls.invocationCallOrder)
+    );
+    expect(result).toMatchObject({
+      state: "incomplete",
+      systemFailures: [failure("VALIDATION_RUNTIME_FAILED", cs(HIERARCHY))],
+      scope: {
+        collections: [
+          {
+            collectionId: STRUCTURE,
+            evaluatedDocumentCount: 1,
+            completedChecks: ["documents"],
+          },
+          zeroEntry(HIERARCHY),
+          {
+            collectionId: ALL_CHECKS,
+            evaluatedDocumentCount: 2,
+            completedChecks: ["documents", "hierarchy", "global_index"],
+          },
+          {
+            collectionId: ALL_CHECKS_2,
+            evaluatedDocumentCount: 0,
+            completedChecks: ["documents", "hierarchy", "global_index"],
+          },
+        ],
+      },
+    });
+  });
+
+  it("orders graph Findings by their collection", async () => {
+    const reader = fakeReader(
+      null,
+      snapshotRead([
+        collectionOf(
+          ALL_CHECKS,
+          [withParent(documentOf(DOC_3, CLEAN), { state: "unresolved" })],
+          graphOf([DOC_3], LINKED_INDEXES)
+        ),
+        collectionOf(
+          ALL_CHECKS_2,
+          [withParent(documentOf(DOC_1, DEFECTIVE))],
+          graphOf([DOC_1], LINKED_INDEXES)
+        ),
+      ])
+    );
+
+    const result = await resultOf(reader);
+
+    expect(result.state).toBe("complete");
+    expect(result.errors).toEqual([
+      createFinding("PARENT_DOCUMENT_UNRESOLVED", {
+        kind: "relationship",
+        documentId: DOC_3,
+        relationshipKind: "parent",
+      }),
+      createFinding("REQUIRED_SECTION_MISSING", {
+        kind: "document",
+        documentId: DOC_1,
+      }),
+    ]);
   });
 
   it("rejects a snapshot collection outside the policy set", async () => {

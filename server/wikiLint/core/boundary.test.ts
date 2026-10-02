@@ -261,6 +261,7 @@ describe("core boundary", () => {
       expect.arrayContaining([
         "contracts.ts",
         "documentRules.ts",
+        "graphRules.ts",
         "internalLinks.ts",
         "ordering.ts",
         "registry.ts",
