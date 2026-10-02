@@ -6,6 +6,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { DocumentPermission, type ProsemirrorData } from "@shared/types";
 import { parser } from "@server/editor";
 import env from "@server/env";
+import { ClientClosedRequestError } from "@server/errors";
 import {
   Collection,
   Document,
@@ -29,12 +30,31 @@ import {
   parseMcpResponse,
 } from "@server/test/McpHelper";
 import { getTestServer } from "@server/test/support";
-import { toCanonicalMarkdown } from "@server/wikiLint/adapters/canonicalSyntax";
+import {
+  parseCanonicalMarkdown,
+  toCanonicalMarkdown,
+} from "@server/wikiLint/adapters/canonicalSyntax";
+import type { WikiSnapshotRead } from "@server/wikiLint/adapters/wikiReader";
+import { lintWikiAdmission } from "@server/wikiLint/application/admission";
+import { DeadlineFloorError } from "@server/wikiLint/application/deadline";
 import type { LintDocumentDependencies } from "@server/wikiLint/application/lintDocument";
 import type { LintWikiReader } from "@server/wikiLint/application/lintWiki";
-import { defaultLintWikiReader } from "@server/wikiLint/application/lintWiki";
+import {
+  LINT_WIKI_DEADLINE_MS,
+  LINT_WIKI_STOP_MARGIN_MS,
+  defaultLintWikiReader,
+} from "@server/wikiLint/application/lintWiki";
+import { WikiResourceLimitError } from "@server/wikiLint/application/snapshotLimits";
+import type { ScopeLocation } from "@server/wikiLint/core/contracts";
 import type { PolicySet } from "@server/wikiLint/core/policySet";
-import { buildPolicySet } from "@server/wikiLint/core/policySet";
+import {
+  buildPolicySet,
+  policyIdentity,
+} from "@server/wikiLint/core/policySet";
+import {
+  createFinding,
+  createSystemFailure,
+} from "@server/wikiLint/core/registry";
 import {
   lintDocumentInputSchema,
   lintDocumentTool,
@@ -2636,6 +2656,418 @@ describe("lint_wiki", () => {
         ],
       });
     });
+  });
+  describe("bounds and admission", () => {
+    /**
+     * Returns the policy identity of a collection in a policy set.
+     *
+     * @param set - the policy set.
+     * @param collectionId - the collection.
+     * @returns the identity.
+     */
+    const identityIn = (set: PolicySet, collectionId: string) => {
+      const entry = set.entries.find((e) => e.collectionId === collectionId);
+      if (!entry) {
+        throw new Error("Unknown test collection");
+      }
+      return policyIdentity(entry);
+    };
+
+    const configured: ScopeLocation = {
+      kind: "scope",
+      scopeKind: "configured_collections",
+    };
+
+    const collectionAt = (collectionId: string): ScopeLocation => ({
+      kind: "scope",
+      scopeKind: "collection",
+      collectionId,
+    });
+
+    const zeroEntry = (collectionId: string) => ({
+      collectionId,
+      evaluatedDocumentCount: 0,
+      evaluatedLinkCount: 0,
+      completedChecks: [],
+    });
+
+    /**
+     * Builds the `failed` result of a request rejected by admission.
+     *
+     * @param set - the policy set.
+     * @param collectionId - the requested collection, or undefined for the
+     *   default scope.
+     * @returns the result.
+     */
+    const rejection = (set: PolicySet, collectionId?: string) => ({
+      state: "failed",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [
+        createSystemFailure(
+          "VALIDATION_RESOURCE_LIMIT_EXCEEDED",
+          collectionId === undefined ? configured : collectionAt(collectionId)
+        ),
+      ],
+      scope:
+        collectionId === undefined
+          ? { kind: "configured_collections", collections: [] }
+          : { kind: "collection", ...zeroEntry(collectionId) },
+      policies:
+        collectionId === undefined ? [] : [identityIn(set, collectionId)],
+    });
+
+    /**
+     * Creates a promise and its resolver.
+     *
+     * @returns the promise and its resolver.
+     */
+    function deferred() {
+      let resolve: () => void = () => undefined;
+      const promise = new Promise<void>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    }
+
+    it("keeps the finished units when it stops at the margin", async () => {
+      const user = await buildUser();
+      const collectionId = randomUUID();
+      const [d1, d2, d3] = [1, 2, 3].map(
+        (index) => `00000000-0000-4000-8000-0000000000d${index}`
+      );
+      const documentOf = (documentId: string, markdown: string) => ({
+        documentId,
+        content: { syntax: parseCanonicalMarkdown(markdown), links: null },
+        parent: { state: "none" as const },
+      });
+      const wikiReader: LintWikiReader = {
+        authorizeLintCollection: async () => collectionId,
+        readWikiSnapshot: async () => ({
+          ok: true,
+          snapshot: {
+            collections: [
+              {
+                collectionId,
+                documents: [
+                  documentOf(d1, "## Overview\n\nBody"),
+                  documentOf(d2, CLEAN_MARKDOWN),
+                  documentOf(d3, CLEAN_MARKDOWN),
+                ],
+                graph: {
+                  authorized: true,
+                  structureDocumentIds: [d1, d2, d3],
+                  globalIndex: null,
+                },
+              },
+            ],
+            sentinelCollectionIds: [],
+            targets: new Map(),
+          },
+        }),
+      };
+      const policySet = policySetFor({ [collectionId]: mixedPolicy });
+      // The deadline start, the post-snapshot expiry check, and the checks
+      // before the first two units read 0 ms; the check before the third
+      // unit finds less than the stop margin left.
+      let readings = 0;
+      const client = await connect(user, policySet, {
+        wikiReader,
+        clock: () =>
+          readings++ < 4
+            ? 0
+            : LINT_WIKI_DEADLINE_MS - LINT_WIKI_STOP_MARGIN_MS + 1,
+      });
+
+      const result = await lintWikiCall(client, { collectionId });
+
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstText(result))).toEqual({
+        state: "incomplete",
+        complete: false,
+        clean: false,
+        errors: [
+          createFinding("REQUIRED_SECTION_MISSING", {
+            kind: "document",
+            documentId: d1,
+          }),
+        ],
+        warnings: [],
+        systemFailures: [
+          createSystemFailure("VALIDATION_TIMEOUT", collectionAt(collectionId)),
+        ],
+        scope: {
+          kind: "collection",
+          collectionId,
+          evaluatedDocumentCount: 2,
+          evaluatedLinkCount: 0,
+          completedChecks: [],
+        },
+        policies: [identityIn(policySet, collectionId)],
+      });
+    });
+
+    it("fails above the structure-node limit and keeps a readable sentinel", async () => {
+      const { user, collection } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const sentinel = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const policySet = policySetFor({
+        [collection.id]: hierarchyPolicy,
+        [sentinel.id]: invalidPolicy,
+      });
+      const client = await connect(user, policySet);
+      /**
+       * Replaces the collection structure with root nodes.
+       *
+       * @param count - the number of nodes.
+       */
+      const setStructure = (count: number) =>
+        Collection.update(
+          {
+            documentStructure: Array.from({ length: count }, () => ({
+              id: randomUUID(),
+              title: "",
+              url: "",
+              children: [],
+            })),
+          },
+          { where: { id: collection.id }, hooks: false }
+        );
+
+      await setStructure(10000);
+      await expect(
+        wikiResult(client, { collectionId: collection.id })
+      ).resolves.toMatchObject({ state: "complete" });
+
+      await setStructure(10001);
+      await expect(
+        wikiResult(client, { collectionId: collection.id })
+      ).resolves.toEqual({
+        state: "failed",
+        complete: false,
+        clean: false,
+        errors: [],
+        warnings: [],
+        systemFailures: [
+          createSystemFailure(
+            "VALIDATION_RESOURCE_LIMIT_EXCEEDED",
+            collectionAt(collection.id)
+          ),
+        ],
+        scope: { kind: "collection", ...zeroEntry(collection.id) },
+        policies: [identityIn(policySet, collection.id)],
+      });
+      await expect(wikiResult(client)).resolves.toEqual({
+        state: "failed",
+        complete: false,
+        clean: false,
+        errors: [],
+        warnings: [],
+        systemFailures: [
+          createSystemFailure(
+            "POLICY_CONFIGURATION_INVALID",
+            collectionAt(sentinel.id)
+          ),
+          createSystemFailure("VALIDATION_RESOURCE_LIMIT_EXCEEDED", configured),
+        ],
+        scope: {
+          kind: "configured_collections",
+          collections: [zeroEntry(sentinel.id)],
+        },
+        policies: [identityIn(policySet, sentinel.id)],
+      });
+    });
+
+    it("rejects concurrent scans only after their authorization", async () => {
+      const { user, collection } = await buildFixture({
+        text: CLEAN_MARKDOWN,
+      });
+      const sentinel = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const unconfigured = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const owner = await buildUser({ teamId: user.teamId });
+      const denied = await buildCollection({
+        teamId: owner.teamId,
+        userId: owner.id,
+        permission: null,
+      });
+      const policySet = policySetFor({
+        [collection.id]: structurePolicy,
+        [sentinel.id]: invalidPolicy,
+        [denied.id]: structurePolicy,
+      });
+      const entered = deferred();
+      const hold = deferred();
+      const holdingReader: LintWikiReader = {
+        ...defaultLintWikiReader,
+        async readWikiSnapshot(input) {
+          entered.resolve();
+          await hold.promise;
+          return defaultLintWikiReader.readWikiSnapshot(input);
+        },
+      };
+      const client = await connect(user, policySet);
+      const emptyClient = await connect(user, policySetFor({}));
+      /**
+       * Makes the requests that never need admission.
+       *
+       * @returns their responses.
+       */
+      const unadmitted = async () => [
+        await lintWikiCall(client, { collectionId: sentinel.id }),
+        await lintWikiCall(client, { collectionId: unconfigured.id }),
+        await lintWikiCall(emptyClient),
+      ];
+
+      const holding = lintWikiCall(
+        await connect(user, policySet, { wikiReader: holdingReader }),
+        { collectionId: collection.id }
+      );
+      let whileHeld: CallToolResult[];
+      try {
+        await entered.promise;
+
+        await expect(
+          wikiResult(client, { collectionId: collection.id })
+        ).resolves.toEqual(rejection(policySet, collection.id));
+        await expect(wikiResult(client)).resolves.toEqual(rejection(policySet));
+        await expect(
+          lintWikiCall(client, { collectionId: denied.id })
+        ).resolves.toEqual({
+          content: [{ type: "text", text: "Authorization error" }],
+          isError: true,
+        });
+        whileHeld = await unadmitted();
+      } finally {
+        hold.resolve();
+      }
+
+      const first = await holding;
+      expect(first.isError).toBeUndefined();
+      expect(JSON.parse(firstText(first))).toMatchObject({
+        state: "complete",
+      });
+      expect(whileHeld).toEqual(await unadmitted());
+      expect(whileHeld.map((result) => JSON.parse(firstText(result)))).toEqual([
+        expect.objectContaining({ state: "failed" }),
+        expect.objectContaining({ state: "not_evaluated" }),
+        expect.objectContaining({ state: "not_evaluated" }),
+      ]);
+      await expect(
+        wikiResult(client, { collectionId: collection.id })
+      ).resolves.toMatchObject({ state: "complete" });
+    });
+
+    it.each([
+      [
+        "success",
+        (input: Parameters<LintWikiReader["readWikiSnapshot"]>[0]) =>
+          defaultLintWikiReader.readWikiSnapshot(input),
+        null,
+      ],
+      [
+        "a timeout",
+        async (): Promise<WikiSnapshotRead> => ({
+          ok: false,
+          error: new DeadlineFloorError(),
+          sentinelCollectionIds: [],
+        }),
+        "VALIDATION_TIMEOUT",
+      ],
+      [
+        "a snapshot failure",
+        async (): Promise<WikiSnapshotRead> => ({
+          ok: false,
+          error: new Error("raw detail"),
+          sentinelCollectionIds: [],
+        }),
+        "VALIDATION_RUNTIME_FAILED",
+      ],
+      [
+        "a resource-limit failure",
+        async (): Promise<WikiSnapshotRead> => ({
+          ok: false,
+          error: new WikiResourceLimitError(),
+          sentinelCollectionIds: [],
+        }),
+        "VALIDATION_RESOURCE_LIMIT_EXCEEDED",
+      ],
+      [
+        "a cancellation",
+        async (): Promise<WikiSnapshotRead> => {
+          throw ClientClosedRequestError();
+        },
+        "VALIDATION_RUNTIME_FAILED",
+      ],
+      [
+        "a thrown error",
+        async (): Promise<WikiSnapshotRead> => ({
+          ok: true,
+          snapshot: {
+            collections: [
+              { collectionId: randomUUID(), documents: [], graph: null },
+            ],
+            sentinelCollectionIds: [],
+            targets: new Map(),
+          },
+        }),
+        OPERATION_FAILED,
+      ],
+    ] as const)(
+      "releases the slot after %s",
+      async (_name, readWikiSnapshot, outcome) => {
+        const { user, collection } = await buildFixture({
+          text: CLEAN_MARKDOWN,
+        });
+        const policySet = policySetFor({ [collection.id]: structurePolicy });
+        let heldDuringRead = false;
+        const wikiReader: LintWikiReader = {
+          ...defaultLintWikiReader,
+          readWikiSnapshot(input) {
+            const probe = lintWikiAdmission.lease();
+            heldDuringRead = !probe.acquire();
+            probe.release();
+            return readWikiSnapshot(input);
+          },
+        };
+
+        const terminal = await lintWikiCall(
+          await connect(user, policySet, { wikiReader }),
+          { collectionId: collection.id }
+        );
+
+        expect(heldDuringRead).toBe(true);
+        if (outcome === OPERATION_FAILED) {
+          expect(terminal).toEqual({
+            content: [{ type: "text", text: OPERATION_FAILED }],
+            isError: true,
+          });
+        } else {
+          expect(terminal.isError).toBeUndefined();
+          expect(
+            JSON.parse(firstText(terminal)).systemFailures.map(
+              ({ code }: { code: string }) => code
+            )
+          ).toEqual(outcome === null ? [] : [outcome]);
+        }
+        await expect(
+          wikiResult(await connect(user, policySet), {
+            collectionId: collection.id,
+          })
+        ).resolves.toMatchObject({ state: "complete" });
+      }
+    );
   });
 });
 

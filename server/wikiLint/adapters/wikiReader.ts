@@ -3,6 +3,10 @@ import type { NavigationNode } from "@shared/types";
 import { Collection, Document, type User } from "@server/models";
 import { can } from "@server/policies";
 import type { Deadline } from "../application/deadline";
+import {
+  SnapshotMeter,
+  WIKI_SNAPSHOT_LIMITS,
+} from "../application/snapshotLimits";
 import type {
   CheckName,
   InternalLinkReference,
@@ -90,6 +94,32 @@ export function authorizeLintCollection(input: {
 }
 
 /**
+ * Walks the object nodes of a collection structure at any depth, skipping
+ * other values.
+ *
+ * @param structure - the stored collection structure.
+ * @param visit - called with each object node.
+ */
+function walkStructure(
+  structure: NavigationNode[] | null,
+  visit: (node: Partial<NavigationNode>) => void
+): void {
+  const stack: unknown[] = Array.isArray(structure) ? [...structure] : [];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node && typeof node === "object") {
+      const { children } = node as Partial<NavigationNode>;
+      visit(node as Partial<NavigationNode>);
+      if (Array.isArray(children)) {
+        for (const child of children) {
+          stack.push(child);
+        }
+      }
+    }
+  }
+}
+
+/**
  * Flattens a collection structure to its document IDs, ignoring malformed
  * nodes.
  *
@@ -100,22 +130,27 @@ export function structureDocumentIds(
   structure: NavigationNode[] | null
 ): string[] {
   const ids = new Set<string>();
-  const stack: unknown[] = Array.isArray(structure) ? [...structure] : [];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (node && typeof node === "object") {
-      const { id, children } = node as Partial<NavigationNode>;
-      if (typeof id === "string") {
-        ids.add(id);
-      }
-      if (Array.isArray(children)) {
-        for (const child of children) {
-          stack.push(child);
-        }
-      }
+  walkStructure(structure, ({ id }) => {
+    if (typeof id === "string") {
+      ids.add(id);
     }
-  }
+  });
   return [...ids].sort(compareUtf8);
+}
+
+/**
+ * Counts the object nodes the flattening walk visits, malformed ones
+ * included.
+ *
+ * @param structure - the stored collection structure.
+ * @returns the number of object nodes.
+ */
+export function structureNodeCount(structure: NavigationNode[] | null): number {
+  let count = 0;
+  walkStructure(structure, () => {
+    count++;
+  });
+  return count;
 }
 
 /**
@@ -134,23 +169,36 @@ function idBatches(ids: Iterable<string>): string[][] {
 }
 
 /**
- * Serializes and parses one document's authoritative content.
+ * Serializes and parses one document's authoritative content, metering the
+ * Markdown after serialization and the links after extraction.
  *
  * @param row - the row holding `content` and `state`, if found.
  * @param instanceOrigin - the origin links are recognized against, or
  *   undefined when links are not needed.
+ * @param meter - the snapshot meter.
  * @returns the syntax and links, or `unavailable` when either step throws.
+ * @throws WikiResourceLimitError when a limit is exceeded; it is never
+ *   reported as `unavailable`.
  */
 async function canonicalContent(
   row: Document | undefined,
-  instanceOrigin: string | undefined
+  instanceOrigin: string | undefined,
+  meter: SnapshotMeter
 ): Promise<WikiSnapshotDocument["content"]> {
   if (!row) {
     return "unavailable";
   }
+  let markdown: string;
   try {
-    const syntax = parseCanonicalMarkdown(await toCanonicalMarkdown(row));
-    return {
+    markdown = await toCanonicalMarkdown(row);
+  } catch {
+    return "unavailable";
+  }
+  meter.addMarkdown(markdown);
+  let content: Exclude<WikiSnapshotDocument["content"], null | "unavailable">;
+  try {
+    const syntax = parseCanonicalMarkdown(markdown);
+    content = {
       syntax,
       links:
         instanceOrigin === undefined
@@ -160,6 +208,8 @@ async function canonicalContent(
   } catch {
     return "unavailable";
   }
+  meter.addLinkReferences(content.links?.length ?? 0);
+  return content;
 }
 
 /**
@@ -190,7 +240,9 @@ async function readContents(
  * query call is preceded by its bounded batch and runs sequentially. Only the
  * inputs of required checks are loaded, `Document.text` is never read, and
  * `documentStructure` is read only for collections where the actor holds
- * `readDocument`.
+ * `readDocument`. One meter checks everything the snapshot holds against
+ * the AD-16 limits and fails it with `WikiResourceLimitError` as soon as one
+ * is exceeded.
  *
  * @param input.scope - a collection scope, whose identity the pre-admission
  *   lookup fixed, or the default scope of every readable configured collection.
@@ -211,6 +263,7 @@ export async function readWikiSnapshot(input: {
 }): Promise<WikiSnapshotRead> {
   const { scope, entries, actor, deadline, instanceOrigin } = input;
   const sentinelCollectionIds: string[] = [];
+  const meter = new SnapshotMeter(WIKI_SNAPSHOT_LIMITS);
   try {
     const snapshot = await readOnlyTransaction(
       { isolationLevel: Transaction.ISOLATION_LEVELS.REPEATABLE_READ },
@@ -305,6 +358,7 @@ export async function readWikiSnapshot(input: {
           last = batch.at(-1);
 
           const kept = batch.filter((row) => can(actor, "read", row));
+          meter.addDocuments(kept.length);
           const contentIds = kept
             .filter((row) =>
               byId.get(row.collectionId as string)?.checks.includes("documents")
@@ -328,7 +382,8 @@ export async function readWikiSnapshot(input: {
               content: collection.checks.includes("documents")
                 ? await canonicalContent(
                     contents.get(row.id),
-                    linksEnabled ? instanceOrigin : undefined
+                    linksEnabled ? instanceOrigin : undefined,
+                    meter
                   )
                 : null,
             });
@@ -367,6 +422,7 @@ export async function readWikiSnapshot(input: {
             transaction,
           });
           for (const row of structureRows) {
+            meter.addStructureNodes(structureNodeCount(row.documentStructure));
             structures.set(row.id, structureDocumentIds(row.documentStructure));
           }
 
@@ -412,7 +468,8 @@ export async function readWikiSnapshot(input: {
             for (const id of batch) {
               const content = await canonicalContent(
                 rows.get(id),
-                instanceOrigin
+                instanceOrigin,
+                meter
               );
               surfaces.set(
                 id,

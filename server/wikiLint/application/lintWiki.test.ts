@@ -31,7 +31,13 @@ import {
 } from "../core/registry";
 import { Deadline, DeadlineFloorError } from "./deadline";
 import type { LintWikiOutcome, LintWikiReader } from "./lintWiki";
-import { LINT_WIKI_DEADLINE_MS, lintWiki, wikiUnits } from "./lintWiki";
+import {
+  LINT_WIKI_DEADLINE_MS,
+  LINT_WIKI_STOP_MARGIN_MS,
+  lintWiki,
+  wikiUnits,
+} from "./lintWiki";
+import { WikiResourceLimitError } from "./snapshotLimits";
 
 vi.mock("../core/documentRules", async (importOriginal) => {
   const actual = await importOriginal<typeof DocumentRules>();
@@ -65,6 +71,8 @@ const INVALID = "00000000-0000-4000-8000-0000000000c5";
 const INVALID_2 = "00000000-0000-4000-8000-0000000000c6";
 /** No entry. */
 const UNCONFIGURED = "00000000-0000-4000-8000-0000000000c7";
+/** A required-sections rule plus a hierarchy rule. */
+const MIXED = "00000000-0000-4000-8000-0000000000c9";
 
 const DOC_1 = "00000000-0000-4000-8000-0000000000d1";
 const DOC_2 = "00000000-0000-4000-8000-0000000000d2";
@@ -132,6 +140,10 @@ const policySet = policySetFor({
   },
   [ALL_CHECKS]: allChecksPolicy,
   [ALL_CHECKS_2]: allChecksPolicy,
+  [MIXED]: {
+    activation: "read_only",
+    rules: [requiredSections, { kind: "hierarchy_acyclic" }],
+  },
   [INVALID]: { activation: "read_only", rules: [] },
   [INVALID_2]: { activation: "enforced", rules: [] },
 });
@@ -316,12 +328,14 @@ function fakeReader(
  * @param collectionId - the requested collection, or undefined for the
  *   default scope.
  * @param set - the policy set.
+ * @param admit - the admission; admits by default.
  * @returns the outcome.
  */
 function run(
   reader: LintWikiReader,
   collectionId?: string,
-  set: PolicySet = policySet
+  set: PolicySet = policySet,
+  admit: () => boolean = () => true
 ): Promise<LintWikiOutcome> {
   return lintWiki({
     collectionId,
@@ -330,6 +344,7 @@ function run(
     deadline: new Deadline(LINT_WIKI_DEADLINE_MS, clock),
     reader,
     instanceOrigin: ORIGIN,
+    admit,
   });
 }
 
@@ -411,11 +426,44 @@ const databaseError = (code: string) =>
     Object.assign(new Error("database error"), { code, sql: "" })
   );
 
-beforeEach(() => {
+/** A clock reading that leaves one millisecond less than the stop margin. */
+const PAST_MARGIN = LINT_WIKI_DEADLINE_MS - LINT_WIKI_STOP_MARGIN_MS + 1;
+
+/**
+ * Lets the given call of a spied rule function run, then moves the clock past
+ * the stop margin, as if the unit had taken that long.
+ *
+ * @param spied - the spied rule function.
+ * @param call - the one-based call after which the margin is crossed.
+ * @param remainingMs - the remainder left after that call; one millisecond
+ *   less than the stop margin by default.
+ */
+function crossMarginDuring<A extends unknown[], R>(
+  spied: (...args: A) => R,
+  call: number,
+  remainingMs = LINT_WIKI_STOP_MARGIN_MS - 1
+) {
+  const spy = vi.mocked(spied);
+  const actual = spy.getMockImplementation() as (...args: A) => R;
+  let calls = 0;
+  spy.mockImplementation((...args: A) => {
+    const result = actual(...args);
+    calls++;
+    if (calls === call) {
+      now = LINT_WIKI_DEADLINE_MS - remainingMs;
+    }
+    return result;
+  });
+}
+
+/** Restores the clock and the rule spies to their real behavior. */
+function resetRun() {
   now = 0;
-  vi.mocked(evaluateDocumentRules).mockClear();
-  vi.mocked(evaluateGraphCheck).mockClear();
-});
+  vi.mocked(evaluateDocumentRules).mockReset();
+  vi.mocked(evaluateGraphCheck).mockReset();
+}
+
+beforeEach(resetRun);
 
 describe("collection scope", () => {
   it("completes when every unit completes", async () => {
@@ -1242,5 +1290,592 @@ describe("snapshot failure", () => {
       policies: [identityOf(INVALID)],
     });
     expect(evaluateDocumentRules).not.toHaveBeenCalled();
+  });
+});
+
+describe("snapshot failure with a readable sentinel", () => {
+  it.each([
+    [
+      "the floor refused a batch",
+      () => failedRead(new DeadlineFloorError(), [INVALID]),
+      "VALIDATION_TIMEOUT",
+    ],
+    [
+      "the deadline expired during the read",
+      () => {
+        now = LINT_WIKI_DEADLINE_MS;
+        return failedRead(new Error("raw detail"), [INVALID]);
+      },
+      "VALIDATION_TIMEOUT",
+    ],
+    [
+      "a query failed",
+      () => failedRead(new Error("raw detail"), [INVALID]),
+      "VALIDATION_RUNTIME_FAILED",
+    ],
+    [
+      "a resource limit was exceeded",
+      () => failedRead(new WikiResourceLimitError(), [INVALID]),
+      "VALIDATION_RESOURCE_LIMIT_EXCEEDED",
+    ],
+  ] as const)("keeps the sentinel when %s", async (_name, read, code) => {
+    const reader = fakeReader(null, async () => read());
+
+    await expect(resultOf(reader)).resolves.toStrictEqual({
+      state: "failed",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [
+        failure("POLICY_CONFIGURATION_INVALID", cs(INVALID)),
+        failure(code, { kind: "scope", scopeKind: "configured_collections" }),
+      ],
+      scope: {
+        kind: "configured_collections",
+        collections: [zeroEntry(INVALID)],
+      },
+      policies: [identityOf(INVALID)],
+    });
+  });
+});
+
+describe("resource limit", () => {
+  it("fails a collection with one run-wide System Failure", async () => {
+    const reader = fakeReader(
+      STRUCTURE,
+      failedRead(new WikiResourceLimitError())
+    );
+
+    await expect(resultOf(reader, STRUCTURE)).resolves.toStrictEqual({
+      state: "failed",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [
+        failure("VALIDATION_RESOURCE_LIMIT_EXCEEDED", cs(STRUCTURE)),
+      ],
+      scope: { kind: "collection", ...zeroEntry(STRUCTURE) },
+      policies: [identityOf(STRUCTURE)],
+    });
+  });
+
+  it("takes precedence over an expired deadline", async () => {
+    const reader = fakeReader(STRUCTURE, async () => {
+      now = LINT_WIKI_DEADLINE_MS;
+      return failedRead(new WikiResourceLimitError());
+    });
+
+    await expect(resultOf(reader, STRUCTURE)).resolves.toMatchObject({
+      state: "failed",
+      systemFailures: [
+        failure("VALIDATION_RESOURCE_LIMIT_EXCEEDED", cs(STRUCTURE)),
+      ],
+    });
+  });
+});
+
+describe("stop margin", () => {
+  /**
+   * Builds the MIXED collection: DOC_1 misses a section, DOC_2 and DOC_3 are
+   * clean, and its hierarchy is authorized.
+   *
+   * @returns the collection.
+   */
+  const mixedCollection = () =>
+    collectionOf(
+      MIXED,
+      [
+        withParent(documentOf(DOC_1, DEFECTIVE)),
+        withParent(documentOf(DOC_2, CLEAN)),
+        withParent(documentOf(DOC_3, CLEAN)),
+      ],
+      graphOf([DOC_1, DOC_2, DOC_3])
+    );
+
+  const missingDetails = (documentId: string) =>
+    createFinding("REQUIRED_SECTION_MISSING", { kind: "document", documentId });
+
+  const configuredTimeout = failure("VALIDATION_TIMEOUT", {
+    kind: "scope",
+    scopeKind: "configured_collections",
+  });
+
+  it("keeps the finished document units when it stops mid-documents", async () => {
+    crossMarginDuring(evaluateDocumentRules, 2);
+    const reader = fakeReader(MIXED, snapshotRead([mixedCollection()]));
+
+    await expect(resultOf(reader, MIXED)).resolves.toStrictEqual({
+      state: "incomplete",
+      complete: false,
+      clean: false,
+      errors: [missingDetails(DOC_1)],
+      warnings: [],
+      systemFailures: [failure("VALIDATION_TIMEOUT", cs(MIXED))],
+      scope: {
+        kind: "collection",
+        collectionId: MIXED,
+        evaluatedDocumentCount: 2,
+        evaluatedLinkCount: 0,
+        completedChecks: [],
+      },
+      policies: [identityOf(MIXED)],
+    });
+    expect(evaluateDocumentRules).toHaveBeenCalledTimes(2);
+    expect(evaluateGraphCheck).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["exactly the margin", LINT_WIKI_STOP_MARGIN_MS, 2, "complete"],
+    ["one millisecond less", LINT_WIKI_STOP_MARGIN_MS - 1, 1, "incomplete"],
+  ] as const)(
+    "starts the next unit only when %s remains",
+    async (_name, remainingMs, calls, state) => {
+      crossMarginDuring(evaluateDocumentRules, 1, remainingMs);
+      const reader = fakeReader(
+        STRUCTURE,
+        snapshotRead([
+          collectionOf(STRUCTURE, [
+            documentOf(DOC_1, CLEAN),
+            documentOf(DOC_2, CLEAN),
+          ]),
+        ])
+      );
+
+      await expect(resultOf(reader, STRUCTURE)).resolves.toMatchObject({
+        state,
+      });
+      expect(evaluateDocumentRules).toHaveBeenCalledTimes(calls);
+    }
+  );
+
+  it("fails with only the timeout when it stops before the first unit", async () => {
+    const reader = fakeReader(MIXED, async () => {
+      now = PAST_MARGIN;
+      return snapshotRead([mixedCollection()]);
+    });
+
+    await expect(resultOf(reader, MIXED)).resolves.toStrictEqual({
+      state: "failed",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [failure("VALIDATION_TIMEOUT", cs(MIXED))],
+      scope: { kind: "collection", ...zeroEntry(MIXED) },
+      policies: [identityOf(MIXED)],
+    });
+    expect(evaluateDocumentRules).not.toHaveBeenCalled();
+  });
+
+  it("lists the collection with zero counts when the default scope stops before the first unit", async () => {
+    const reader = fakeReader(null, async () => {
+      now = PAST_MARGIN;
+      return snapshotRead([mixedCollection()]);
+    });
+
+    await expect(resultOf(reader)).resolves.toStrictEqual({
+      state: "failed",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [configuredTimeout],
+      scope: {
+        kind: "configured_collections",
+        collections: [zeroEntry(MIXED)],
+      },
+      policies: [identityOf(MIXED)],
+    });
+  });
+
+  it("keeps a finished failed unit and the next unit's Findings", async () => {
+    crossMarginDuring(evaluateDocumentRules, 1);
+    const reader = fakeReader(
+      MIXED,
+      snapshotRead([
+        collectionOf(
+          MIXED,
+          [
+            { documentId: DOC_1, content: "unavailable", parent: NONE },
+            withParent(documentOf(DOC_2, DEFECTIVE)),
+          ],
+          graphOf([DOC_1, DOC_2])
+        ),
+      ])
+    );
+
+    await expect(resultOf(reader, MIXED)).resolves.toStrictEqual({
+      state: "incomplete",
+      complete: false,
+      clean: false,
+      errors: [missingDetails(DOC_2)],
+      warnings: [],
+      systemFailures: [
+        failure("VALIDATION_RUNTIME_FAILED", ds(DOC_1, MIXED)),
+        failure("VALIDATION_TIMEOUT", cs(MIXED)),
+      ],
+      scope: {
+        kind: "collection",
+        collectionId: MIXED,
+        evaluatedDocumentCount: 1,
+        evaluatedLinkCount: 0,
+        completedChecks: [],
+      },
+      policies: [identityOf(MIXED)],
+    });
+    expect(evaluateGraphCheck).not.toHaveBeenCalled();
+  });
+
+  it("adds no failure for an unreached check of an unauthorized graph", async () => {
+    crossMarginDuring(evaluateDocumentRules, 1);
+    const reader = fakeReader(
+      MIXED,
+      snapshotRead([
+        collectionOf(MIXED, [documentOf(DOC_1, CLEAN)], { authorized: false }),
+      ])
+    );
+
+    await expect(resultOf(reader, MIXED)).resolves.toStrictEqual({
+      state: "incomplete",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [failure("VALIDATION_TIMEOUT", cs(MIXED))],
+      scope: {
+        kind: "collection",
+        collectionId: MIXED,
+        evaluatedDocumentCount: 1,
+        evaluatedLinkCount: 0,
+        completedChecks: ["documents"],
+      },
+      policies: [identityOf(MIXED)],
+    });
+  });
+
+  it("does not list an unreached vacuous check", async () => {
+    crossMarginDuring(evaluateDocumentRules, 1);
+    const reader = fakeReader(
+      null,
+      snapshotRead([
+        collectionOf(STRUCTURE, [documentOf(DOC_3, CLEAN)]),
+        collectionOf(HIERARCHY, [], graphOf([])),
+      ])
+    );
+
+    await expect(resultOf(reader)).resolves.toStrictEqual({
+      state: "incomplete",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [configuredTimeout],
+      scope: {
+        kind: "configured_collections",
+        collections: [
+          {
+            collectionId: STRUCTURE,
+            evaluatedDocumentCount: 1,
+            evaluatedLinkCount: 0,
+            completedChecks: ["documents"],
+          },
+          zeroEntry(HIERARCHY),
+        ],
+      },
+      policies: [identityOf(STRUCTURE), identityOf(HIERARCHY)],
+    });
+    expect(evaluateGraphCheck).not.toHaveBeenCalled();
+  });
+
+  it("lists the finished checks when it stops before the global index", async () => {
+    crossMarginDuring(evaluateGraphCheck, 1);
+    const reader = fakeReader(
+      ALL_CHECKS,
+      snapshotRead([
+        collectionOf(
+          ALL_CHECKS,
+          [
+            withParent(documentOf(DOC_1, CLEAN)),
+            withParent(documentOf(DOC_2, CLEAN)),
+            withParent(documentOf(DOC_3, CLEAN)),
+          ],
+          graphOf([DOC_1, DOC_2, DOC_3], LINKED_INDEXES)
+        ),
+      ])
+    );
+
+    await expect(resultOf(reader, ALL_CHECKS)).resolves.toStrictEqual({
+      state: "incomplete",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [failure("VALIDATION_TIMEOUT", cs(ALL_CHECKS))],
+      scope: {
+        kind: "collection",
+        collectionId: ALL_CHECKS,
+        evaluatedDocumentCount: 3,
+        evaluatedLinkCount: 0,
+        completedChecks: ["documents", "hierarchy"],
+      },
+      policies: [identityOf(ALL_CHECKS)],
+    });
+    expect(
+      vi.mocked(evaluateGraphCheck).mock.calls.map(([{ check }]) => check)
+    ).toEqual(["hierarchy"]);
+  });
+
+  it("keeps a readable sentinel next to the run-wide timeout", async () => {
+    crossMarginDuring(evaluateDocumentRules, 1);
+    const reader = fakeReader(
+      null,
+      snapshotRead(
+        [
+          collectionOf(STRUCTURE, [
+            documentOf(DOC_1, DEFECTIVE),
+            documentOf(DOC_2, CLEAN),
+          ]),
+        ],
+        [INVALID]
+      )
+    );
+
+    const result = await resultOf(reader);
+
+    expect(result).toMatchObject({
+      state: "incomplete",
+      complete: false,
+      clean: false,
+      warnings: [],
+      systemFailures: [
+        failure("POLICY_CONFIGURATION_INVALID", cs(INVALID)),
+        configuredTimeout,
+      ],
+      scope: {
+        kind: "configured_collections",
+        collections: [
+          {
+            collectionId: STRUCTURE,
+            evaluatedDocumentCount: 1,
+            evaluatedLinkCount: 0,
+            completedChecks: [],
+          },
+          zeroEntry(INVALID),
+        ],
+      },
+      policies: [identityOf(STRUCTURE), identityOf(INVALID)],
+    });
+    expect(
+      result.errors.map(({ code, location }) => [code, location.documentId])
+    ).toEqual([
+      ["HEADING_LEVEL_NOT_ALLOWED", DOC_1],
+      ["REQUIRED_SECTION_MISSING", DOC_1],
+    ]);
+  });
+});
+
+describe("admission", () => {
+  const configuredRejection = {
+    state: "failed",
+    complete: false,
+    clean: false,
+    errors: [],
+    warnings: [],
+    systemFailures: [
+      failure("VALIDATION_RESOURCE_LIMIT_EXCEEDED", {
+        kind: "scope",
+        scopeKind: "configured_collections",
+      }),
+    ],
+    scope: { kind: "configured_collections", collections: [] },
+    policies: [],
+  };
+
+  it("admits a scoped request after its lookup and before its snapshot", async () => {
+    const admit = vi.fn(() => true);
+    const reader = fakeReader(
+      STRUCTURE,
+      snapshotRead([collectionOf(STRUCTURE, [documentOf(DOC_1, CLEAN)])])
+    );
+
+    await expect(
+      run(reader, STRUCTURE, policySet, admit)
+    ).resolves.toMatchObject({ result: { state: "complete" } });
+    expect(admit).toHaveBeenCalledTimes(1);
+    const [lookup] = reader.authorizeLintCollection.mock.invocationCallOrder;
+    const [admission] = admit.mock.invocationCallOrder;
+    const [snapshot] = reader.readWikiSnapshot.mock.invocationCallOrder;
+    expect(lookup).toBeLessThan(admission);
+    expect(admission).toBeLessThan(snapshot);
+  });
+
+  it("admits a default request before its snapshot", async () => {
+    const admit = vi.fn(() => true);
+    const reader = fakeReader(null, snapshotRead([], [INVALID]));
+
+    await run(reader, undefined, policySet, admit);
+
+    expect(admit).toHaveBeenCalledTimes(1);
+    expect(admit.mock.invocationCallOrder[0]).toBeLessThan(
+      reader.readWikiSnapshot.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("rejects a scoped request while the slot is held", async () => {
+    const reader = fakeReader(STRUCTURE);
+
+    await expect(
+      run(reader, STRUCTURE, policySet, () => false)
+    ).resolves.toStrictEqual({
+      kind: "result",
+      result: {
+        state: "failed",
+        complete: false,
+        clean: false,
+        errors: [],
+        warnings: [],
+        systemFailures: [
+          failure("VALIDATION_RESOURCE_LIMIT_EXCEEDED", cs(STRUCTURE)),
+        ],
+        scope: { kind: "collection", ...zeroEntry(STRUCTURE) },
+        policies: [identityOf(STRUCTURE)],
+      },
+    });
+    expect(reader.readWikiSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects a default request without its sentinels while the slot is held", async () => {
+    const reader = fakeReader(null, snapshotRead([], [INVALID]));
+
+    await expect(
+      run(reader, undefined, policySet, () => false)
+    ).resolves.toStrictEqual({ kind: "result", result: configuredRejection });
+    expect(reader.readWikiSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a denied collection", fakeReader(null), STRUCTURE, policySet],
+    ["a failed lookup", fakeReader(new Error("raw")), STRUCTURE, policySet],
+    ["a sentinel collection", fakeReader(INVALID), INVALID, policySet],
+    [
+      "an unconfigured collection",
+      fakeReader(UNCONFIGURED),
+      UNCONFIGURED,
+      policySet,
+    ],
+    ["an empty policy set", fakeReader(null), undefined, policySetFor({})],
+  ])(
+    "answers %s without admission while the slot is held",
+    async (_name, reader, collectionId, set) => {
+      const admit = vi.fn(() => false);
+
+      const held = await run(reader, collectionId, set, admit);
+
+      expect(admit).not.toHaveBeenCalled();
+      expect(held).toStrictEqual(await run(reader, collectionId, set));
+      expect(reader.readWikiSnapshot).not.toHaveBeenCalled();
+    }
+  );
+});
+
+describe("determinism", () => {
+  it("returns identical results for repeated runs", async () => {
+    const scenarios: (() => Promise<LintWikiOutcome>)[] = [
+      // Stop margin.
+      () => {
+        crossMarginDuring(evaluateDocumentRules, 2);
+        return run(
+          fakeReader(
+            MIXED,
+            snapshotRead([
+              collectionOf(
+                MIXED,
+                [
+                  withParent(documentOf(DOC_1, DEFECTIVE)),
+                  withParent(documentOf(DOC_2, CLEAN)),
+                  withParent(documentOf(DOC_3, CLEAN)),
+                ],
+                graphOf([DOC_1, DOC_2, DOC_3])
+              ),
+            ])
+          ),
+          MIXED
+        );
+      },
+      // Deadline expiry after the snapshot.
+      () =>
+        run(
+          fakeReader(null, async () => {
+            now = LINT_WIKI_DEADLINE_MS;
+            return snapshotRead([], [INVALID]);
+          })
+        ),
+      // Resource limit.
+      () =>
+        run(
+          fakeReader(null, failedRead(new WikiResourceLimitError(), [INVALID]))
+        ),
+      // Isolated rule failure.
+      () => {
+        vi.mocked(evaluateDocumentRules).mockReturnValueOnce({
+          findings: [
+            {
+              issue: createFinding("REQUIRED_SECTION_MISSING", {
+                kind: "document",
+                documentId: DOC_1,
+              }),
+              ordinal: 0,
+            },
+          ],
+          failedKinds: ["allowed_heading_levels"],
+        });
+        return run(
+          fakeReader(
+            STRUCTURE,
+            snapshotRead([
+              collectionOf(STRUCTURE, [
+                documentOf(DOC_1, DEFECTIVE),
+                documentOf(DOC_2, CLEAN),
+              ]),
+            ])
+          ),
+          STRUCTURE
+        );
+      },
+      // Unavailable document content.
+      () =>
+        run(
+          fakeReader(
+            STRUCTURE,
+            snapshotRead([
+              collectionOf(STRUCTURE, [
+                { documentId: DOC_1, content: "unavailable", parent: null },
+                documentOf(DOC_2, DEFECTIVE),
+              ]),
+            ])
+          ),
+          STRUCTURE
+        ),
+      // Snapshot failure.
+      () => run(fakeReader(null, failedRead(new Error("raw"), [INVALID]))),
+      // Concurrent admission.
+      () => run(fakeReader(STRUCTURE), STRUCTURE, policySet, () => false),
+    ];
+
+    for (const scenario of scenarios) {
+      resetRun();
+      const first = await scenario();
+      resetRun();
+      const second = await scenario();
+
+      expect(second).toStrictEqual(first);
+      expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+      expect(first).toMatchObject({
+        kind: "result",
+        result: { complete: false, clean: false },
+      });
+    }
   });
 });

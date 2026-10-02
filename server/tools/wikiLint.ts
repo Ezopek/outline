@@ -4,6 +4,7 @@ import { z } from "zod";
 import env from "@server/env";
 import { AuthorizationError } from "@server/errors";
 import { getPolicySet } from "@server/wikiLint/adapters/policyConfig";
+import { lintWikiAdmission } from "@server/wikiLint/application/admission";
 import { Deadline } from "@server/wikiLint/application/deadline";
 import type {
   LintDocumentDependencies,
@@ -93,7 +94,8 @@ export async function lintDocumentTool(
 }
 
 /**
- * Handles a `lint_wiki` call. The tool is not registered here.
+ * Handles a `lint_wiki` call. The tool is not registered here. The call
+ * holds the per-process scan slot from its admission until it returns.
  *
  * @param input - the validated input; an omitted collection selects every
  *   readable configured collection.
@@ -107,6 +109,7 @@ export async function lintWikiTool(
   context: { authInfo?: AuthInfo },
   dependencies: LintWikiDependencies = {}
 ): Promise<CallToolResult> {
+  const lease = lintWikiAdmission.lease();
   try {
     const deadline = new Deadline(LINT_WIKI_DEADLINE_MS, dependencies.clock);
     const outcome = await lintWiki({
@@ -116,9 +119,12 @@ export async function lintWikiTool(
       deadline,
       reader: dependencies.reader ?? defaultLintWikiReader,
       instanceOrigin: dependencies.instanceOrigin ?? env.URL,
+      admit: lease.acquire,
     });
     return toolResult(outcome);
   } catch {
     return error(OPERATION_FAILED);
+  } finally {
+    lease.release();
   }
 }

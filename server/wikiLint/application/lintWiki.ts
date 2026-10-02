@@ -35,9 +35,17 @@ import type {
   LintDocumentDependencies,
   LintDocumentOutcome,
 } from "./lintDocument";
+import { WikiResourceLimitError } from "./snapshotLimits";
 
 /** The server-owned `lint_wiki` deadline, in milliseconds. */
 export const LINT_WIKI_DEADLINE_MS = 60000;
+
+/**
+ * The remainder, in milliseconds, below which `lint_wiki` starts no further
+ * unit; result assembly is charged to it. Provisional: Story 3.3 fixes it
+ * from the measured maximum unit time.
+ */
+export const LINT_WIKI_STOP_MARGIN_MS = 2000;
 
 /** The database steps of `lint_wiki`. */
 export interface LintWikiReader {
@@ -179,6 +187,13 @@ export function wikiUnits(
  * graph; without `readDocument` on the collection it fails with one generic
  * System Failure and its rules never run.
  *
+ * Admission (AD-16) follows the scoped lookup and the sentinel, unconfigured,
+ * and empty-set returns, and precedes the snapshot; a rejected request fails
+ * with `VALIDATION_RESOURCE_LIMIT_EXCEEDED`, as does a snapshot that exceeds
+ * a resource limit. Units run in the AD-11 order, and none starts once less
+ * than `LINT_WIKI_STOP_MARGIN_MS` remains: the finished units are kept, and
+ * one run-wide `VALIDATION_TIMEOUT` is added.
+ *
  * @param input.collectionId - the requested collection identifier, or
  *   undefined for the default scope.
  * @param input.actor - the acting user.
@@ -187,6 +202,8 @@ export function wikiUnits(
  * @param input.reader - the database steps.
  * @param input.instanceOrigin - the instance origin that internal links are
  *   recognized against.
+ * @param input.admit - claims the per-process scan slot; called at most once,
+ *   and false rejects the request.
  * @returns the outcome.
  */
 export async function lintWiki(input: {
@@ -196,6 +213,7 @@ export async function lintWiki(input: {
   deadline: Deadline;
   reader: LintWikiReader;
   instanceOrigin: string;
+  admit: () => boolean;
 }): Promise<LintWikiOutcome> {
   const { actor, policySet, deadline, reader, instanceOrigin } = input;
   const entryById = new Map(
@@ -270,18 +288,11 @@ export async function lintWiki(input: {
     entries = policySet.entries;
   }
 
-  let read: WikiSnapshotRead;
-  try {
-    read = await reader.readWikiSnapshot({
-      scope,
-      entries,
-      actor,
-      deadline,
-      instanceOrigin,
-    });
-  } catch (error) {
-    read = { ok: false, error, sentinelCollectionIds: [] };
-  }
+  /** Where a run-wide System Failure is located. */
+  const runLocation: ScopeLocation =
+    scope.kind === "collection"
+      ? collectionLocation(scope.collectionId)
+      : { kind: "scope", scopeKind: "configured_collections" };
 
   /**
    * Adds the System Failure, identity, and zero entry of each sentinel.
@@ -309,53 +320,37 @@ export async function lintWiki(input: {
     }
   };
 
-  if (!read.ok || deadline.expired()) {
-    // A canonicalization failure is never a timeout.
-    const code: SystemFailureCode =
-      read.ok ||
-      (!(read.error instanceof CanonicalMarkdownError) &&
-        (read.error instanceof DeadlineFloorError ||
-          isDatabaseTimeout(read.error) ||
-          deadline.expired()))
-        ? "VALIDATION_TIMEOUT"
-        : "VALIDATION_RUNTIME_FAILED";
+  /**
+   * Builds a run-wide failure: one System Failure at the run location, no
+   * Findings, and zero counts, plus each readable sentinel in the default
+   * scope.
+   *
+   * @param code - the System Failure code.
+   * @param sentinelIds - the sentinels established as readable.
+   * @returns the outcome.
+   */
+  const runFailure = (
+    code: SystemFailureCode,
+    sentinelIds: readonly string[]
+  ): LintWikiOutcome => {
+    const items: IssueItem[] = [
+      { issue: createSystemFailure(code, runLocation) },
+    ];
     if (scope.kind === "collection") {
       return {
         kind: "result",
         result: buildReadOnlyResult({
           requiredUnits: 1,
           completedUnits: 0,
-          items: [
-            {
-              issue: createSystemFailure(
-                code,
-                collectionLocation(scope.collectionId)
-              ),
-            },
-          ],
+          items,
           scope: collectionScope(zeroEntry(scope.collectionId)),
           policies: entries.map(policyIdentity),
         }),
       };
     }
-    const items: IssueItem[] = [
-      {
-        issue: createSystemFailure(code, {
-          kind: "scope",
-          scopeKind: "configured_collections",
-        }),
-      },
-    ];
     const collections: ConfiguredCollectionEntry[] = [];
     const policies: PolicyIdentity[] = [];
-    addSentinels(
-      read.ok
-        ? read.snapshot.sentinelCollectionIds
-        : read.sentinelCollectionIds,
-      items,
-      collections,
-      policies
-    );
+    addSentinels(sentinelIds, items, collections, policies);
     return {
       kind: "result",
       result: buildReadOnlyResult({
@@ -366,6 +361,45 @@ export async function lintWiki(input: {
         policies,
       }),
     };
+  };
+
+  if (!input.admit()) {
+    return runFailure("VALIDATION_RESOURCE_LIMIT_EXCEEDED", []);
+  }
+
+  let read: WikiSnapshotRead;
+  try {
+    read = await reader.readWikiSnapshot({
+      scope,
+      entries,
+      actor,
+      deadline,
+      instanceOrigin,
+    });
+  } catch (error) {
+    read = { ok: false, error, sentinelCollectionIds: [] };
+  }
+
+  if (!read.ok || deadline.expired()) {
+    let code: SystemFailureCode;
+    if (!read.ok && read.error instanceof WikiResourceLimitError) {
+      code = "VALIDATION_RESOURCE_LIMIT_EXCEEDED";
+    } else if (
+      read.ok ||
+      // A canonicalization failure is never a timeout.
+      (!(read.error instanceof CanonicalMarkdownError) &&
+        (read.error instanceof DeadlineFloorError ||
+          isDatabaseTimeout(read.error) ||
+          deadline.expired()))
+    ) {
+      code = "VALIDATION_TIMEOUT";
+    } else {
+      code = "VALIDATION_RUNTIME_FAILED";
+    }
+    return runFailure(
+      code,
+      read.ok ? read.snapshot.sentinelCollectionIds : read.sentinelCollectionIds
+    );
   }
 
   const { snapshot } = read;
@@ -386,7 +420,8 @@ export async function lintWiki(input: {
           linksEnabled: documentRules.some(
             (rule) => rule.kind === "internal_links"
           ),
-          failedChecks: new Set<CheckName>(),
+          /** The units of each check not yet completed. */
+          pending: new Map<CheckName, number>(),
           evaluatedDocumentCount: 0,
           evaluatedLinkCount: 0,
         },
@@ -408,15 +443,26 @@ export async function lintWiki(input: {
     return account;
   };
 
-  let requiredUnits = 0;
-  let completedUnits = 0;
-  for (const { collection, check, document } of wikiUnits(
+  const units = wikiUnits(
     snapshot,
     (collectionId) => accountOf(collectionId).checks
-  )) {
+  );
+  for (const { collection, check } of units) {
+    const { pending } = accountOf(collection.collectionId);
+    pending.set(check, (pending.get(check) ?? 0) + 1);
+  }
+
+  let completedUnits = 0;
+  let stopped = false;
+  for (const { collection, check, document } of units) {
+    if (deadline.remainingMs() < LINT_WIKI_STOP_MARGIN_MS) {
+      stopped = true;
+      break;
+    }
     const { collectionId } = collection;
     const account = accountOf(collectionId);
-    requiredUnits++;
+    // The unit's issues are kept only once it finishes.
+    const buffer: IssueItem[] = [];
     let completed: boolean;
 
     if (check === "documents") {
@@ -432,7 +478,7 @@ export async function lintWiki(input: {
           }),
         };
         if (content === null || content === "unavailable") {
-          items.push(failure);
+          buffer.push(failure);
           completed = false;
         } else {
           const { findings, failedKinds } = evaluateDocumentRules({
@@ -445,10 +491,10 @@ export async function lintWiki(input: {
                 : { references: [...content.links], targets: snapshot.targets },
           });
           for (const finding of findings) {
-            items.push({ ...finding, sortCollectionId: collectionId });
+            buffer.push({ ...finding, sortCollectionId: collectionId });
           }
           if (failedKinds.length > 0) {
-            items.push(failure);
+            buffer.push(failure);
             completed = false;
           } else {
             account.evaluatedDocumentCount++;
@@ -471,12 +517,12 @@ export async function lintWiki(input: {
           rules: account.rules,
         });
         for (const finding of result.findings) {
-          items.push({ ...finding, sortCollectionId: collectionId });
+          buffer.push({ ...finding, sortCollectionId: collectionId });
         }
         completed = result.complete;
       }
       if (!completed) {
-        items.push({
+        buffer.push({
           issue: createSystemFailure(
             "VALIDATION_RUNTIME_FAILED",
             collectionLocation(collectionId)
@@ -485,11 +531,18 @@ export async function lintWiki(input: {
       }
     }
 
+    for (const item of buffer) {
+      items.push(item);
+    }
     if (completed) {
       completedUnits++;
-    } else {
-      account.failedChecks.add(check);
+      account.pending.set(check, (account.pending.get(check) ?? 0) - 1);
     }
+  }
+  if (stopped) {
+    items.push({
+      issue: createSystemFailure("VALIDATION_TIMEOUT", runLocation),
+    });
   }
 
   const collections: ConfiguredCollectionEntry[] = snapshot.collections.map(
@@ -499,8 +552,9 @@ export async function lintWiki(input: {
         collectionId,
         evaluatedDocumentCount: account.evaluatedDocumentCount,
         evaluatedLinkCount: account.evaluatedLinkCount,
+        // A check is listed only when every one of its units completed.
         completedChecks: account.checks.filter(
-          (check) => !account.failedChecks.has(check)
+          (check) => account.pending.get(check) === 0
         ),
       };
     }
@@ -527,7 +581,7 @@ export async function lintWiki(input: {
   return {
     kind: "result",
     result: buildReadOnlyResult({
-      requiredUnits,
+      requiredUnits: units.length,
       completedUnits,
       items,
       scope: evaluatedScope,

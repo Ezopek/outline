@@ -37,6 +37,7 @@ import {
   authorizeLintCollection,
   readWikiSnapshot,
   structureDocumentIds,
+  structureNodeCount,
 } from "./wikiReader";
 
 /** The generic instance origin of the link fixtures. */
@@ -445,7 +446,99 @@ describe("structureDocumentIds", () => {
   });
 });
 
+describe("structureNodeCount", () => {
+  it("counts the object nodes at any depth", () => {
+    const node = (id: string, children: unknown[] = []) =>
+      ({ id, title: "", url: "", children }) as NavigationNode;
+
+    expect(structureNodeCount(null)).toBe(0);
+    expect(structureNodeCount([])).toBe(0);
+    expect(
+      structureNodeCount([node("c", [node("b", [node("a")]), node("a")])])
+    ).toBe(4);
+  });
+
+  it("counts the malformed object nodes the walk visits", () => {
+    expect(
+      structureNodeCount([
+        null,
+        "x",
+        { id: 1, children: [{ id: "b", children: "x" }] },
+        { children: [{ id: "a" }, 7] },
+        [],
+      ] as unknown as NavigationNode[])
+    ).toBe(5);
+  });
+});
+
 describe("readWikiSnapshot", () => {
+  it("bounds every snapshot batch by the decreasing remainder", async () => {
+    const { user, collection } = await buildReadableCollection();
+    const index = await publishedIn(user, collection.id);
+    const surface = await publishedIn(user, collection.id, {
+      text: linking([index.id, missingUuid(1)]),
+      parentDocumentId: index.id,
+    });
+    // Each clock reading advances 7 ms; the deadline starts at the first.
+    const budgetMs = 60000.5;
+    let time = 0;
+    const readings: number[] = [];
+    const deadline = new Deadline(budgetMs, () => {
+      time += 7;
+      readings.push(time);
+      return time;
+    });
+    const expiresAt = readings[0] + budgetMs;
+    const statements = recordStatements();
+
+    await snapshotOf({
+      entries: entriesFor({
+        [collection.id]: {
+          activation: "read_only",
+          rules: [
+            ...linkPolicy.rules,
+            ...hierarchyPolicy.rules,
+            ...globalIndexPolicy(surface.id, [index.id]).rules,
+          ],
+        },
+      }),
+      actor: user,
+      deadline,
+    });
+
+    const recorded = statements()
+      .map(({ sql }) => sql)
+      .filter((sql) => statementOf(sql) !== "SELECT group_permissions");
+    const selects = recorded.flatMap((sql, position) =>
+      sql.startsWith("SELECT") ? [position] : []
+    );
+    expect(selects.map((position) => statementOf(recorded[position]))).toEqual([
+      "SELECT collections",
+      "SELECT documents",
+      "SELECT content",
+      "SELECT lookup",
+      "SELECT structure",
+      "SELECT lookup",
+      "SELECT content",
+    ]);
+    // Every batch reads the clock once, after the deadline started.
+    expect(readings).toHaveLength(selects.length + 1);
+    const timeouts = selects.map((position, batch) => {
+      const value = Number(/= (\d+)$/.exec(recorded[position - 1])?.[1]);
+      expect(recorded.slice(position - 2, position)).toEqual([
+        `SET LOCAL lock_timeout = ${value}`,
+        `SET LOCAL statement_timeout = ${value}`,
+      ]);
+      const remainder = expiresAt - readings[batch + 1];
+      expect(value).toBe(Math.floor(remainder));
+      expect(value).toBeLessThanOrEqual(remainder);
+      return value;
+    });
+    for (let batch = 1; batch < timeouts.length; batch++) {
+      expect(timeouts[batch]).toBeLessThan(timeouts[batch - 1]);
+    }
+  });
+
   it("reads exactly the published documents the actor can read", async () => {
     const actor = await buildAdmin();
     const collection = await buildCollection({

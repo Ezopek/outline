@@ -27,8 +27,27 @@ import { userTools } from "@server/tools/users";
 import { iconNamesResourceUri } from "@server/tools/util";
 import { version } from "../../../package.json";
 
+/**
+ * The socket timeout of `/mcp` requests, in milliseconds: above the 63 s sum
+ * of the `lint_wiki` code-owned bounds, and never set by a request.
+ */
+export const MCP_REQUEST_TIMEOUT_MS = 65000;
+
 const app = new Koa();
 const router = new Router();
+
+// A global REQUEST_TIMEOUT below MCP_REQUEST_TIMEOUT_MS would cut a `lint_wiki`
+// scan before its deadline, so /mcp requests raise their own socket timeout to
+// it. A larger or disabled (0) REQUEST_TIMEOUT is kept, and the global setting
+// is never changed.
+app.use(async (ctx, next) => {
+  ctx.req.setTimeout(
+    env.REQUEST_TIMEOUT === 0
+      ? 0
+      : Math.max(env.REQUEST_TIMEOUT, MCP_REQUEST_TIMEOUT_MS)
+  );
+  await next();
+});
 
 // RFC 9728 / MCP auth spec: 401 responses from the /mcp endpoint must include
 // a WWW-Authenticate header pointing at the OAuth protected resource metadata

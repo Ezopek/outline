@@ -10,6 +10,9 @@ export const monotonicClock: MonotonicClock = () => performance.now();
  */
 export const SET_LOCAL_FLOOR_MS = 100;
 
+/** The AD-15 bound, in milliseconds, of one lint audit write. */
+export const AUDIT_WRITE_BOUND_MS = 3000;
+
 /**
  * Thrown when the remaining time is below the floor, so a database batch is
  * refused before any statement is sent.
