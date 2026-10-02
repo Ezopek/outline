@@ -1,6 +1,5 @@
 import type { User } from "@server/models";
 import type {
-  CanonicalSyntax,
   DocumentScope,
   IssueItem,
   PolicyIdentity,
@@ -15,8 +14,8 @@ import {
 import type { PolicySet, PolicySetEntry } from "../core/policySet";
 import { createSystemFailure } from "../core/registry";
 import { buildReadOnlyResult } from "../core/result";
-import { parseCanonicalMarkdown } from "../adapters/canonicalSyntax";
-import type { LintTarget } from "../adapters/documentReader";
+import { CanonicalMarkdownError } from "../adapters/canonicalSyntax";
+import type { DocumentSnapshot, LintTarget } from "../adapters/documentReader";
 import {
   authorizeLintTarget,
   isDatabaseTimeout,
@@ -36,12 +35,17 @@ export interface LintDocumentReader {
     actor: User;
     deadline: Deadline;
   }): Promise<LintTarget | null>;
-  /** Reads the target's snapshot as canonical Markdown. */
+  /**
+   * Reads the target's snapshot; resolves its internal links when an instance
+   * origin is given.
+   */
   readDocumentSnapshot(input: {
     documentId: string;
     collectionId: string;
     deadline: Deadline;
-  }): Promise<string>;
+    actor: User;
+    instanceOrigin?: string;
+  }): Promise<DocumentSnapshot>;
 }
 
 /** The database adapter. */
@@ -55,6 +59,8 @@ export interface LintDocumentDependencies {
   policySet?: PolicySet;
   clock?: MonotonicClock;
   reader?: LintDocumentReader;
+  /** The instance origin that internal links are recognized against. */
+  instanceOrigin?: string;
 }
 
 /** The outcome of linting one document. */
@@ -64,31 +70,33 @@ export type LintDocumentOutcome =
   | { kind: "failed" };
 
 /**
- * Builds a document scope with zero counts.
+ * Builds a document scope, with zero counts by default.
  *
  * @param documentId - the document.
  * @param collectionId - the collection, only when the actor can read it.
  * @param evaluatedDocumentCount - the number of evaluated documents.
+ * @param evaluatedLinkCount - the number of evaluated internal-link references.
  * @returns the scope.
  */
 function documentScope(
   documentId: string,
   collectionId: string | undefined,
-  evaluatedDocumentCount = 0
+  evaluatedDocumentCount = 0,
+  evaluatedLinkCount = 0
 ): DocumentScope {
   return collectionId === undefined
     ? {
         kind: "document",
         documentId,
         evaluatedDocumentCount,
-        evaluatedLinkCount: 0,
+        evaluatedLinkCount,
       }
     : {
         kind: "document",
         documentId,
         collectionId,
         evaluatedDocumentCount,
-        evaluatedLinkCount: 0,
+        evaluatedLinkCount,
       };
 }
 
@@ -162,6 +170,8 @@ function failedResult(input: {
  * @param input.policySet - the startup policy set.
  * @param input.deadline - the request deadline.
  * @param input.reader - the database steps.
+ * @param input.instanceOrigin - the instance origin that internal links are
+ *   recognized against.
  * @returns the outcome.
  */
 export async function lintDocument(input: {
@@ -170,8 +180,9 @@ export async function lintDocument(input: {
   policySet: PolicySet;
   deadline: Deadline;
   reader: LintDocumentReader;
+  instanceOrigin: string;
 }): Promise<LintDocumentOutcome> {
-  const { id, actor, policySet, deadline, reader } = input;
+  const { id, actor, policySet, deadline, reader, instanceOrigin } = input;
 
   let target: LintTarget | null;
   try {
@@ -263,43 +274,39 @@ export async function lintDocument(input: {
       policies,
     });
 
-  let markdown: string;
+  const hasInternalLinks = rules.some((rule) => rule.kind === "internal_links");
+  let snapshot: DocumentSnapshot;
   try {
-    markdown = await reader.readDocumentSnapshot({
+    snapshot = await reader.readDocumentSnapshot({
       documentId,
       collectionId: entry.collectionId,
       deadline,
+      actor,
+      ...(hasInternalLinks ? { instanceOrigin } : {}),
     });
   } catch (error) {
+    // A canonicalization failure is never a timeout.
     return constructionFailure(
-      error instanceof DeadlineFloorError ||
-        isDatabaseTimeout(error) ||
-        deadline.expired()
+      !(error instanceof CanonicalMarkdownError) &&
+        (error instanceof DeadlineFloorError ||
+          isDatabaseTimeout(error) ||
+          deadline.expired())
         ? "VALIDATION_TIMEOUT"
         : "VALIDATION_RUNTIME_FAILED"
     );
-  }
-
-  let syntax: CanonicalSyntax;
-  try {
-    syntax = parseCanonicalMarkdown(markdown);
-  } catch {
-    return constructionFailure("VALIDATION_RUNTIME_FAILED");
   }
   if (deadline.expired()) {
     return constructionFailure("VALIDATION_TIMEOUT");
   }
 
-  // `internal_links` needs the shared link function of Story 1.4, so it cannot
-  // complete yet and fails the unit.
-  const hasInternalLinks = rules.some((rule) => rule.kind === "internal_links");
   const { findings, failedKinds } = evaluateDocumentRules({
     documentId,
-    syntax,
-    rules: rules.filter((rule) => rule.kind !== "internal_links"),
+    syntax: snapshot.syntax,
+    rules,
+    links: snapshot.links ?? undefined,
   });
 
-  if (failedKinds.length > 0 || hasInternalLinks) {
+  if (failedKinds.length > 0) {
     return failedResult({
       items: [
         ...findings,
@@ -321,7 +328,12 @@ export async function lintDocument(input: {
       requiredUnits: 1,
       completedUnits: 1,
       items: findings,
-      scope: documentScope(documentId, visibleCollectionId, 1),
+      scope: documentScope(
+        documentId,
+        visibleCollectionId,
+        1,
+        hasInternalLinks ? (snapshot.links?.references.length ?? 0) : 0
+      ),
       policies,
     }),
   };

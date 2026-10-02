@@ -1,9 +1,16 @@
-import { DatabaseError, Transaction } from "sequelize";
+import { DatabaseError, Op, Transaction } from "sequelize";
 import { Collection, Document, type User } from "@server/models";
 import { can } from "@server/policies";
 import { isQueryCanceledError, sequelize } from "@server/storage/database";
 import type { Deadline } from "../application/deadline";
-import { toCanonicalMarkdown } from "./canonicalSyntax";
+import type {
+  CanonicalSyntax,
+  LinkTargetState,
+  ResolvedLinks,
+} from "../core/contracts";
+import type { LinkLookupKey } from "../core/internalLinks";
+import { extractInternalLinks, linkLookupBatches } from "../core/internalLinks";
+import { parseCanonicalMarkdown, toCanonicalMarkdown } from "./canonicalSyntax";
 
 /** Postgres error code for `lock_not_available`, raised by `lock_timeout`. */
 const LockNotAvailableErrorCode = "55P03";
@@ -20,6 +27,14 @@ export interface LintTarget {
   /** The document's collection, or null when it has none. */
   collectionId: string | null;
   collectionReadability: CollectionReadability;
+}
+
+/** One point-in-time snapshot of a document, ready for evaluation. */
+export interface DocumentSnapshot {
+  /** The canonical syntax of the document. */
+  syntax: CanonicalSyntax;
+  /** The resolved internal links; null when they were not requested. */
+  links: ResolvedLinks | null;
 }
 
 /**
@@ -166,22 +181,90 @@ export function authorizeLintTarget(input: {
 }
 
 /**
- * Reads one point-in-time snapshot of an authorized document and serializes
- * it to canonical Markdown, in a `REPEATABLE READ` read-only transaction with
- * one bounded re-read batch. `Document.text` is never read.
+ * Resolves internal-link lookup keys for an actor inside a snapshot
+ * transaction. Each batch is bounded, then resolved by one membership-aware
+ * `findAll` within the actor's team, whose separate membership includes may
+ * add statements. A key is `resolved` only when a returned row with that `id`
+ * or `urlId` passes `can(actor, "read", row)`; a missing, deleted, or
+ * inaccessible target is `unresolved`, and nothing else about it is kept.
+ *
+ * @param input.batches - the lookup batches, in sorted order.
+ * @param input.actor - the acting user.
+ * @param input.transaction - the snapshot transaction.
+ * @param input.deadline - the request deadline.
+ * @returns the state of each key.
+ * @throws DeadlineFloorError when the remainder is below the floor before a
+ *   batch, or the query error of a batch.
+ */
+export async function resolveLinkTargets(input: {
+  batches: readonly (readonly LinkLookupKey[])[];
+  actor: User;
+  transaction: Transaction;
+  deadline: Deadline;
+}): Promise<Map<string, LinkTargetState>> {
+  const { batches, actor, transaction, deadline } = input;
+  const targets = new Map<string, LinkTargetState>();
+  for (const batch of batches) {
+    const ids = batch
+      .filter((key) => key.keyKind === "id")
+      .map((key) => key.key);
+    const urlIds = batch
+      .filter((key) => key.keyKind === "urlId")
+      .map((key) => key.key);
+
+    await boundBatch(transaction, deadline);
+    const rows = await Document.scope([
+      "withDrafts",
+      "withoutContent",
+      { method: ["withMembership", actor.id] },
+    ]).findAll({
+      where: {
+        teamId: actor.teamId,
+        [Op.or]: [
+          ...(ids.length ? [{ id: ids }] : []),
+          ...(urlIds.length ? [{ urlId: urlIds }] : []),
+        ],
+      },
+      transaction,
+    });
+
+    const readable = rows.filter((row) => can(actor, "read", row));
+    const readableIds = new Set(readable.map((row) => row.id));
+    const readableUrlIds = new Set(readable.map((row) => row.urlId));
+    for (const { key, keyKind } of batch) {
+      const found =
+        keyKind === "id" ? readableIds.has(key) : readableUrlIds.has(key);
+      targets.set(key, found ? "resolved" : "unresolved");
+    }
+  }
+  return targets;
+}
+
+/**
+ * Reads one point-in-time snapshot of an authorized document, in a
+ * `REPEATABLE READ` read-only transaction: one bounded re-read batch, then the
+ * canonical Markdown is serialized and parsed. With an instance origin, the
+ * internal links are extracted and resolved before commit, in bounded
+ * batches. `Document.text` is never read.
  *
  * @param input.documentId - the authorized document.
  * @param input.collectionId - the collection it was authorized in.
  * @param input.deadline - the request deadline.
- * @returns the canonical Markdown.
+ * @param input.actor - the acting user, who resolves link targets.
+ * @param input.instanceOrigin - the instance origin; links are resolved only
+ *   when it is given.
+ * @returns the snapshot.
  * @throws DocumentSnapshotError when the document is gone or has moved.
+ * @throws CanonicalMarkdownError when canonical Markdown cannot be produced.
  */
 export function readDocumentSnapshot(input: {
   documentId: string;
   collectionId: string;
   deadline: Deadline;
-}): Promise<string> {
-  const { documentId, collectionId, deadline } = input;
+  actor: User;
+  instanceOrigin?: string;
+}): Promise<DocumentSnapshot> {
+  const { documentId, collectionId, deadline, actor, instanceOrigin } = input;
   return readOnlyTransaction(
     { isolationLevel: Transaction.ISOLATION_LEVELS.REPEATABLE_READ },
     async (transaction) => {
@@ -199,7 +282,21 @@ export function readDocumentSnapshot(input: {
       ) {
         throw new DocumentSnapshotError();
       }
-      return toCanonicalMarkdown(document);
+      const syntax = parseCanonicalMarkdown(
+        await toCanonicalMarkdown(document)
+      );
+      if (instanceOrigin === undefined) {
+        return { syntax, links: null };
+      }
+
+      const references = extractInternalLinks(syntax.links, instanceOrigin);
+      const targets = await resolveLinkTargets({
+        batches: linkLookupBatches(references),
+        actor,
+        transaction,
+        deadline,
+      });
+      return { syntax, links: { references, targets } };
     }
   );
 }

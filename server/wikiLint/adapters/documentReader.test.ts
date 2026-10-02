@@ -1,22 +1,45 @@
+import { randomUUID } from "node:crypto";
 import type { Transaction, TransactionOptions } from "sequelize";
-import { DocumentPermission } from "@shared/types";
+import { CollectionPermission, DocumentPermission } from "@shared/types";
 import { parser } from "@server/editor";
-import { Collection, Document, UserMembership } from "@server/models";
+import {
+  Collection,
+  Document,
+  GroupMembership,
+  UserMembership,
+} from "@server/models";
 import { sequelize } from "@server/storage/database";
 import {
   buildCollection,
   buildDocument,
   buildDraftDocument,
+  buildGroup,
+  buildGroupUser,
   buildTeam,
   buildUser,
 } from "@server/test/factories";
 import { Deadline, DeadlineFloorError } from "../application/deadline";
+import { parseCanonicalMarkdown } from "./canonicalSyntax";
 import {
   DocumentSnapshotError,
   authorizeLintTarget,
   isDatabaseTimeout,
   readDocumentSnapshot,
 } from "./documentReader";
+
+/** The generic instance origin of the link fixtures. */
+const ORIGIN = "https://wiki.example.test";
+
+/**
+ * Builds the snapshot expected for Markdown read without links.
+ *
+ * @param markdown - the canonical Markdown.
+ * @returns the snapshot.
+ */
+const snapshotOf = (markdown: string) => ({
+  syntax: parseCanonicalMarkdown(markdown),
+  links: null,
+});
 
 /** A fixed clock, so every batch timeout is the floored budget. */
 const fixedClock = () => 0;
@@ -356,7 +379,7 @@ describe("authorizeLintTarget", () => {
 
 describe("readDocumentSnapshot", () => {
   it("re-reads the row in one repeatable-read, read-only transaction", async () => {
-    const { collection, document } = await buildFixture();
+    const { user, collection, document } = await buildFixture();
     const statements = recordStatements();
 
     await expect(
@@ -364,8 +387,9 @@ describe("readDocumentSnapshot", () => {
         documentId: document.id,
         collectionId: collection.id,
         deadline: fixedDeadline(),
+        actor: user,
       })
-    ).resolves.toBe("This is the text in an example document");
+    ).resolves.toEqual(snapshotOf("This is the text in an example document"));
 
     const recorded = statements();
     expect(recorded.map(({ sql }) => statementOf(sql))).toEqual([
@@ -428,13 +452,14 @@ describe("readDocumentSnapshot", () => {
           documentId: document.id,
           collectionId: collection.id,
           deadline: fixedDeadline(),
+          actor: user,
         })
-      ).resolves.toBe(markdown);
+      ).resolves.toEqual(snapshotOf(markdown));
     }
   });
 
   it("serializes content, never a stale text column", async () => {
-    const { collection, document } = await buildFixture({
+    const { user, collection, document } = await buildFixture({
       text: "## Stale",
       content: parser.parse("## Current")?.toJSON(),
     });
@@ -444,8 +469,9 @@ describe("readDocumentSnapshot", () => {
         documentId: document.id,
         collectionId: collection.id,
         deadline: fixedDeadline(),
+        actor: user,
       })
-    ).resolves.toBe("## Current");
+    ).resolves.toEqual(snapshotOf("## Current"));
   });
 
   it("throws after the document is soft deleted", async () => {
@@ -465,6 +491,7 @@ describe("readDocumentSnapshot", () => {
         documentId: document.id,
         collectionId: collection.id,
         deadline: fixedDeadline(),
+        actor: user,
       })
     ).rejects.toThrow(DocumentSnapshotError);
   });
@@ -490,12 +517,13 @@ describe("readDocumentSnapshot", () => {
         documentId: document.id,
         collectionId: collection.id,
         deadline: fixedDeadline(),
+        actor: user,
       })
     ).rejects.toThrow(DocumentSnapshotError);
   });
 
   it("refuses to start below the floor", async () => {
-    const { collection, document } = await buildFixture();
+    const { user, collection, document } = await buildFixture();
     const statements = recordStatements();
 
     await expect(
@@ -503,6 +531,7 @@ describe("readDocumentSnapshot", () => {
         documentId: document.id,
         collectionId: collection.id,
         deadline: fixedDeadline(99),
+        actor: user,
       })
     ).rejects.toThrow(DeadlineFloorError);
     expect(
@@ -510,6 +539,311 @@ describe("readDocumentSnapshot", () => {
         ({ sql }) => sql.startsWith("SET LOCAL") || sql.startsWith("SELECT")
       )
     ).toEqual([]);
+  });
+});
+
+describe("readDocumentSnapshot with internal links", () => {
+  /**
+   * Builds a UUID that no document has.
+   *
+   * @param index - a distinguishing number.
+   * @returns the UUID.
+   */
+  const missingUuid = (index: number) =>
+    `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+
+  /**
+   * Builds Markdown that links each reference in its own paragraph.
+   *
+   * @param refs - the document references.
+   * @returns the Markdown.
+   */
+  const linking = (refs: string[]) =>
+    refs.map((ref, index) => `[link ${index}](/doc/${ref})`).join("\n\n");
+
+  it("resolves only targets the actor can read, in the snapshot", async () => {
+    const actor = await buildUser();
+    const collection = await buildCollection({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    const readable = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+      collectionId: collection.id,
+    });
+    const draft = await buildDraftDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+      collectionId: collection.id,
+    });
+    const archived = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+      collectionId: collection.id,
+      archivedAt: new Date(),
+    });
+    const deleted = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+      collectionId: collection.id,
+    });
+    await deleted.destroy();
+
+    const owner = await buildUser({ teamId: actor.teamId });
+    const privateCollection = await buildCollection({
+      teamId: owner.teamId,
+      userId: owner.id,
+      permission: null,
+    });
+    const shared = await buildDocument({
+      teamId: owner.teamId,
+      userId: owner.id,
+      collectionId: privateCollection.id,
+    });
+    await UserMembership.create({
+      documentId: shared.id,
+      userId: actor.id,
+      createdById: owner.id,
+      permission: DocumentPermission.Read,
+    });
+    const protectedDocument = await buildDocument({
+      teamId: owner.teamId,
+      userId: owner.id,
+      collectionId: privateCollection.id,
+    });
+    const foreign = await buildDocument();
+
+    // Targets readable only through a group: one shared with the group on the
+    // document, one in a private collection shared with the group.
+    const group = await buildGroup({ teamId: owner.teamId, userId: owner.id });
+    await buildGroupUser({
+      groupId: group.id,
+      userId: actor.id,
+      teamId: actor.teamId,
+    });
+    const groupShared = await buildDocument({
+      teamId: owner.teamId,
+      userId: owner.id,
+      collectionId: privateCollection.id,
+    });
+    await GroupMembership.create({
+      createdById: owner.id,
+      documentId: groupShared.id,
+      groupId: group.id,
+      permission: DocumentPermission.Read,
+    });
+    const groupCollection = await buildCollection({
+      teamId: owner.teamId,
+      userId: owner.id,
+      permission: null,
+    });
+    await GroupMembership.create({
+      createdById: owner.id,
+      collectionId: groupCollection.id,
+      groupId: group.id,
+      permission: CollectionPermission.Read,
+    });
+    const inGroupCollection = await buildDocument({
+      teamId: owner.teamId,
+      userId: owner.id,
+      collectionId: groupCollection.id,
+    });
+
+    // A readable document whose URL identifier equals the last group of a
+    // UUID that no document has.
+    const collisionUuid = randomUUID();
+    const collision = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+      collectionId: collection.id,
+    });
+    await Document.unscoped().update(
+      { urlId: collisionUuid.split("-")[4] },
+      { where: { id: collision.id }, hooks: false, validate: false }
+    );
+
+    const source = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+      collectionId: collection.id,
+      text: linking([
+        readable.id.toUpperCase(),
+        `any-title-${readable.urlId}`,
+        draft.id,
+        archived.urlId,
+        shared.id,
+        groupShared.id,
+        inGroupCollection.urlId,
+        deleted.id,
+        protectedDocument.id,
+        `any-title-${protectedDocument.urlId}`,
+        foreign.id,
+        missingUuid(1),
+        "abcdefghij",
+        collisionUuid,
+        collisionUuid.split("-")[4],
+      ]),
+    });
+
+    const snapshot = await readDocumentSnapshot({
+      documentId: source.id,
+      collectionId: collection.id,
+      deadline: fixedDeadline(),
+      actor,
+      instanceOrigin: ORIGIN,
+    });
+
+    expect(snapshot.links?.references.map(({ key }) => key)).toEqual([
+      readable.id,
+      readable.urlId,
+      draft.id,
+      archived.urlId,
+      shared.id,
+      groupShared.id,
+      inGroupCollection.urlId,
+      deleted.id,
+      protectedDocument.id,
+      protectedDocument.urlId,
+      foreign.id,
+      missingUuid(1),
+      "abcdefghij",
+      collisionUuid,
+      collisionUuid.split("-")[4],
+    ]);
+    expect(Object.fromEntries(snapshot.links?.targets ?? [])).toEqual({
+      [readable.id]: "resolved",
+      [readable.urlId]: "resolved",
+      [draft.id]: "resolved",
+      [archived.urlId]: "resolved",
+      [shared.id]: "resolved",
+      [groupShared.id]: "resolved",
+      [inGroupCollection.urlId]: "resolved",
+      [deleted.id]: "unresolved",
+      [protectedDocument.id]: "unresolved",
+      [protectedDocument.urlId]: "unresolved",
+      [foreign.id]: "unresolved",
+      [missingUuid(1)]: "unresolved",
+      abcdefghij: "unresolved",
+      [collisionUuid]: "unresolved",
+      [collisionUuid.split("-")[4]]: "resolved",
+    });
+    expect(snapshot.syntax.links).toHaveLength(15);
+  });
+
+  it("resolves nothing without an instance origin", async () => {
+    const { user, collection, document } = await buildFixture({
+      text: linking([missingUuid(1)]),
+    });
+    const statements = recordStatements();
+
+    const snapshot = await readDocumentSnapshot({
+      documentId: document.id,
+      collectionId: collection.id,
+      deadline: fixedDeadline(),
+      actor: user,
+    });
+
+    expect(snapshot.links).toBeNull();
+    expect(snapshot.syntax.links).toHaveLength(1);
+    expect(
+      statements().filter(({ sql }) => statementOf(sql) === "SELECT documents")
+    ).toHaveLength(1);
+  });
+
+  it("resolves 501 keys in two bounded, sorted batches before commit", async () => {
+    const keys = Array.from({ length: 501 }, (_, index) =>
+      missingUuid(1000 - index)
+    );
+    const { user, collection, document } = await buildFixture({
+      text: linking(keys),
+    });
+    const statements = recordStatements();
+
+    const snapshot = await readDocumentSnapshot({
+      documentId: document.id,
+      collectionId: collection.id,
+      deadline: fixedDeadline(),
+      actor: user,
+      instanceOrigin: ORIGIN,
+    });
+
+    expect(snapshot.links?.references).toHaveLength(501);
+    expect([...(snapshot.links?.targets.values() ?? [])]).toEqual(
+      keys.map(() => "unresolved")
+    );
+
+    const recorded = statements();
+    expect(recorded.map(({ sql }) => statementOf(sql))).toEqual([
+      "START TRANSACTION;",
+      "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;",
+      "SET TRANSACTION READ ONLY",
+      "SET LOCAL lock_timeout = 1234",
+      "SET LOCAL statement_timeout = 1234",
+      "SELECT documents",
+      "SET LOCAL lock_timeout = 1234",
+      "SET LOCAL statement_timeout = 1234",
+      "SELECT documents",
+      "SET LOCAL lock_timeout = 1234",
+      "SET LOCAL statement_timeout = 1234",
+      "SELECT documents",
+      "COMMIT;",
+    ]);
+    const transaction = recorded[0].transaction;
+    expect(recorded.every((entry) => entry.transaction === transaction)).toBe(
+      true
+    );
+
+    const sorted = [...keys].sort();
+    const keysIn = (sql: string) =>
+      [
+        ...(/"id" IN \(([^)]*)\)/.exec(sql)?.[1] ?? "").matchAll(
+          /'([0-9a-f-]{36})'/g
+        ),
+      ].map((match) => match[1]);
+    expect(keysIn(recorded[8].sql)).toEqual(sorted.slice(0, 500));
+    expect(keysIn(recorded[11].sql)).toEqual(sorted.slice(500));
+    for (const index of [8, 11]) {
+      expect(recorded[index].sql).toContain(
+        `"document"."teamId" = '${user.teamId}'`
+      );
+      expect(recorded[index].sql).not.toMatch(
+        /"document"\."(text|content|state)"/
+      );
+    }
+    expect(
+      recorded.filter(({ sql }) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql))
+    ).toEqual([]);
+  });
+
+  it("refuses a link batch below the floor", async () => {
+    const { user, collection, document } = await buildFixture({
+      text: linking([missingUuid(1)]),
+    });
+    // The deadline starts and bounds the re-read at 0 ms; 950 ms have passed
+    // when the link batch is bounded.
+    let readings = 0;
+    const clock = () => (readings++ < 2 ? 0 : 950);
+    const statements = recordStatements();
+
+    await expect(
+      readDocumentSnapshot({
+        documentId: document.id,
+        collectionId: collection.id,
+        deadline: new Deadline(1000, clock),
+        actor: user,
+        instanceOrigin: ORIGIN,
+      })
+    ).rejects.toThrow(DeadlineFloorError);
+
+    const recorded = statements().map(({ sql }) => statementOf(sql));
+    expect(recorded.filter((sql) => sql.startsWith("SET LOCAL"))).toHaveLength(
+      2
+    );
+    expect(recorded.filter((sql) => sql === "SELECT documents")).toHaveLength(
+      1
+    );
+    expect(recorded.at(-1)).toBe("ROLLBACK;");
   });
 });
 
@@ -526,6 +860,7 @@ describe("database timeouts", () => {
         documentId: document.id,
         collectionId: collection.id,
         deadline: new Deadline(400),
+        actor: user,
       }).catch((error: unknown) => error);
       expect(isDatabaseTimeout(snapshotError)).toBe(true);
 

@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
 import { DatabaseError } from "sequelize";
 import type { User } from "@server/models";
-import type { LintTarget } from "../adapters/documentReader";
+import {
+  CanonicalMarkdownError,
+  parseCanonicalMarkdown,
+} from "../adapters/canonicalSyntax";
+import type { DocumentSnapshot, LintTarget } from "../adapters/documentReader";
 import { DocumentSnapshotError } from "../adapters/documentReader";
-import type { ReadOnlyResult } from "../core/contracts";
+import type { LinkTargetState, ReadOnlyResult } from "../core/contracts";
 import type * as DocumentRules from "../core/documentRules";
 import { evaluateDocumentRules } from "../core/documentRules";
+import { extractInternalLinks } from "../core/internalLinks";
 import type { PolicySet } from "../core/policySet";
 import { buildPolicySet } from "../core/policySet";
 import { createFinding } from "../core/registry";
@@ -103,6 +108,54 @@ function identityOf(collectionId: string) {
 /** Markdown missing `Details` and holding a level-1 heading on line 3. */
 const MARKDOWN = "## Overview\n\n# Title\n\nBody";
 
+const ORIGIN = "https://wiki.example.test";
+const TARGET_A = "00000000-0000-4000-8000-0000000000a1";
+const TARGET_B = "00000000-0000-4000-8000-0000000000b1";
+
+/**
+ * Markdown missing `Details`, linking A twice and B once on line 3, with one
+ * unrecognized link on line 5.
+ */
+const LINK_MARKDOWN = [
+  "## Overview",
+  "",
+  `See [a](/doc/${TARGET_A}) or [b](${ORIGIN}/doc/${TARGET_B}) or [a](/d/${TARGET_A.toUpperCase()})`,
+  "",
+  `[elsewhere](https://other.example.test/doc/${TARGET_A})`,
+].join("\n");
+
+/**
+ * Builds a snapshot without resolved links.
+ *
+ * @param markdown - the canonical Markdown.
+ * @returns the snapshot.
+ */
+const snapshotOf = (markdown: string): DocumentSnapshot => ({
+  syntax: parseCanonicalMarkdown(markdown),
+  links: null,
+});
+
+/**
+ * Builds a snapshot whose links resolve to the given states.
+ *
+ * @param markdown - the canonical Markdown.
+ * @param targets - the state of each key, in insertion order.
+ * @returns the snapshot.
+ */
+function linkSnapshot(
+  markdown: string,
+  targets: [string, LinkTargetState][]
+): DocumentSnapshot {
+  const syntax = parseCanonicalMarkdown(markdown);
+  return {
+    syntax,
+    links: {
+      references: extractInternalLinks(syntax.links, ORIGIN),
+      targets: new Map(targets),
+    },
+  };
+}
+
 const actor = {} as User;
 
 let now = 0;
@@ -117,7 +170,10 @@ const clock = () => now;
  */
 function fakeReader(
   target: LintTarget | null | Error,
-  snapshot: string | Error | (() => Promise<string>) = MARKDOWN
+  snapshot:
+    | DocumentSnapshot
+    | Error
+    | (() => Promise<DocumentSnapshot>) = snapshotOf(MARKDOWN)
 ) {
   return {
     authorizeLintTarget: vi.fn<LintDocumentReader["authorizeLintTarget"]>(
@@ -171,6 +227,7 @@ function lint(reader: LintDocumentReader): Promise<LintDocumentOutcome> {
     policySet,
     deadline: new Deadline(LINT_DOCUMENT_DEADLINE_MS, clock),
     reader,
+    instanceOrigin: ORIGIN,
   });
 }
 
@@ -402,12 +459,12 @@ describe("lintDocument", () => {
         },
         policies: [identityOf(STRUCTURE)],
       });
-      expect(reader.readDocumentSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({
-          documentId: DOCUMENT,
-          collectionId: STRUCTURE,
-        })
-      );
+      expect(reader.readDocumentSnapshot).toHaveBeenCalledWith({
+        documentId: DOCUMENT,
+        collectionId: STRUCTURE,
+        deadline: expect.any(Deadline),
+        actor,
+      });
       expect(vi.mocked(evaluateDocumentRules)).toHaveBeenLastCalledWith(
         expect.objectContaining({
           rules: [
@@ -439,29 +496,6 @@ describe("lintDocument", () => {
         );
       }
     );
-
-    it("fails the unit when internal links are enabled", async () => {
-      const reader = fakeReader(targetIn(LINKS));
-
-      await expect(lintResult(reader)).resolves.toStrictEqual(
-        failedResult(
-          [
-            systemFailure(
-              "VALIDATION_RUNTIME_FAILED",
-              documentScopeLocation(LINKS)
-            ),
-          ],
-          zeroScope(LINKS),
-          [identityOf(LINKS)],
-          [missingDetails]
-        )
-      );
-      expect(vi.mocked(evaluateDocumentRules)).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          rules: [expect.objectContaining({ kind: "required_sections" })],
-        })
-      );
-    });
 
     it("reports two failed kinds as one System Failure", async () => {
       vi.mocked(evaluateDocumentRules).mockReturnValueOnce({
@@ -496,13 +530,241 @@ describe("lintDocument", () => {
 
     it("keeps the collection out of a failed kind when unreadable", async () => {
       const result = await lintResult(
-        fakeReader(targetIn(LINKS, "unreadable"))
+        fakeReader(targetIn(LINKS, "unreadable"), snapshotOf(LINK_MARKDOWN))
       );
 
       expect(result.systemFailures).toEqual([
         systemFailure("VALIDATION_RUNTIME_FAILED", documentScopeLocation()),
       ]);
       expect(JSON.stringify(result)).not.toContain(LINKS);
+    });
+  });
+
+  describe("internal links", () => {
+    /**
+     * Builds an unresolved-link Error at a column of line 3.
+     *
+     * @param column - the column.
+     * @returns the expected Finding.
+     */
+    const unresolvedAt = (column: number) => ({
+      code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+      severity: "error",
+      message: expect.any(String),
+      location: {
+        kind: "text",
+        documentId: DOCUMENT,
+        line: 3,
+        column,
+        path: [1],
+      },
+    });
+
+    /** The columns of the three recognized links on line 3. */
+    const columns = LINK_MARKDOWN.split("\n")[2]
+      .split("")
+      .flatMap((char, index) => (char === "[" ? [index + 1] : []));
+
+    const linkScope = (evaluatedLinkCount: number) => ({
+      kind: "document",
+      documentId: DOCUMENT,
+      collectionId: LINKS,
+      evaluatedDocumentCount: 1,
+      evaluatedLinkCount,
+    });
+
+    it("resolves through the reader only when the kind is enabled", async () => {
+      const reader = fakeReader(
+        targetIn(LINKS),
+        linkSnapshot(LINK_MARKDOWN, [
+          [TARGET_A, "resolved"],
+          [TARGET_B, "resolved"],
+        ])
+      );
+
+      await lintResult(reader);
+
+      expect(reader.readDocumentSnapshot).toHaveBeenCalledWith({
+        documentId: DOCUMENT,
+        collectionId: LINKS,
+        deadline: expect.any(Deadline),
+        actor,
+        instanceOrigin: ORIGIN,
+      });
+    });
+
+    it("completes without link Findings when every target resolves", async () => {
+      const reader = fakeReader(
+        targetIn(LINKS),
+        linkSnapshot(LINK_MARKDOWN, [
+          [TARGET_A, "resolved"],
+          [TARGET_B, "resolved"],
+        ])
+      );
+
+      await expect(lintResult(reader)).resolves.toStrictEqual({
+        state: "complete",
+        complete: true,
+        clean: false,
+        errors: [missingDetails],
+        warnings: [],
+        systemFailures: [],
+        scope: linkScope(3),
+        policies: [identityOf(LINKS)],
+      });
+    });
+
+    it("reports every unresolved occurrence at its source", async () => {
+      const reader = fakeReader(
+        targetIn(LINKS),
+        linkSnapshot(LINK_MARKDOWN, [
+          [TARGET_A, "unresolved"],
+          [TARGET_B, "resolved"],
+        ])
+      );
+
+      await expect(lintResult(reader)).resolves.toStrictEqual({
+        state: "complete",
+        complete: true,
+        clean: false,
+        errors: [
+          unresolvedAt(columns[0]),
+          unresolvedAt(columns[2]),
+          missingDetails,
+        ],
+        warnings: [],
+        systemFailures: [],
+        scope: linkScope(3),
+        policies: [identityOf(LINKS)],
+      });
+    });
+
+    it("is byte-equal whatever the order of the target states", async () => {
+      const first = await lintResult(
+        fakeReader(
+          targetIn(LINKS),
+          linkSnapshot(LINK_MARKDOWN, [
+            [TARGET_A, "unresolved"],
+            [TARGET_B, "unresolved"],
+          ])
+        )
+      );
+      const second = await lintResult(
+        fakeReader(
+          targetIn(LINKS),
+          linkSnapshot(LINK_MARKDOWN, [
+            [TARGET_B, "unresolved"],
+            [TARGET_A, "unresolved"],
+          ])
+        )
+      );
+
+      expect(first.errors).toHaveLength(4);
+      expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    });
+
+    it("counts no links when the kind is not enabled", async () => {
+      const reader = fakeReader(
+        targetIn(STRUCTURE),
+        linkSnapshot(LINK_MARKDOWN, [[TARGET_A, "unresolved"]])
+      );
+
+      const result = await lintResult(reader);
+
+      expect(result.scope).toMatchObject({ evaluatedLinkCount: 0 });
+      expect(JSON.stringify(result)).not.toContain(
+        "INTERNAL_LINK_TARGET_UNRESOLVED"
+      );
+    });
+
+    it("fails the unit on an unresolved occurrence without a position", async () => {
+      const snapshot = linkSnapshot(LINK_MARKDOWN, [
+        [TARGET_A, "resolved"],
+        [TARGET_B, "unresolved"],
+      ]);
+      snapshot.links!.references[1].position = null;
+
+      await expect(
+        lintResult(fakeReader(targetIn(LINKS), snapshot))
+      ).resolves.toStrictEqual(
+        failedResult(
+          [
+            systemFailure(
+              "VALIDATION_RUNTIME_FAILED",
+              documentScopeLocation(LINKS)
+            ),
+          ],
+          zeroScope(LINKS),
+          [identityOf(LINKS)],
+          [missingDetails]
+        )
+      );
+    });
+
+    it("fails the unit when the reader resolved no links", async () => {
+      const result = await lintResult(
+        fakeReader(targetIn(LINKS), snapshotOf(LINK_MARKDOWN))
+      );
+
+      expect(result).toStrictEqual(
+        failedResult(
+          [
+            systemFailure(
+              "VALIDATION_RUNTIME_FAILED",
+              documentScopeLocation(LINKS)
+            ),
+          ],
+          zeroScope(LINKS),
+          [identityOf(LINKS)],
+          [missingDetails]
+        )
+      );
+    });
+
+    it.each([
+      [
+        "the floor refused a link batch",
+        new DeadlineFloorError(),
+        "VALIDATION_TIMEOUT",
+      ],
+      ["a link batch timed out", "57014", "VALIDATION_TIMEOUT"],
+      ["a link batch lock wait timed out", "55P03", "VALIDATION_TIMEOUT"],
+      ["a link batch query failed", "42P01", "VALIDATION_RUNTIME_FAILED"],
+    ])("fails without Findings when %s", async (_name, failure, code) => {
+      const error =
+        typeof failure === "string"
+          ? new DatabaseError(
+              Object.assign(new Error("database error"), {
+                code: failure,
+                sql: "",
+              })
+            )
+          : failure;
+
+      await expect(
+        lintResult(fakeReader(targetIn(LINKS), error))
+      ).resolves.toStrictEqual(
+        failedResult(
+          [systemFailure(code, documentScopeLocation())],
+          zeroScope(LINKS),
+          [identityOf(LINKS)]
+        )
+      );
+    });
+
+    it("times out when the deadline expired during link resolution", async () => {
+      const reader = fakeReader(targetIn(LINKS), async () => {
+        now = LINT_DOCUMENT_DEADLINE_MS;
+        throw new Error("connection lost");
+      });
+
+      await expect(lintResult(reader)).resolves.toStrictEqual(
+        failedResult(
+          [systemFailure("VALIDATION_TIMEOUT", documentScopeLocation())],
+          zeroScope(LINKS),
+          [identityOf(LINKS)]
+        )
+      );
     });
   });
 
@@ -549,7 +811,7 @@ describe("lintDocument", () => {
     it("times out when the deadline expired during construction", async () => {
       const reader = fakeReader(targetIn(STRUCTURE), async () => {
         now = LINT_DOCUMENT_DEADLINE_MS;
-        return MARKDOWN;
+        return snapshotOf(MARKDOWN);
       });
 
       await expect(lintResult(reader)).resolves.toStrictEqual(
@@ -566,10 +828,23 @@ describe("lintDocument", () => {
       ).resolves.toStrictEqual(timeoutResult("VALIDATION_RUNTIME_FAILED"));
     });
 
+    it("fails at runtime on a canonicalization failure, even after expiry", async () => {
+      const reader = fakeReader(targetIn(STRUCTURE), async () => {
+        now = LINT_DOCUMENT_DEADLINE_MS;
+        throw new CanonicalMarkdownError(
+          "Document has no authoritative content"
+        );
+      });
+
+      await expect(lintResult(reader)).resolves.toStrictEqual(
+        timeoutResult("VALIDATION_RUNTIME_FAILED")
+      );
+    });
+
     it("fails at runtime on a canonical parse failure, even after expiry", async () => {
       const reader = fakeReader(targetIn(STRUCTURE), async () => {
         now = LINT_DOCUMENT_DEADLINE_MS;
-        return "## Overview\r\n";
+        return snapshotOf("## Overview\r\n");
       });
 
       await expect(lintResult(reader)).resolves.toStrictEqual(

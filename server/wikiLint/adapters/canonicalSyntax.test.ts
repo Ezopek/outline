@@ -1,3 +1,4 @@
+import type Token from "markdown-it/lib/token.mjs";
 import type { ProsemirrorData } from "@shared/types";
 import { parser } from "@server/editor";
 import { Document } from "@server/models";
@@ -11,6 +12,7 @@ import {
   parseCanonicalMarkdown,
   toCanonicalMarkdown,
 } from "./canonicalSyntax";
+import { tokenizeCanonicalMarkdown } from "./lintTokenizer";
 
 /**
  * Lists every node of a tree in pre-order.
@@ -620,5 +622,271 @@ describe("serializer-produced regressions", () => {
         path: [1, 1, 0, 1],
       },
     ]);
+  });
+});
+
+describe("link positions", () => {
+  /**
+   * Parses Markdown and returns its links, checking that each position points
+   * at a `[` or `<` of the exact string.
+   *
+   * @param markdown - the canonical Markdown.
+   * @returns the links.
+   */
+  function linksOf(markdown: string) {
+    const lines = markdown.split("\n");
+    const { links } = parseCanonicalMarkdown(markdown);
+    for (const { position } of links) {
+      if (position) {
+        expect(
+          Array.from(lines[position.line - 1])[position.column - 1]
+        ).toMatch(/^[[<]$/);
+      }
+    }
+    return links;
+  }
+
+  /**
+   * Builds a link to a document path.
+   *
+   * @param ref - the document reference.
+   * @param line - the line.
+   * @param column - the column.
+   * @param path - the enclosing block's path.
+   * @returns the link.
+   */
+  const linkAt = (
+    ref: string,
+    line: number,
+    column: number,
+    path: number[]
+  ) => ({
+    href: `/doc/${ref}`,
+    position: { line, column, path },
+  });
+
+  it.each([
+    [
+      "a paragraph after astral text",
+      "Text ż😀 [a](/doc/x)",
+      [linkAt("x", 1, 9, [0])],
+    ],
+    ["a soft line", "first line\nsecond [a](/doc/x)", [linkAt("x", 2, 8, [0])]],
+    [
+      "a serialized hard-break line",
+      "before\\nafter [a](/doc/x)",
+      [linkAt("x", 1, 15, [0])],
+    ],
+    [
+      "a CommonMark hard-break line",
+      "before  \nafter [a](/doc/x)",
+      [linkAt("x", 2, 7, [0])],
+    ],
+    [
+      "a heading with a closing #",
+      "## Heading [a](/doc/x) ##",
+      [linkAt("x", 1, 12, [0])],
+    ],
+    [
+      "a blockquote's second line",
+      "> quoted\n> second [a](/doc/x)",
+      [linkAt("x", 2, 10, [0, 0])],
+    ],
+    ["a list item", "- item [a](/doc/x)", [linkAt("x", 1, 8, [0, 0, 0])]],
+    [
+      "a checkbox item",
+      "- [ ] task [a](/doc/x)\n- [x] done [b](/doc/y)",
+      [linkAt("x", 1, 12, [0, 0, 0]), linkAt("y", 2, 12, [0, 1, 0])],
+    ],
+    [
+      "a notice",
+      ":::info\nnotice [a](/doc/x)\n:::",
+      [linkAt("x", 2, 8, [0, 0])],
+    ],
+    [
+      "duplicate and escaped-pipe table cells",
+      [
+        "| H   | I   |",
+        "|-----|-----|",
+        "| [a](/doc/x) | [a](/doc/x) |",
+        "| a\\|b [c](/doc/z) | \\| [d](/doc/w) |",
+      ].join("\n"),
+      [
+        linkAt("x", 3, 3, [0, 1, 0, 0]),
+        linkAt("x", 3, 17, [0, 1, 1, 0]),
+        linkAt("z", 4, 8, [0, 2, 0, 0]),
+        linkAt("w", 4, 25, [0, 2, 1, 0]),
+      ],
+    ],
+    [
+      "an alpha-list line whose length changed",
+      "j. one\nk. two [a](/doc/x)",
+      [linkAt("x", 2, 8, [0, 1, 0])],
+    ],
+    [
+      "a nested list",
+      "1. one\n   - nested [a](/doc/x)",
+      [linkAt("x", 2, 13, [0, 0, 1, 0, 0])],
+    ],
+  ])("pins a link in %s", (_name, markdown, expected) => {
+    expect(linksOf(markdown)).toEqual(expected);
+  });
+
+  it("pins an autolink at its <", () => {
+    expect(
+      linksOf("See <https://wiki.example.test/doc/x> and [a](/doc/y)")
+    ).toEqual([
+      {
+        href: "https://wiki.example.test/doc/x",
+        position: { line: 1, column: 5, path: [0] },
+      },
+      linkAt("y", 1, 43, [0]),
+    ]);
+  });
+
+  it("gives no position to a link in a notice inside a table cell", () => {
+    expect(
+      linksOf(
+        [
+          "| H   | I   |",
+          "|-----|-----|",
+          "| :::info<br>n [a](/doc/x)<br><br>::: | [b](/doc/y) |",
+        ].join("\n")
+      )
+    ).toEqual([
+      { href: "/doc/x", position: null },
+      linkAt("y", 3, 41, [0, 1, 1, 0]),
+    ]);
+  });
+
+  it("skips images, mentions, code, and escaped brackets", () => {
+    expect(
+      linksOf(
+        [
+          "![alt](/doc/x) `[a](/doc/x)` \\[b](/doc/x)",
+          "",
+          "@[label](https://wiki.example.test/doc/x) [c]d](/doc/x)",
+          "",
+          "```",
+          "[e](/doc/x)",
+          "```",
+        ].join("\n")
+      )
+    ).toEqual([]);
+  });
+
+  it("positions 8,000 links on one line in linear time", () => {
+    const line = Array.from(
+      { length: 8000 },
+      (_, index) =>
+        `ż😀 [link ${index}](/doc/00000000-0000-4000-8000-${String(index).padStart(12, "0")})`
+    ).join(" ");
+
+    const { links } = parseCanonicalMarkdown(line);
+
+    expect(links).toHaveLength(8000);
+    expect(links.every(({ position }) => position?.line === 1)).toBe(true);
+    expect(links[7999].position?.column).toBe(
+      Array.from(line.slice(0, line.lastIndexOf("["))).length + 1
+    );
+  });
+
+  it("positions links of serializer output", async () => {
+    const doc = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "ż😀 " },
+            {
+              type: "text",
+              text: "one",
+              marks: [{ type: "link", attrs: { href: "/doc/x" } }],
+            },
+            { type: "br" },
+            {
+              type: "text",
+              text: "two",
+              marks: [{ type: "link", attrs: { href: "/doc/y" } }],
+            },
+          ],
+        },
+      ],
+    } as unknown as ProsemirrorData;
+    const markdown = await toCanonicalMarkdown(doc);
+
+    expect(markdown).toBe("ż😀 [one](/doc/x)\\n[two](/doc/y)");
+    expect(linksOf(markdown)).toEqual([
+      linkAt("x", 1, 4, [0]),
+      linkAt("y", 1, 19, [0]),
+    ]);
+  });
+});
+
+describe("tokenizeCanonicalMarkdown", () => {
+  /**
+   * Reduces a token to its compared fields. A mention's `id` and `modelId`
+   * may be generated per parse, so they are left out.
+   *
+   * @param token - the token.
+   * @returns the compared fields.
+   */
+  const shape = (token: Token): unknown => ({
+    type: token.type,
+    tag: token.tag,
+    map: token.map,
+    content: token.content,
+    markup: token.markup,
+    attrs:
+      token.type === "mention"
+        ? token.attrs?.filter(([name]) => name !== "id" && name !== "modelId")
+        : token.attrs,
+    children: token.children?.map(shape) ?? null,
+  });
+
+  const corpus = [
+    fixture,
+    "Text ż😀 [a](/doc/x) <https://wiki.example.test/doc/y> ![i](/i.png)",
+    "first\nsecond [a](/doc/x)\\nthird  \nfourth\n\\\nfifth",
+    "## Heading [a](/doc/x) ##\n\nSetext\n===",
+    "> quoted\n> second [a](/doc/x)\n> - in list",
+    "- [ ] task [a](/doc/x)\n- [x] done\n  - nested [b](/doc/y)",
+    "j. one\nk. two [a](/doc/x)\n\nA. upper",
+    ":::info\nnotice [a](/doc/x)\n:::\n\n+++ Toggle\nbody\n+++",
+    [
+      "| H   | I   |",
+      "|-----|-----|",
+      "| [a](/doc/x) | a\\|b [c](/doc/z) |",
+      "| :::info<br>n [a](/doc/x)<br><br>::: | [x] done<br>[ ] open |",
+      "| one\\ntwo | <br> |",
+    ].join("\n"),
+    "@[label](https://wiki.example.test/doc/x) @[User](mention://00000000-0000-4000-8000-000000000001/user/00000000-0000-4000-8000-000000000002)",
+    "[a]b](/doc/x) ==mark== __under__ ~~strike~~ $x^2$ :smile:",
+    "$$\nx = 1\n$$\n\n```js\n[a](/doc/x)\n```\n\n---",
+    "[report.pdf 1024](/api/attachments.redirect?id=00000000-0000-4000-8000-000000000001)",
+  ];
+
+  it.each(corpus.map((markdown) => [markdown]))(
+    "yields the shared parser's tokens for %j",
+    (markdown) => {
+      expect(tokenizeCanonicalMarkdown(markdown).tokens.map(shape)).toEqual(
+        parser.tokenizer.parse(markdown, {}).map(shape)
+      );
+    }
+  );
+
+  it("returns null for a token it did not observe", () => {
+    const { tokens, linkPosition } = tokenizeCanonicalMarkdown("[a](/doc/x)");
+    const other = parser.tokenizer.parse("[a](/doc/x)", {})[1].children?.[0];
+
+    expect(tokens[1].children?.[0].type).toBe("link_open");
+    expect(linkPosition(tokens[1].children![0], [0])).toEqual({
+      line: 1,
+      column: 1,
+      path: [0],
+    });
+    expect(other?.type).toBe("link_open");
+    expect(linkPosition(other!, [0])).toBeNull();
   });
 });

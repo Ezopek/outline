@@ -3,6 +3,7 @@ import type {
   Finding,
   IssueItem,
   IssueLocation,
+  ResolvedLinks,
   SyntaxField,
   SyntaxNode,
   SyntaxPosition,
@@ -12,14 +13,15 @@ import { WikiLintContractError } from "./contracts";
 import type { MarkdownStructure, RuleConfig, RuleKind } from "./registry";
 import { RULE_REGISTRY, createFinding, getIssueDefinition } from "./registry";
 
-type StructureRuleKind =
+type DocumentRuleKind =
   | "required_sections"
   | "section_order"
   | "allowed_heading_levels"
   | "required_metadata_fields"
   | "metadata_field_formats"
   | "unsupported_markdown_structures"
-  | "discouraged_markdown_structures";
+  | "discouraged_markdown_structures"
+  | "internal_links";
 
 type RuleOf<K extends RuleKind> = Extract<RuleConfig, { kind: K }>;
 
@@ -28,10 +30,11 @@ type Emit = (location: IssueLocation) => void;
 interface RuleContext {
   documentId: string;
   syntax: CanonicalSyntax;
+  links?: ResolvedLinks;
   emit: Emit;
 }
 
-const structureRuleKinds: ReadonlySet<string> = new Set<StructureRuleKind>([
+const documentRuleKinds: ReadonlySet<string> = new Set<DocumentRuleKind>([
   "required_sections",
   "section_order",
   "allowed_heading_levels",
@@ -39,6 +42,7 @@ const structureRuleKinds: ReadonlySet<string> = new Set<StructureRuleKind>([
   "metadata_field_formats",
   "unsupported_markdown_structures",
   "discouraged_markdown_structures",
+  "internal_links",
 ]);
 
 /** Block kinds produced by the adapter for each configurable structure. */
@@ -287,10 +291,33 @@ function markdownStructures(
 }
 
 /**
- * Runs one structure rule, emitting each Finding location as it is found.
+ * Reports each internal-link occurrence whose target is unresolved, at the
+ * occurrence's source position.
+ *
+ * @param context - the document, its resolved links, and the emit callback.
+ * @throws WikiLintContractError when the links were not resolved, a key has
+ *   no target state, or an unresolved occurrence has no position.
+ */
+function internalLinks({ documentId, links, emit }: RuleContext): void {
+  if (!links) {
+    throw new WikiLintContractError("Internal links were not resolved");
+  }
+  for (const reference of links.references) {
+    const state = links.targets.get(reference.key);
+    if (state !== "resolved" && state !== "unresolved") {
+      throw new WikiLintContractError("A link target has no state");
+    }
+    if (state === "unresolved") {
+      emit(textLocation(documentId, reference.position));
+    }
+  }
+}
+
+/**
+ * Runs one document rule, emitting each Finding location as it is found.
  *
  * @param rule - the rule to run.
- * @param context - the document, its syntax, and the emit callback.
+ * @param context - the document, its syntax and links, and the emit callback.
  */
 function evaluateRule(rule: RuleConfig, context: RuleContext): void {
   switch (rule.kind) {
@@ -307,8 +334,10 @@ function evaluateRule(rule: RuleConfig, context: RuleContext): void {
     case "unsupported_markdown_structures":
     case "discouraged_markdown_structures":
       return markdownStructures(rule, context);
+    case "internal_links":
+      return internalLinks(context);
     default:
-      throw new WikiLintContractError("Not a document structure rule");
+      throw new WikiLintContractError("Not a document rule");
   }
 }
 
@@ -329,28 +358,32 @@ export function documentSurfaceRules(
 }
 
 /**
- * Evaluates the document-structure rules of one document. Each rule kind runs
- * in isolation: a kind that throws is reported in `failedKinds`, the Findings
- * it emitted before throwing are kept, and later kinds still run.
+ * Evaluates the document rules of one document: the structure kinds and
+ * `internal_links`. Each rule kind runs in isolation: a kind that throws is
+ * reported in `failedKinds`, the Findings it emitted before throwing are kept,
+ * and later kinds still run.
  *
  * @param input.documentId - the evaluated document.
  * @param input.syntax - the document's canonical syntax from the adapter.
- * @param input.rules - the enabled structure rules, at most one per kind.
+ * @param input.rules - the enabled document rules, at most one per kind.
+ * @param input.links - the resolved internal links; `internal_links` fails
+ *   without them.
  * @returns Findings with zero-based per-kind ordinals, and the failed kinds.
- * @throws WikiLintContractError when a rule is not a structure rule or a kind repeats.
+ * @throws WikiLintContractError when a rule is not a document rule or a kind repeats.
  */
 export function evaluateDocumentRules(input: {
   documentId: string;
   syntax: CanonicalSyntax;
   rules: readonly RuleConfig[];
+  links?: ResolvedLinks;
 }): { findings: IssueItem<Finding>[]; failedKinds: RuleKind[] } {
-  const { documentId, syntax, rules } = input;
+  const { documentId, syntax, rules, links } = input;
   const kinds = rules.map((rule) => rule.kind);
   if (
-    kinds.some((kind) => !structureRuleKinds.has(kind)) ||
+    kinds.some((kind) => !documentRuleKinds.has(kind)) ||
     new Set(kinds).size !== kinds.length
   ) {
-    throw new WikiLintContractError("Invalid document structure rules");
+    throw new WikiLintContractError("Invalid document rules");
   }
 
   const findings: IssueItem<Finding>[] = [];
@@ -363,7 +396,7 @@ export function evaluateDocumentRules(input: {
       ordinal++;
     };
     try {
-      evaluateRule(rule, { documentId, syntax, emit });
+      evaluateRule(rule, { documentId, syntax, links, emit });
     } catch {
       failedKinds.push(rule.kind);
     }

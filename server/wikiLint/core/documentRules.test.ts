@@ -1,5 +1,9 @@
 import { parseCanonicalMarkdown } from "../adapters/canonicalSyntax";
-import type { CanonicalSyntax } from "./contracts";
+import type {
+  CanonicalSyntax,
+  InternalLinkReference,
+  LinkTargetState,
+} from "./contracts";
 import { WikiLintContractError } from "./contracts";
 import {
   documentSurfaceRules,
@@ -498,6 +502,7 @@ describe("evaluateDocumentRules", () => {
         },
         { kind: "heading", level: 1, text: "B", position: null, children: [] },
       ],
+      links: [],
     };
 
     const result = evaluateDocumentRules({
@@ -519,7 +524,6 @@ describe("evaluateDocumentRules", () => {
   });
 
   it.each([
-    { kind: "internal_links" },
     { kind: "parent_document_resolved" },
     { kind: "hierarchy_acyclic" },
     { kind: "published_documents_in_structure" },
@@ -552,6 +556,146 @@ describe("evaluateDocumentRules", () => {
       expect(issue.location).not.toHaveProperty("column");
       expect(issue.location).not.toHaveProperty("relationshipKind");
     }
+  });
+});
+
+describe("internal_links", () => {
+  const links = rule({ kind: "internal_links" });
+  const levels = rule({ kind: "allowed_heading_levels", levels: [2] });
+  const syntax = parseCanonicalMarkdown("# Title");
+  const A = "00000000-0000-4000-8000-0000000000a1";
+  const B = "00000000-0000-4000-8000-0000000000b1";
+
+  /**
+   * Builds a reference to a UUID key.
+   *
+   * @param key - the key.
+   * @param line - the line of its position, or null for no position.
+   * @returns the reference.
+   */
+  const ref = (key: string, line: number | null): InternalLinkReference => ({
+    key,
+    keyKind: "id",
+    position: line === null ? null : { line, column: 3, path: [line - 1] },
+  });
+
+  /**
+   * Evaluates the link rule after a structure rule.
+   *
+   * @param references - the references.
+   * @param targets - the target states.
+   * @returns the evaluation output.
+   */
+  const evaluate = (
+    references: InternalLinkReference[],
+    targets: [string, LinkTargetState][]
+  ) =>
+    evaluateDocumentRules({
+      documentId,
+      syntax,
+      rules: [levels, links],
+      links: { references, targets: new Map(targets) },
+    });
+
+  it("reports each unresolved occurrence in order with its own ordinal", () => {
+    const result = evaluate(
+      [ref(A, 2), ref(B, 3), ref(A, 4), ref(B, 5)],
+      [
+        [A, "unresolved"],
+        [B, "resolved"],
+      ]
+    );
+
+    expect(result.failedKinds).toEqual([]);
+    expect(result.findings).toEqual([
+      {
+        issue: expect.objectContaining({ code: "HEADING_LEVEL_NOT_ALLOWED" }),
+        ordinal: 0,
+      },
+      {
+        issue: {
+          code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+          severity: "error",
+          message: expect.any(String),
+          location: at(2, 3, [1]),
+        },
+        ordinal: 0,
+      },
+      {
+        issue: expect.objectContaining({
+          code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+          location: at(4, 3, [3]),
+        }),
+        ordinal: 1,
+      },
+    ]);
+  });
+
+  it("emits nothing when every target resolves", () => {
+    expect(
+      evaluateDocumentRules({
+        documentId,
+        syntax,
+        rules: [links],
+        links: {
+          references: [ref(A, null), ref(A, 2)],
+          targets: new Map([[A, "resolved"]]),
+        },
+      })
+    ).toEqual({ findings: [], failedKinds: [] });
+  });
+
+  it("fails only its kind on an unresolved occurrence without a position", () => {
+    const result = evaluate(
+      [ref(A, 2), ref(B, null), ref(A, 4)],
+      [
+        [A, "unresolved"],
+        [B, "unresolved"],
+      ]
+    );
+
+    expect(result.failedKinds).toEqual(["internal_links"]);
+    expect(
+      result.findings.map((item) => [item.issue.code, item.ordinal])
+    ).toEqual([
+      ["HEADING_LEVEL_NOT_ALLOWED", 0],
+      ["INTERNAL_LINK_TARGET_UNRESOLVED", 0],
+    ]);
+  });
+
+  it("fails its kind when a key has no target state", () => {
+    const result = evaluate([ref(A, 2), ref(B, 3)], [[A, "unresolved"]]);
+
+    expect(result.failedKinds).toEqual(["internal_links"]);
+    expect(result.findings.map((item) => item.issue.code)).toEqual([
+      "HEADING_LEVEL_NOT_ALLOWED",
+      "INTERNAL_LINK_TARGET_UNRESOLVED",
+    ]);
+  });
+
+  it("fails its kind when the links were not resolved", () => {
+    const result = evaluateDocumentRules({
+      documentId,
+      syntax,
+      rules: [links, levels],
+    });
+
+    expect(result.failedKinds).toEqual(["internal_links"]);
+    expect(result.findings.map((item) => item.issue.code)).toEqual([
+      "HEADING_LEVEL_NOT_ALLOWED",
+    ]);
+  });
+
+  it("reveals nothing about a target in its Finding", () => {
+    const result = evaluate([ref(A, 2)], [[A, "unresolved"]]);
+
+    expect(Object.keys(result.findings[0].issue)).toEqual([
+      "code",
+      "severity",
+      "message",
+      "location",
+    ]);
+    expect(JSON.stringify(result)).not.toContain(A);
   });
 });
 

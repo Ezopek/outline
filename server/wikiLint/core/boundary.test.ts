@@ -43,15 +43,26 @@ const isLocaleMember = (name: string) =>
   name === "localeCompare" || name.startsWith("toLocale");
 
 /**
- * Checks whether a module specifier is allowed in a core file: `zod`, or a
- * relative module that stays inside the core directory or its subdirectories.
+ * The pure baseline helpers the link function reuses, besides `zod`. Each is
+ * import-free or pure.
+ */
+const allowedPackages = new Set([
+  "zod",
+  "validator/lib/isUUID",
+  "@shared/utils/UrlHelper",
+]);
+
+/**
+ * Checks whether a module specifier is allowed in a core file: an allowed
+ * package, or a relative module that stays inside the core directory or its
+ * subdirectories.
  *
  * @param fileName - the importing file.
  * @param specifier - the module specifier.
  * @returns whether the import is allowed.
  */
 function isAllowedImport(fileName: string, specifier: string): boolean {
-  if (specifier === "zod") {
+  if (allowedPackages.has(specifier)) {
     return true;
   }
   if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
@@ -195,13 +206,21 @@ describe("core boundary", () => {
     ["toLocaleUpperCase", 'export const s = "a".toLocaleUpperCase();'],
     ["an import that leaves the core", 'import { x } from "./sub/../../x";'],
     ["the core's parent", 'import { x } from "..";'],
+    ["all of validator", 'import validator from "validator";'],
+    [
+      "the URL utilities",
+      'import { isInternalUrl } from "@shared/utils/urls";',
+    ],
+    ["a UrlHelper subpath", 'import { x } from "@shared/utils/UrlHelper/x";'],
   ])("reports %s", (_name, source) => {
     expect(findBoundaryViolations(syntheticFile, source)).not.toEqual([]);
   });
 
-  it("allows zod, sibling modules, and member names", () => {
+  it("allows the allowed packages, sibling modules, and member names", () => {
     const source = [
       'import { z } from "zod";',
+      'import isUUID from "validator/lib/isUUID";',
+      'import { UrlHelper } from "@shared/utils/UrlHelper";',
       'import type { Finding } from "./contracts";',
       'import { sortIssues } from "./ordering";',
       'export { createFinding } from "./registry";',
@@ -242,6 +261,7 @@ describe("core boundary", () => {
       expect.arrayContaining([
         "contracts.ts",
         "documentRules.ts",
+        "internalLinks.ts",
         "ordering.ts",
         "registry.ts",
         "result.ts",
@@ -257,5 +277,26 @@ describe("core boundary", () => {
         ),
       }).toEqual({ name, violations: [] });
     }
+  });
+
+  it("keeps the allowed UrlHelper module free of imports", () => {
+    const file = ts.createSourceFile(
+      "UrlHelper.ts",
+      fs.readFileSync(
+        path.resolve(coreDir, "../../../shared/utils/UrlHelper.ts"),
+        "utf8"
+      ),
+      ts.ScriptTarget.Latest,
+      true
+    );
+    const imports = file.statements.filter(
+      (statement) =>
+        ts.isImportDeclaration(statement) ||
+        ts.isImportEqualsDeclaration(statement) ||
+        (ts.isExportDeclaration(statement) && !!statement.moduleSpecifier)
+    );
+
+    expect(imports).toEqual([]);
+    expect(file.text).not.toMatch(/\b(require|import)\s*\(/);
   });
 });

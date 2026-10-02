@@ -207,9 +207,48 @@ export interface SyntaxNode {
   children: SyntaxNode[];
 }
 
+/** A link token of the canonical Markdown. */
+export interface SyntaxLink {
+  /** The link destination, as normalized by the parser. */
+  href: string;
+  /**
+   * Position of the first character of the link's source syntax, `[` or `<`;
+   * null when it cannot be proven.
+   */
+  position: SyntaxPosition | null;
+}
+
 /** Canonical Markdown parsed into a block tree with safe positions. */
 export interface CanonicalSyntax {
   children: SyntaxNode[];
+  /** Every link token, in document order. */
+  links: SyntaxLink[];
+}
+
+/** One recognized internal-link occurrence and the key that looks it up. */
+export interface InternalLinkReference {
+  /** A lowercased document UUID, or a URL identifier in its original case. */
+  key: string;
+  keyKind: "id" | "urlId";
+  /** The link's source position, copied from the adapter. */
+  position: SyntaxPosition | null;
+}
+
+/**
+ * The state of a link target as the core sees it. Missing, deleted, and
+ * inaccessible targets are all `unresolved`.
+ */
+export type LinkTargetState = "resolved" | "unresolved";
+
+/** The internal-link references of a document and the state of each key. */
+export interface ResolvedLinks {
+  references: InternalLinkReference[];
+  /**
+   * The state of each key, keyed by the bare key without its kind. An `id`
+   * key and a `urlId` key never collide: a lowercased UUID contains `-`, and
+   * a URL identifier captured by `SLUG_URL_REGEX` never does.
+   */
+  targets: ReadonlyMap<string, LinkTargetState>;
 }
 
 /**

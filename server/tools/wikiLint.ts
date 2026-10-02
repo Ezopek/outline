@@ -1,6 +1,7 @@
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import env from "@server/env";
 import { AuthorizationError } from "@server/errors";
 import { getPolicySet } from "@server/wikiLint/adapters/policyConfig";
 import { Deadline } from "@server/wikiLint/application/deadline";
@@ -49,6 +50,7 @@ export async function lintDocumentTool(
       policySet: dependencies.policySet ?? getPolicySet(),
       deadline,
       reader: dependencies.reader ?? defaultLintDocumentReader,
+      instanceOrigin: dependencies.instanceOrigin ?? env.URL,
     });
     switch (outcome.kind) {
       case "result":

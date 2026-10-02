@@ -1,14 +1,15 @@
 import type Token from "markdown-it/lib/token.mjs";
 import type { ProsemirrorData } from "@shared/types";
-import { parser } from "@server/editor";
 import type { Document } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import type {
   CanonicalSyntax,
   SyntaxField,
+  SyntaxLink,
   SyntaxNode,
   SyntaxPosition,
 } from "../core/contracts";
+import { tokenizeCanonicalMarkdown } from "./lintTokenizer";
 
 /**
  * Thrown when canonical Markdown cannot be produced or positioned safely. No
@@ -233,13 +234,16 @@ function finishList(
 }
 
 /**
- * Parses canonical Markdown with Outline's own Markdown parser into a block
- * tree. This is the single producer of lint lines, columns, and paths: lines
- * are one-based over the exact string, columns count code points, and paths
- * are zero-based child indices that exclude inline tokens. A table's children
- * are its rows, a row's children are its cells, and a cell's children are its
- * blocks; every node below a row takes the row's line and column, because the
- * parser reports no document position for it.
+ * Parses canonical Markdown with Outline's own Markdown rules into a block
+ * tree and its link tokens. This is the single producer of lint lines,
+ * columns, and paths: lines are one-based over the exact string, columns
+ * count code points, and paths are zero-based child indices that exclude
+ * inline tokens. A table's children are its rows, a row's children are its
+ * cells, and a cell's children are its blocks; every node below a row takes
+ * the row's line and column, because the parser reports no document position
+ * for it. Each link token that is a direct child of an inline token is listed
+ * in document order with its enclosing block's path, at the `[` or `<` that
+ * begins it, or with a null position when that cannot be proven.
  *
  * @param markdown - the canonical Markdown from `toCanonicalMarkdown`.
  * @returns the canonical syntax.
@@ -252,9 +256,10 @@ export function parseCanonicalMarkdown(markdown: string): CanonicalSyntax {
   }
 
   const lines = markdown.split("\n");
-  const tokens = parser.tokenizer.parse(markdown, {});
+  const { tokens, linkPosition } = tokenizeCanonicalMarkdown(markdown);
   const tokenOf = new Map<SyntaxNode, Token>();
   const root: SyntaxNode[] = [];
+  const links: SyntaxLink[] = [];
   const stack: OpenBlock[] = [];
 
   for (const token of tokens) {
@@ -276,6 +281,14 @@ export function parseCanonicalMarkdown(markdown: string): CanonicalSyntax {
           .map((child) => child.content)
           .join("")
           .trim();
+      }
+      for (const child of token.children ?? []) {
+        if (child.type === "link_open") {
+          links.push({
+            href: child.attrGet("href") ?? "",
+            position: linkPosition(child, [...(parent?.path ?? [])]),
+          });
+        }
       }
       continue;
     }
@@ -313,5 +326,5 @@ export function parseCanonicalMarkdown(markdown: string): CanonicalSyntax {
     }
   }
 
-  return { children: root };
+  return { children: root, links };
 }

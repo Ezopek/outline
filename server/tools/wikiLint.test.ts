@@ -1,10 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { DocumentPermission } from "@shared/types";
+import { DocumentPermission, type ProsemirrorData } from "@shared/types";
 import { parser } from "@server/editor";
+import env from "@server/env";
 import {
   Collection,
   Document,
@@ -27,6 +28,7 @@ import {
   parseMcpResponse,
 } from "@server/test/McpHelper";
 import { getTestServer } from "@server/test/support";
+import { toCanonicalMarkdown } from "@server/wikiLint/adapters/canonicalSyntax";
 import type { LintDocumentDependencies } from "@server/wikiLint/application/lintDocument";
 import type { PolicySet } from "@server/wikiLint/core/policySet";
 import { buildPolicySet } from "@server/wikiLint/core/policySet";
@@ -632,6 +634,723 @@ describe("lint_document", () => {
 
     expect(JSON.parse(firstText(first)).errors.length).toBeGreaterThan(1);
     expect(firstText(second)).toBe(firstText(first));
+  });
+});
+
+describe("lint_document internal links", () => {
+  const ORIGIN = "https://wiki.example.test";
+
+  /** The structure policy plus `internal_links`. */
+  const linkPolicy = {
+    activation: "read_only",
+    rules: [...structurePolicy.rules, { kind: "internal_links" }],
+  };
+
+  /**
+   * Builds a source document body: the required sections, then one
+   * paragraph per link.
+   *
+   * @param hrefs - the link destinations.
+   * @returns the Markdown.
+   */
+  const sourceText = (hrefs: string[]) =>
+    [
+      "## Overview",
+      "",
+      ...hrefs.flatMap((href, index) => [`Link [${index}](${href})`, ""]),
+      "## Details",
+      "",
+      "Body",
+    ].join("\n");
+
+  /**
+   * Builds the unresolved-link Error expected at a link paragraph.
+   *
+   * @param documentId - the source document.
+   * @param index - the zero-based index of the link.
+   * @returns the expected Finding.
+   */
+  const unresolvedAt = (documentId: string, index: number) => ({
+    code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+    severity: "error",
+    message: expect.any(String),
+    location: {
+      kind: "text",
+      documentId,
+      line: 3 + 2 * index,
+      column: 6,
+      path: [1 + index],
+    },
+  });
+
+  /**
+   * Builds a team with a readable collection, a reader who can read a
+   * protected document in a private collection, and an actor who cannot.
+   *
+   * @returns the fixture.
+   */
+  async function buildActors() {
+    const reader = await buildUser();
+    const collection = await buildCollection({
+      teamId: reader.teamId,
+      userId: reader.id,
+    });
+    const privateCollection = await buildCollection({
+      teamId: reader.teamId,
+      userId: reader.id,
+      permission: null,
+    });
+    const protectedTarget = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: privateCollection.id,
+      title: "Protected generic title",
+    });
+    const blind = await buildUser({ teamId: reader.teamId });
+    const policySet = policySetFor({ [collection.id]: linkPolicy });
+    return {
+      reader,
+      blind,
+      collection,
+      privateCollection,
+      protectedTarget,
+      policySet,
+    };
+  }
+
+  it("resolves readable targets in every recognized form", async () => {
+    const { reader, collection, policySet } = await buildActors();
+    const owner = await buildUser({ teamId: reader.teamId });
+    const privateCollection = await buildCollection({
+      teamId: owner.teamId,
+      userId: owner.id,
+      permission: null,
+    });
+    const shared = await buildDocument({
+      teamId: owner.teamId,
+      userId: owner.id,
+      collectionId: privateCollection.id,
+    });
+    await UserMembership.create({
+      documentId: shared.id,
+      userId: reader.id,
+      createdById: owner.id,
+      permission: DocumentPermission.Read,
+    });
+    const readable = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+    });
+    const draft = await buildDraftDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+    });
+    const archived = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      archivedAt: new Date(),
+    });
+    const source = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      text: sourceText([
+        `/doc/${readable.id.toUpperCase()}`,
+        `${ORIGIN}/doc/any-title-${readable.urlId}`,
+        `/d/${draft.urlId}`,
+        `/doc/${archived.id}#heading`,
+        `/doc/${shared.id}`,
+        "https://other.example.test/doc/unrelated",
+      ]),
+    });
+    const client = await connect(reader, policySet, { instanceOrigin: ORIGIN });
+
+    await expect(lintResult(client, source.id)).resolves.toEqual({
+      state: "complete",
+      complete: true,
+      clean: true,
+      errors: [],
+      warnings: [],
+      systemFailures: [],
+      scope: {
+        kind: "document",
+        documentId: source.id,
+        collectionId: collection.id,
+        evaluatedDocumentCount: 1,
+        evaluatedLinkCount: 5,
+      },
+      policies: [expect.objectContaining({ collectionId: collection.id })],
+    });
+  });
+
+  it("makes protected, missing, and deleted targets indistinguishable", async () => {
+    const {
+      reader,
+      blind,
+      collection,
+      privateCollection,
+      protectedTarget,
+      policySet,
+    } = await buildActors();
+    const deleted = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+    });
+    await deleted.destroy();
+    const missing = randomUUID();
+    const source = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      text: sourceText([
+        `/doc/${protectedTarget.id}`,
+        `/doc/${missing}`,
+        `/doc/${deleted.id}`,
+        `${ORIGIN}/doc/any-title-${protectedTarget.urlId}`,
+      ]),
+    });
+
+    const readerResult = await lintResult(
+      await connect(reader, policySet, { instanceOrigin: ORIGIN }),
+      source.id
+    );
+    const blindResult = await lintResult(
+      await connect(blind, policySet, { instanceOrigin: ORIGIN }),
+      source.id
+    );
+
+    expect(readerResult.errors).toEqual([
+      unresolvedAt(source.id, 1),
+      unresolvedAt(source.id, 2),
+    ]);
+    expect(blindResult.errors).toEqual([
+      unresolvedAt(source.id, 0),
+      unresolvedAt(source.id, 1),
+      unresolvedAt(source.id, 2),
+      unresolvedAt(source.id, 3),
+    ]);
+    const [protectedFinding, ...others] = blindResult.errors;
+    for (const finding of others) {
+      expect({ ...finding, location: undefined }).toEqual({
+        ...protectedFinding,
+        location: undefined,
+      });
+    }
+    expect(blindResult.scope.evaluatedLinkCount).toBe(4);
+    expect(readerResult.scope.evaluatedLinkCount).toBe(4);
+
+    for (const result of [readerResult, blindResult]) {
+      const serialized = JSON.stringify(result);
+      for (const secret of [
+        protectedTarget.id,
+        protectedTarget.urlId,
+        protectedTarget.title,
+        privateCollection.id,
+        deleted.id,
+        missing,
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
+    }
+  });
+
+  it("answers a protected target exactly as a never-existing one", async () => {
+    const { reader, blind, collection, protectedTarget, policySet } =
+      await buildActors();
+    const missing = randomUUID();
+    const build = (target: string) =>
+      buildDocument({
+        teamId: reader.teamId,
+        userId: reader.id,
+        collectionId: collection.id,
+        text: sourceText([`/doc/${target}`]),
+      });
+    const toProtected = await build(protectedTarget.id);
+    const toMissing = await build(missing);
+    const client = await connect(blind, policySet, { instanceOrigin: ORIGIN });
+
+    const first = firstText(await lint(client, { id: toProtected.id }));
+    const second = firstText(await lint(client, { id: toMissing.id }));
+
+    expect(JSON.parse(first).errors).toEqual([unresolvedAt(toProtected.id, 0)]);
+    expect(second.split(toMissing.id).join(toProtected.id)).toBe(first);
+    expect(first).not.toContain(protectedTarget.id);
+  });
+
+  it("reports every occurrence of one target and is byte-stable", async () => {
+    const { reader, blind, collection, protectedTarget, policySet } =
+      await buildActors();
+    const forms = [
+      `/doc/${protectedTarget.id}`,
+      `/doc/${protectedTarget.id.toUpperCase()}`,
+      `/doc/any-title-${protectedTarget.urlId}`,
+      `/doc/${protectedTarget.id}`,
+      `/doc/any-title-${protectedTarget.urlId}`,
+    ];
+    const source = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      text: sourceText(forms),
+    });
+
+    const resolved = await lintResult(
+      await connect(reader, policySet, { instanceOrigin: ORIGIN }),
+      source.id
+    );
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.scope.evaluatedLinkCount).toBe(5);
+
+    const client = await connect(blind, policySet, { instanceOrigin: ORIGIN });
+    const first = firstText(await lint(client, { id: source.id }));
+    const second = firstText(await lint(client, { id: source.id }));
+
+    expect(JSON.parse(first).errors).toEqual(
+      forms.map((_form, index) => unresolvedAt(source.id, index))
+    );
+    expect(JSON.parse(first).scope.evaluatedLinkCount).toBe(5);
+    expect(second).toBe(first);
+  });
+
+  it("never looks up a UUID as a URL identifier", async () => {
+    const { reader, collection, policySet } = await buildActors();
+    const uuid = randomUUID();
+    const lastGroup = uuid.split("-")[4];
+    const collision = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+    });
+    await Document.unscoped().update(
+      { urlId: lastGroup },
+      { where: { id: collision.id }, hooks: false, validate: false }
+    );
+    const source = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      text: sourceText([`/doc/${uuid}`, `/doc/${lastGroup}`]),
+    });
+    const client = await connect(reader, policySet, { instanceOrigin: ORIGIN });
+
+    const result = await lintResult(client, source.id);
+
+    expect(result.errors).toEqual([unresolvedAt(source.id, 0)]);
+    expect(result.scope.evaluatedLinkCount).toBe(2);
+  });
+
+  it("completes structure and link Findings in AD-4 order", async () => {
+    const { reader, collection, policySet } = await buildActors();
+    const missing = randomUUID();
+    const source = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      text: [
+        "# Title [a](/doc/" + missing + ")",
+        "",
+        "## Details",
+        "",
+        "#### Deep",
+        "",
+        "Text [b](/doc/" + missing + ")",
+      ].join("\n"),
+    });
+    const client = await connect(reader, policySet, { instanceOrigin: ORIGIN });
+
+    const result = await lintResult(client, source.id);
+
+    const at = (line: number, column: number, path: number[]) => ({
+      kind: "text",
+      documentId: source.id,
+      line,
+      column,
+      path,
+    });
+    expect(result).toEqual({
+      state: "complete",
+      complete: true,
+      clean: false,
+      errors: [
+        expect.objectContaining({
+          code: "HEADING_LEVEL_NOT_ALLOWED",
+          location: at(1, 1, [0]),
+        }),
+        expect.objectContaining({
+          code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+          location: at(1, 9, [0]),
+        }),
+        expect.objectContaining({
+          code: "HEADING_LEVEL_NOT_ALLOWED",
+          location: at(5, 1, [2]),
+        }),
+        expect.objectContaining({
+          code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+          location: at(7, 6, [3]),
+        }),
+        expect.objectContaining({
+          code: "REQUIRED_SECTION_MISSING",
+          location: { kind: "document", documentId: source.id },
+        }),
+      ],
+      warnings: [],
+      systemFailures: [],
+      scope: {
+        kind: "document",
+        documentId: source.id,
+        collectionId: collection.id,
+        evaluatedDocumentCount: 1,
+        evaluatedLinkCount: 2,
+      },
+      policies: [expect.objectContaining({ collectionId: collection.id })],
+    });
+  });
+
+  it("fails the unit on an unresolved link without a provable position", async () => {
+    const { reader, collection, policySet } = await buildActors();
+    const missing = randomUUID();
+    const paragraph = (...content: ProsemirrorData[]): ProsemirrorData => ({
+      type: "paragraph",
+      content,
+    });
+    const linked = (text: string): ProsemirrorData => ({
+      type: "text",
+      text,
+      marks: [{ type: "link", attrs: { href: `/doc/${missing}` } }],
+    });
+    const source = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "heading",
+            attrs: { level: 1 },
+            content: [{ type: "text", text: "Title" }],
+          },
+          {
+            type: "table",
+            content: [
+              {
+                type: "tr",
+                content: [{ type: "th", content: [paragraph(linked("head"))] }],
+              },
+              {
+                type: "tr",
+                content: [
+                  {
+                    type: "td",
+                    content: [
+                      {
+                        type: "container_notice",
+                        attrs: { style: "info" },
+                        content: [paragraph(linked("noted"))],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const client = await connect(reader, policySet, { instanceOrigin: ORIGIN });
+
+    const result = await lintResult(client, source.id);
+
+    expect(result).toEqual({
+      state: "failed",
+      complete: false,
+      clean: false,
+      errors: [
+        expect.objectContaining({
+          code: "HEADING_LEVEL_NOT_ALLOWED",
+          location: expect.objectContaining({ line: 1, column: 1 }),
+        }),
+        expect.objectContaining({
+          code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+          location: expect.objectContaining({ line: 3, column: 3 }),
+        }),
+        expect.objectContaining({ code: "REQUIRED_SECTION_MISSING" }),
+        expect.objectContaining({ code: "REQUIRED_SECTION_MISSING" }),
+      ],
+      warnings: [],
+      systemFailures: [
+        {
+          code: "VALIDATION_RUNTIME_FAILED",
+          message: expect.any(String),
+          location: {
+            kind: "scope",
+            scopeKind: "document",
+            documentId: source.id,
+            collectionId: collection.id,
+          },
+        },
+      ],
+      scope: {
+        kind: "document",
+        documentId: source.id,
+        collectionId: collection.id,
+        evaluatedDocumentCount: 0,
+        evaluatedLinkCount: 0,
+      },
+      policies: [expect.objectContaining({ collectionId: collection.id })],
+    });
+  });
+
+  it("recognizes links against the server URL by default", async () => {
+    const { reader, collection, policySet } = await buildActors();
+    const missing = randomUUID();
+    const source = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      text: sourceText([
+        `${env.URL}/doc/${missing}`,
+        `${ORIGIN}.invalid/doc/${missing}`,
+      ]),
+    });
+    const client = await connect(reader, policySet);
+
+    const result = await lintResult(client, source.id);
+
+    expect(result.errors).toEqual([unresolvedAt(source.id, 0)]);
+    expect(result.scope.evaluatedLinkCount).toBe(1);
+  });
+
+  it("mutates nothing while resolving links", async () => {
+    const { reader, collection, protectedTarget, policySet } =
+      await buildActors();
+    const source = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      text: sourceText([`/doc/${protectedTarget.id}`, `/doc/${randomUUID()}`]),
+    });
+    const client = await connect(reader, policySet, { instanceOrigin: ORIGIN });
+    const query = vi.spyOn(sequelize, "query");
+
+    const result = await lintResult(client, source.id);
+
+    expect(result.errors).toHaveLength(1);
+    const statements = query.mock.calls.map(([sql]) =>
+      typeof sql === "string" ? sql : sql.query
+    );
+    expect(
+      statements.filter((sql) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql))
+    ).toEqual([]);
+
+    // The link-target SELECT ran inside the read-only snapshot transaction.
+    const target = statements.findIndex(
+      (sql) =>
+        sql.startsWith("SELECT") && sql.includes(`'${protectedTarget.id}'`)
+    );
+    expect(target).toBeGreaterThan(-1);
+    const readOnly = statements.lastIndexOf(
+      "SET TRANSACTION READ ONLY",
+      target
+    );
+    expect(readOnly).toBeGreaterThan(-1);
+    expect(statements.slice(readOnly, target)).not.toContain("COMMIT;");
+    expect(statements.indexOf("COMMIT;", target)).toBeGreaterThan(target);
+  });
+
+  /** A policy that enables only `internal_links`. */
+  const linksOnlyPolicy = {
+    activation: "read_only",
+    rules: [{ kind: "internal_links" }],
+  };
+
+  /**
+   * Builds a paragraph.
+   *
+   * @param content - the inline content.
+   * @returns the paragraph node.
+   */
+  const paragraphOf = (...content: ProsemirrorData[]): ProsemirrorData => ({
+    type: "paragraph",
+    content,
+  });
+
+  /**
+   * Builds linked text.
+   *
+   * @param text - the text.
+   * @param href - the link destination.
+   * @returns the text node.
+   */
+  const linkedText = (text: string, href: string): ProsemirrorData => ({
+    type: "text",
+    text,
+    marks: [{ type: "link", attrs: { href } }],
+  });
+
+  it("reports recognized forms end to end and ignores the others", async () => {
+    const { reader, collection } = await buildActors();
+    const missing = randomUUID();
+    const mentioned = randomUUID();
+    const content: ProsemirrorData = {
+      type: "doc",
+      content: [
+        paragraphOf(
+          { type: "text", text: "ż😀 " },
+          linkedText("gone", `/doc/${missing}`)
+        ),
+        paragraphOf({
+          type: "mention",
+          attrs: {
+            type: "document",
+            label: "Mentioned",
+            modelId: mentioned,
+            id: randomUUID(),
+            anchorId: "anchor",
+          },
+        }),
+        paragraphOf(
+          linkedText("relative", `doc/${missing}`),
+          { type: "text", text: " " },
+          linkedText("collection", `/collection/${missing}`),
+          { type: "text", text: " " },
+          linkedText("mail", "mailto:someone@example.test")
+        ),
+      ],
+    };
+    const source = await buildDocument({
+      teamId: reader.teamId,
+      userId: reader.id,
+      collectionId: collection.id,
+      content,
+    });
+    const client = await connect(
+      reader,
+      policySetFor({ [collection.id]: linksOnlyPolicy }),
+      { instanceOrigin: ORIGIN }
+    );
+
+    expect((await toCanonicalMarkdown(content)).split("\n")).toEqual([
+      `ż😀 [gone](/doc/${missing})`,
+      "",
+      `[Mentioned](/doc/${mentioned}#anchor)`,
+      "",
+      `[relative](doc/${missing}) [collection](/collection/${missing}) [mail](mailto:someone@example.test)`,
+    ]);
+    const unresolved = (line: number, column: number, path: number[]) => ({
+      code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+      severity: "error",
+      message: expect.any(String),
+      location: { kind: "text", documentId: source.id, line, column, path },
+    });
+    await expect(lintResult(client, source.id)).resolves.toEqual({
+      state: "complete",
+      complete: true,
+      clean: false,
+      errors: [unresolved(1, 4, [0]), unresolved(3, 1, [1])],
+      warnings: [],
+      systemFailures: [],
+      scope: {
+        kind: "document",
+        documentId: source.id,
+        collectionId: collection.id,
+        evaluatedDocumentCount: 1,
+        evaluatedLinkCount: 2,
+      },
+      policies: [expect.objectContaining({ collectionId: collection.id })],
+    });
+  });
+
+  it("keeps a System Failure from distinguishing protected targets", async () => {
+    const { reader, blind, collection, protectedTarget } = await buildActors();
+    const policySet = policySetFor({ [collection.id]: linksOnlyPolicy });
+    const missing = randomUUID();
+    // The link sits in a notice inside a table cell, so it has no position.
+    const build = (target: string) =>
+      buildDocument({
+        teamId: reader.teamId,
+        userId: reader.id,
+        collectionId: collection.id,
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "table",
+              content: [
+                {
+                  type: "tr",
+                  content: [
+                    {
+                      type: "th",
+                      content: [paragraphOf({ type: "text", text: "Head" })],
+                    },
+                  ],
+                },
+                {
+                  type: "tr",
+                  content: [
+                    {
+                      type: "td",
+                      content: [
+                        {
+                          type: "container_notice",
+                          attrs: { style: "info" },
+                          content: [
+                            paragraphOf(linkedText("note", `/doc/${target}`)),
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      });
+    const toProtected = await build(protectedTarget.id);
+    const toMissing = await build(missing);
+    const blindClient = await connect(blind, policySet, {
+      instanceOrigin: ORIGIN,
+    });
+
+    const first = firstText(await lint(blindClient, { id: toProtected.id }));
+    const second = firstText(await lint(blindClient, { id: toMissing.id }));
+
+    expect(JSON.parse(first)).toMatchObject({
+      state: "failed",
+      errors: [],
+      systemFailures: [
+        {
+          code: "VALIDATION_RUNTIME_FAILED",
+          location: {
+            kind: "scope",
+            scopeKind: "document",
+            documentId: toProtected.id,
+            collectionId: collection.id,
+          },
+        },
+      ],
+      scope: { evaluatedDocumentCount: 0, evaluatedLinkCount: 0 },
+    });
+    expect(second.split(toMissing.id).join(toProtected.id)).toBe(first);
+    expect(first).not.toContain(protectedTarget.id);
+
+    const readerClient = await connect(reader, policySet, {
+      instanceOrigin: ORIGIN,
+    });
+    await expect(
+      lintResult(readerClient, toProtected.id)
+    ).resolves.toMatchObject({
+      state: "complete",
+      errors: [],
+      systemFailures: [],
+      scope: { evaluatedDocumentCount: 1, evaluatedLinkCount: 1 },
+    });
   });
 });
 
