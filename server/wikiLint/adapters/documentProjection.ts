@@ -1,3 +1,4 @@
+import type { Node } from "prosemirror-model";
 import type {
   ProsemirrorData,
   SourceMetadata,
@@ -60,13 +61,36 @@ export interface MarkdownUpdateInput {
   publish?: boolean;
 }
 
+/** The HTML create arguments, as the enforced import worker maps them. */
+export interface HtmlCreateInput {
+  title?: string;
+  icon?: string;
+  color?: string;
+  fullWidth?: boolean;
+  publish: boolean;
+  parentDocumentId?: string | null;
+  sourceMetadata: Pick<Required<SourceMetadata>, "fileName" | "mimeType">;
+}
+
+/** What the baseline HTML conversion, `documentImporter`, returns. */
+export interface ImportedHtml {
+  title: string;
+  icon?: string;
+  /** The Markdown serialization of the converted document. */
+  text: string;
+  /** The collaborative state of the converted document. */
+  state: Buffer;
+}
+
 /**
  * The input-only P2 preparation of a create. `content` is the converted body,
- * or null when the input has no text.
+ * or null when the input has no text; `state` is the collaborative state of
+ * an imported document, or null.
  */
 export type PreparedMarkdownCreate = Readonly<{
   input: Readonly<Omit<MarkdownCreateInput, "text">>;
   content: ProsemirrorData | null;
+  state: Buffer | null;
 }>;
 
 /** The input-only P2 preparation of an update. */
@@ -75,8 +99,9 @@ export type PreparedMarkdownUpdate = Readonly<{
 }>;
 
 /**
- * Thrown in P2 when update text holds an image the baseline would import as
- * an Attachment. Enforced writes refuse such media until it can be staged.
+ * Thrown in P2 when update text or imported HTML holds media the baseline
+ * would import as an Attachment. Enforced writes refuse such media until it
+ * can be staged.
  */
 export class UnstagedMediaError extends Error {
   name = "UnstagedMediaError";
@@ -130,7 +155,73 @@ export function prepareMarkdownCreate(
   return deepFreeze({
     input: rest,
     content: text ? ProsemirrorHelper.toProsemirror(text).toJSON() : null,
+    state: null,
   });
+}
+
+/**
+ * Prepares an HTML create in P2 from the baseline conversion of its source,
+ * with the `DocumentImportTask` precedence: explicit attributes over the
+ * converted title and icon. Like `documentCreator`, the body is the converted
+ * Markdown parsed again, and the converted state is kept. It reads no stored
+ * state and issues no query.
+ *
+ * @param input - the create arguments.
+ * @param imported - the converted source.
+ * @returns the frozen prepared value.
+ */
+export function prepareHtmlCreate(
+  input: HtmlCreateInput,
+  imported: ImportedHtml
+): PreparedMarkdownCreate {
+  return deepFreeze({
+    input: {
+      ...structuredClone(input),
+      title: input.title ?? imported.title,
+      icon: input.icon ?? imported.icon,
+    },
+    content: imported.text
+      ? ProsemirrorHelper.toProsemirror(imported.text).toJSON()
+      : null,
+    state: copyState(imported.state),
+  });
+}
+
+/**
+ * The `documentImporter` media step of an enforced HTML create: it refuses
+ * every image or video `src`, and every `data:` link `href`, that parses as a
+ * URL and is not internal, which is exactly what the baseline would import.
+ * It never fetches, creates an Attachment, or writes storage.
+ *
+ * @param doc - the converted document.
+ * @returns the same document, when it holds no importable media.
+ * @throws UnstagedMediaError when it holds importable media.
+ */
+export function refuseImportableMedia(doc: Node): Node {
+  // Mirrors ProsemirrorHelper.replaceImagesWithAttachments.
+  const sources = [
+    ...ProsemirrorHelper.getImages(doc),
+    ...ProsemirrorHelper.getVideos(doc),
+  ].map((node) => String(node.attrs.src ?? ""));
+  doc.descendants((node) => {
+    const link = node.marks.find((mark) => mark.type.name === "link");
+    const href = String(link?.attrs.href ?? "");
+    if (href.startsWith("data:")) {
+      sources.push(href);
+    }
+    return true;
+  });
+  for (const src of sources) {
+    try {
+      new URL(src);
+    } catch {
+      continue;
+    }
+    if (!isInternalUrl(src)) {
+      throw new UnstagedMediaError();
+    }
+  }
+  return doc;
 }
 
 /**
@@ -171,6 +262,7 @@ export function prepareMarkdownUpdate(
  * @param args.actor - the acting user, for template variables.
  * @param args.template - the selected template, if any.
  * @returns the frozen projection.
+ * @throws WikiLintContractError when an imported state comes with a template.
  */
 export async function projectMarkdownCreate(args: {
   prepared: PreparedMarkdownCreate;
@@ -181,6 +273,11 @@ export async function projectMarkdownCreate(args: {
 }): Promise<ProjectedDocument> {
   const { prepared, documentId, collectionId, actor, template } = args;
   const { input } = prepared;
+  if (prepared.state && template) {
+    throw new WikiLintContractError(
+      "An imported state cannot be combined with a template"
+    );
+  }
   const title =
     input.title ??
     (template
@@ -200,7 +297,7 @@ export async function projectMarkdownCreate(args: {
     title: title || "",
     content,
     text: await DocumentHelper.toMarkdown(content, { includeTitle: false }),
-    state: null,
+    state: copyState(prepared.state),
     collectionId,
     parentDocumentId: input.parentDocumentId ?? null,
     published: input.publish,

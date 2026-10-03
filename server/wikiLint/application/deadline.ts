@@ -47,6 +47,25 @@ export const COMMIT_PROBE_BOUND_MS = 2000;
 export const POST_COMMIT_ASSEMBLY_BOUND_MS = 2000;
 
 /**
+ * The fixed AD-7 grace, in milliseconds, that an enforced HTML create's
+ * `deadlineAt` adds to the worker's code-owned bounds.
+ */
+export const ENFORCED_IMPORT_GRACE_MS = 5000;
+
+/**
+ * The AD-7 wait, in milliseconds, of an enforced HTML create from
+ * classification to `deadlineAt`: the preparation bound, the validation
+ * deadline, the persistence budget, the audit bound, and the grace. The
+ * requester waits no longer for the job's result.
+ */
+export const ENFORCED_IMPORT_WAIT_MS =
+  WRITE_PREPARATION_BOUND_MS +
+  VALIDATION_DEADLINE_MS +
+  WRITE_PERSISTENCE_BUDGET_MS +
+  AUDIT_WRITE_BOUND_MS +
+  ENFORCED_IMPORT_GRACE_MS;
+
+/**
  * Settles a promise or a timer, whichever is first.
  *
  * @param promise - the promise.

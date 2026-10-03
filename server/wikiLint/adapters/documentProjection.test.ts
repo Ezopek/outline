@@ -6,6 +6,10 @@ import { TextEditMode } from "@shared/types";
 import attachmentCreator from "@server/commands/attachmentCreator";
 import type * as AttachmentCreator from "@server/commands/attachmentCreator";
 import documentCreator from "@server/commands/documentCreator";
+import documentImporter from "@server/commands/documentImporter";
+import { createContext } from "@server/context";
+import { schema as editorSchema } from "@server/editor";
+import DocumentImportTask from "@server/queues/tasks/DocumentImportTask";
 import documentUpdater from "@server/commands/documentUpdater";
 import type { Template, User } from "@server/models";
 import { Collection, Document, Event } from "@server/models";
@@ -33,10 +37,12 @@ import type {
 } from "./documentProjection";
 import {
   UnstagedMediaError,
+  prepareHtmlCreate,
   prepareMarkdownCreate,
   prepareMarkdownUpdate,
   projectMarkdownCreate,
   projectMarkdownUpdate,
+  refuseImportableMedia,
 } from "./documentProjection";
 
 vi.mock("@server/commands/attachmentCreator", async (importOriginal) => {
@@ -1132,4 +1138,202 @@ describe("prepareMarkdownCreate", () => {
     );
     expect(prepared.input).not.toHaveProperty("text");
   });
+});
+
+describe("HTML creates", () => {
+  /**
+   * Imports HTML through the baseline task and through the enforced
+   * preparation and projection, and returns both for comparison.
+   *
+   * @param html - the source.
+   * @param attributes - the explicit create attributes.
+   * @returns the stored baseline fields and the projected ones.
+   */
+  async function importBoth(
+    html: string,
+    attributes: { title?: string; icon?: string; color?: string } = {}
+  ) {
+    const actor = await buildUser();
+    const collection = await buildCollection({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    const sourceMetadata = { fileName: "notes.html", mimeType: "text/html" };
+    const response = await new DocumentImportTask().perform({
+      userId: actor.id,
+      content: html,
+      sourceMetadata,
+      attributes,
+      publish: true,
+      collectionId: collection.id,
+    });
+    if (!("documentId" in response)) {
+      throw new Error(response.error);
+    }
+    const stored = await storedDocument(response.documentId);
+
+    const projection = await withoutEffect(async () =>
+      projectMarkdownCreate({
+        prepared: prepareHtmlCreate(
+          { ...attributes, publish: true, sourceMetadata },
+          await documentImporter({
+            user: actor,
+            fileName: sourceMetadata.fileName,
+            mimeType: sourceMetadata.mimeType,
+            content: html,
+            ctx: createContext({ user: actor }),
+            media: refuseImportableMedia,
+          })
+        ),
+        documentId: randomUUID(),
+        collectionId: collection.id,
+        actor,
+        template: null,
+      })
+    );
+    const { state, documentId, ...fields } = projection;
+    void documentId;
+    return {
+      projected: { ...fields, state: decodeState(state) },
+      baseline: {
+        title: stored.title,
+        content: stored.content,
+        text: stored.text,
+        state: decodeState(stored.state),
+        collectionId: stored.collectionId,
+        parentDocumentId: stored.parentDocumentId,
+        published: !!stored.publishedAt,
+        icon: stored.icon,
+        color: stored.color,
+        fullWidth: stored.fullWidth,
+        templateId: stored.templateId,
+        sourceMetadata: stored.sourceMetadata,
+      },
+    };
+  }
+
+  it.each([
+    ["a converted title", "<h1>Converted</h1><h2>Overview</h2><p>ok</p>", {}],
+    [
+      "explicit attributes over the converted ones",
+      "<h1>Converted</h1><p>ok</p>",
+      { title: "Explicit", icon: "😀", color: "#FF0000" },
+    ],
+    ["an empty body", "", {}],
+    [
+      "a table and a list",
+      "<table><tr><td>a</td></tr></table><ul><li>b</li></ul>",
+      {},
+    ],
+  ])("matches the baseline import with %s", async (_name, html, attributes) => {
+    const { projected, baseline } = await importBoth(html, attributes);
+
+    expect(projected).toEqual(baseline);
+    expect(projected.state).not.toBeNull();
+  });
+
+  it("keeps a private state copy and refuses a template with it", async () => {
+    const state = Buffer.from([1, 2, 3]);
+    const prepared = prepareHtmlCreate(
+      {
+        publish: true,
+        sourceMetadata: { fileName: "a.html", mimeType: "text/html" },
+      },
+      { title: "T", text: "Body", state }
+    );
+    state[0] = 9;
+
+    expect(prepared.state).toEqual(Buffer.from([1, 2, 3]));
+    expect(Object.isFrozen(prepared.input)).toBe(true);
+    const actor = await buildUser();
+    const template = await buildTemplate({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    await expect(
+      projectMarkdownCreate({
+        prepared,
+        documentId: randomUUID(),
+        collectionId: randomUUID(),
+        actor,
+        template,
+      })
+    ).rejects.toBeInstanceOf(WikiLintContractError);
+  });
+});
+
+describe("refuseImportableMedia", () => {
+  const external = "https://example.com/a.png";
+  const internal = "https://app.outline.dev/api/attachments.redirect?id=1";
+  const data = `data:image/png;base64,iVBORw0KGgo=`;
+
+  /**
+   * Builds a document holding one image, video, or link.
+   *
+   * @param kind - the node or mark.
+   * @param src - its source.
+   * @returns the document.
+   */
+  const docWith = (kind: "image" | "video" | "link", src: string) =>
+    editorSchema.nodeFromJSON({
+      type: "doc",
+      content: [
+        kind === "link"
+          ? {
+              type: "paragraph",
+              content: [
+                {
+                  type: "text",
+                  text: "file",
+                  marks: [{ type: "link", attrs: { href: src } }],
+                },
+              ],
+            }
+          : kind === "image"
+            ? {
+                type: "paragraph",
+                content: [{ type: "image", attrs: { src, alt: "a" } }],
+              }
+            : { type: "video", attrs: { src, title: "v" } },
+      ],
+    });
+
+  it.each([
+    ["image", external, true],
+    ["image", data, true],
+    ["image", internal, false],
+    ["image", "not a url", false],
+    ["video", external, true],
+    ["video", internal, false],
+    ["link", data, true],
+    ["link", external, false],
+  ] as const)(
+    "refuses a %s at %s exactly when the baseline would import it",
+    async (kind, src, expected) => {
+      const actor = await buildUser();
+      const doc = docWith(kind, src);
+      const storeFromUrl = vi
+        .spyOn(FileStorage, "storeFromUrl")
+        .mockResolvedValue(undefined);
+      await ProsemirrorHelper.replaceImagesWithAttachments(
+        createContext({ user: actor }),
+        doc,
+        actor
+      );
+      const imported = storeFromUrl.mock.calls.length > 0;
+      storeFromUrl.mockClear();
+
+      let refused = false;
+      try {
+        expect(refuseImportableMedia(doc)).toBe(doc);
+      } catch (error) {
+        expect(error).toBeInstanceOf(UnstagedMediaError);
+        refused = true;
+      }
+
+      expect(storeFromUrl).not.toHaveBeenCalled();
+      expect(refused).toBe(imported);
+      expect(refused).toBe(expected);
+    }
+  );
 });

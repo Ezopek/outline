@@ -17,15 +17,33 @@ export const WIKI_LINT_AUDIT_EVENTS = [
 
 export type WikiLintAuditEventName = (typeof WIKI_LINT_AUDIT_EVENTS)[number];
 
-/** The closed, minimized AD-14 summary of a read-only lint invocation. */
+/** The closed, minimized AD-14 summary of a lint or enforced write invocation. */
 export interface AuditDataV1 {
   schemaVersion: 1;
   /** The server-generated identity of the HTTP request. */
   requestId: string;
-  operation: "lint_document" | "lint_wiki";
-  outcome: "clean" | "findings" | "not_evaluated" | "incomplete" | "failed";
+  operation:
+    | "lint_document"
+    | "lint_wiki"
+    | "create_document"
+    | "update_document";
+  outcome:
+    | "clean"
+    | "findings"
+    | "not_evaluated"
+    | "incomplete"
+    | "failed"
+    | "validated"
+    | "validated_with_warnings"
+    | "degraded_validation"
+    | "rejected"
+    | "aborted_before_decision"
+    | "aborted_after_decision";
   complete: boolean;
-  /** Monotonic milliseconds from tool-handler entry to the audit write. */
+  /**
+   * Monotonic milliseconds from tool-handler entry to the audit write; an
+   * enforced HTML create adds the queue wait.
+   */
   durationMs: number;
   scopeKind: ScopeKind;
   /** Present only for a single collection or document under a valid policy. */
@@ -75,9 +93,11 @@ export type AuditEventWriter = (
  * a statement timeout. The timeout does not bound the call as a whole, and a
  * caller that stops waiting does not cancel the transaction, which may still
  * acquire a connection and commit. A repeated insert of the same Event ID
- * keeps the first row. The raw insert bypasses the model hooks, so the Event
- * never reaches the global Event queue or any `"*"` processor; the IP is
- * normalized as the model would.
+ * keeps the first row, except that a committed write summary replaces an
+ * aborted or rejected one of the same name: its `data`, `documentId`, and
+ * `collectionId` are replaced and its `createdAt` is kept. The raw insert
+ * bypasses the model hooks, so the Event never reaches the global Event queue
+ * or any `"*"` processor; the IP is normalized as the model would.
  *
  * The summary is written only after the lint result is complete, so a crash
  * between completion and this insert leaves no summary. That gap is accepted
@@ -99,7 +119,10 @@ export async function insertAuditEvent(
     await sequelize.query(
       `INSERT INTO events ("id", "name", "teamId", "actorId", "ip", "authType", "documentId", "collectionId", "data", "createdAt")
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())
-       ON CONFLICT ("id") DO NOTHING`,
+       ON CONFLICT ("id") DO UPDATE SET "data" = EXCLUDED."data", "documentId" = EXCLUDED."documentId", "collectionId" = EXCLUDED."collectionId"
+       WHERE events."name" = EXCLUDED."name"
+         AND events."data"->>'outcome' IN ('aborted_before_decision', 'aborted_after_decision', 'rejected')
+         AND EXCLUDED."data"->>'outcome' IN ('validated', 'validated_with_warnings', 'degraded_validation')`,
       {
         bind: [
           row.id,

@@ -145,8 +145,112 @@ describe("insertAuditEvent", () => {
     expect(insert).toBeGreaterThan(timeout);
     expect(calls[timeout].transaction).toBeDefined();
     expect(calls[insert].transaction).toBe(calls[timeout].transaction);
-    expect(calls[insert].sql).toContain('ON CONFLICT ("id") DO NOTHING');
+    expect(calls[insert].sql).toContain('ON CONFLICT ("id") DO UPDATE');
     expect(calls[insert].sql).not.toContain(row.teamId);
+  });
+
+  describe("a repeated write summary", () => {
+    /**
+     * Builds the data of a write summary.
+     *
+     * @param outcome - the outcome.
+     * @returns the data.
+     */
+    const writeData = (outcome: AuditDataV1["outcome"]): AuditDataV1 => ({
+      ...data,
+      operation: "create_document",
+      outcome,
+      complete: false,
+      evaluatedDocumentCount: 0,
+      evaluatedLinkCount: 0,
+      counts: { errors: 0, warnings: 0, systemFailures: 0, byCode: {} },
+    });
+
+    /**
+     * Writes a stored summary and then an incoming one with the same ID.
+     *
+     * @param stored - the stored outcome.
+     * @param incoming - the incoming outcome.
+     * @param name - the incoming Event name.
+     * @returns the rows, the stored creation time, and the incoming row.
+     */
+    async function writeTwice(
+      stored: AuditDataV1["outcome"],
+      incoming: AuditDataV1["outcome"],
+      name: AuditEventRow["name"] = "wikiLint.write_validation"
+    ) {
+      const row = await buildRow();
+      const first: AuditEventRow = {
+        ...row,
+        name: "wikiLint.write_validation",
+        data: writeData(stored),
+      };
+      await insertAuditEvent(first, 3000);
+      const [{ createdAt }] = await storedRows(row.id);
+      const second: AuditEventRow = {
+        ...row,
+        name,
+        documentId: randomUUID(),
+        collectionId: (await buildRow()).collectionId,
+        data: { ...writeData(incoming), durationMs: 77 },
+      };
+      await insertAuditEvent(second, 3000);
+      return { rows: await storedRows(row.id), createdAt, first, second };
+    }
+
+    it.each([
+      ["aborted_before_decision", "validated"],
+      ["aborted_after_decision", "validated_with_warnings"],
+      ["rejected", "degraded_validation"],
+    ] as const)(
+      "replaces a stored %s summary with a committed %s one, keeping its creation time",
+      async (stored, incoming) => {
+        const { rows, createdAt, second } = await writeTwice(stored, incoming);
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          data: second.data,
+          documentId: second.documentId,
+          collectionId: second.collectionId,
+          createdAt,
+        });
+      }
+    );
+
+    it.each([
+      ["validated", "aborted_before_decision"],
+      ["validated", "rejected"],
+      ["validated", "validated_with_warnings"],
+      ["aborted_before_decision", "aborted_after_decision"],
+      ["rejected", "aborted_before_decision"],
+    ] as const)(
+      "keeps a stored %s summary over an incoming %s one",
+      async (stored, incoming) => {
+        const { rows, first } = await writeTwice(stored, incoming);
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          data: first.data,
+          documentId: null,
+          collectionId: first.collectionId,
+        });
+      }
+    );
+
+    it("never replaces a row of another name", async () => {
+      const { rows, first } = await writeTwice(
+        "aborted_before_decision",
+        "validated",
+        "wikiLint.document"
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        name: "wikiLint.write_validation",
+        data: first.data,
+        documentId: null,
+      });
+    });
   });
 
   it("never enqueues the Event", async () => {

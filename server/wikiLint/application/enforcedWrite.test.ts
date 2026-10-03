@@ -33,8 +33,17 @@ import { toCanonicalMarkdown } from "../adapters/canonicalSyntax";
 import type {
   MarkdownCreateInput,
   MarkdownUpdateInput,
+  PreparedMarkdownCreate,
 } from "../adapters/documentProjection";
-import { ContainedReadError } from "../adapters/writeTransaction";
+import {
+  prepareMarkdownCreate,
+  projectMarkdownCreate,
+} from "../adapters/documentProjection";
+import { persistProjectedCreate } from "../adapters/projectionWriter";
+import {
+  ContainedReadError,
+  EnforcementTransaction,
+} from "../adapters/writeTransaction";
 import { buildPolicySet } from "../core/policySet";
 import { OPERATION_FAILED } from "../core/registry";
 import type * as DeadlineModule from "./deadline";
@@ -50,6 +59,8 @@ import {
   WRITE_PREPARATION_BOUND_MS,
 } from "./deadline";
 import type {
+  AttemptOptions,
+  AttemptPlan,
   EnforcedClassification,
   EnforcedWriteOutcome,
   LinkResolver,
@@ -57,6 +68,7 @@ import type {
 import {
   enforceMarkdownCreate,
   enforceMarkdownUpdate,
+  runAttempt,
   validateProjection,
 } from "./enforcedWrite";
 import { LINT_DOCUMENT_DEADLINE_MS } from "./lintDocument";
@@ -1745,5 +1757,220 @@ describe("the SQL of an enforced write", () => {
     ).toEqual([]);
     expect(statements.filter((sql) => /\bFOR UPDATE\b/.test(sql))).toEqual([]);
     expectBounds(statements);
+  });
+});
+
+describe("attempt options", () => {
+  /**
+   * Runs a create attempt with the given options, its plan mirroring
+   * `enforceMarkdownCreate`.
+   *
+   * @param options - the attempt options.
+   * @param overrides - the plan steps to replace.
+   * @param text - the body.
+   * @returns the fixture, the classification, and the outcome.
+   */
+  async function attempt(
+    options: AttemptOptions,
+    overrides: Partial<AttemptPlan> = {},
+    text = VALID_BODY
+  ) {
+    const { user, collection, ctx } = await fixture();
+    const classification = classify(collection.id, [REQUIRED], {
+      create: true,
+    });
+    const documentId = classification.documentId!;
+    let prepared: PreparedMarkdownCreate;
+    const plan: AttemptPlan = {
+      prepare: () => {
+        prepared = prepareMarkdownCreate({ title: "Doc", text, publish: true });
+      },
+      reauthorize: async () =>
+        (await authorizeDocumentCreate(ctx, { collectionId: collection.id }))
+          .collection?.id,
+      project: () =>
+        projectMarkdownCreate({
+          prepared,
+          documentId,
+          collectionId: collection.id,
+          actor: user,
+        }),
+      persist: (projection) => persistProjectedCreate(ctx, projection, null),
+      probeTarget: () => ({ kind: "document", documentId }),
+      ...overrides,
+    };
+    const run = () =>
+      runAttempt(
+        { ctx, classification, requestId: "test", instanceOrigin: ORIGIN },
+        plan,
+        options
+      );
+    return { user, collection, classification, documentId, run };
+  }
+
+  it("uses the given invocation ID as the correlation ID", async () => {
+    const invocationId = randomUUID();
+    const { documentId, run } = await attempt({ invocationId });
+
+    const outcome = await run();
+
+    expect(outcome.row).toBe(6);
+    const events = await Event.findAll({ where: { documentId } });
+    expect(events.length).toBeGreaterThan(0);
+    for (const event of events) {
+      expect(event.data).toMatchObject({
+        validationCorrelationId: invocationId,
+      });
+    }
+  });
+
+  it("bounds preparation by the given deadline and awaits a promised prepare", async () => {
+    const open = vi.spyOn(EnforcementTransaction, "open");
+    const transaction = vi.spyOn(sequelize, "transaction");
+    const expired = await attempt({ preparation: new Deadline(-1) });
+    transaction.mockClear();
+    expect(await withoutEffect(expired.user.teamId, expired.run)).toEqual({
+      row: 3,
+      message: OPERATION_FAILED,
+    });
+    expect(transaction).not.toHaveBeenCalled();
+    open.mockClear();
+
+    const rejecting = await attempt(
+      {},
+      { prepare: () => Promise.reject(new Error("prepare failed")) }
+    );
+    expect(await withoutEffect(rejecting.user.teamId, rejecting.run)).toEqual({
+      row: 3,
+      message: OPERATION_FAILED,
+    });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("ends in row 5 when the persist gate refuses, and asks it only after a persist decision", async () => {
+    const admitPersist = vi.fn(() => false);
+    const persist = vi.fn();
+    const refused = await attempt({ admitPersist }, { persist });
+
+    expect(
+      await withoutEffect(refused.user.teamId, refused.run, {
+        mutations: true,
+      })
+    ).toEqual({ row: 5, message: OPERATION_FAILED });
+    expect(admitPersist).toHaveBeenCalledTimes(1);
+    expect(persist).not.toHaveBeenCalled();
+
+    admitPersist.mockClear();
+    const rejected = await attempt({ admitPersist }, {}, INVALID_BODY);
+    expect((await rejected.run()).row).toBe(4);
+    expect(admitPersist).not.toHaveBeenCalled();
+  });
+
+  it("passes the decided validation to persist", async () => {
+    const seen: unknown[] = [];
+    const { classification, run } = await attempt(
+      {},
+      {
+        persist: (_projection, validation) => {
+          seen.push(validation);
+          return Promise.reject(new Error("persist failed"));
+        },
+      }
+    );
+
+    expect(await run()).toEqual({ row: 5, message: OPERATION_FAILED });
+    expect(seen).toEqual([cleanValidation(classification)]);
+  });
+
+  it("calls onValidated after P5 and onCommitted before the callbacks", async () => {
+    const order: string[] = [];
+    const enqueue = vi
+      .spyOn(globalEventQueue(), "add")
+      .mockImplementation((() => {
+        order.push("callback");
+        return Promise.resolve();
+      }) as never);
+    const onValidated = vi.fn(() => {
+      order.push("validated");
+    });
+    const onCommitted = vi.fn(() => {
+      order.push("committed");
+    });
+    const { classification, documentId, run } = await attempt({
+      onValidated,
+      onCommitted,
+    });
+
+    const outcome = await run();
+
+    expect(outcome.row).toBe(6);
+    expect(onValidated).toHaveBeenCalledTimes(1);
+    expect(onValidated).toHaveBeenCalledWith({
+      items: [],
+      measures: { markdownBytes: expect.any(Number), linkReferences: 0 },
+    });
+    expect(onCommitted).toHaveBeenCalledTimes(1);
+    expect(onCommitted).toHaveBeenCalledWith({
+      document: expect.objectContaining({ id: documentId }),
+      validation: cleanValidation(classification),
+    });
+    expect(enqueue).toHaveBeenCalled();
+    expect(order.slice(0, 2)).toEqual(["validated", "committed"]);
+    expect(order.indexOf("committed")).toBeLessThan(order.indexOf("callback"));
+  });
+
+  it("changes nothing when a hook throws", async () => {
+    const thrower = () => {
+      throw new Error("hook failed");
+    };
+    const { run, classification } = await attempt({
+      admitPersist: thrower,
+      onValidated: thrower,
+      onCommitted: thrower,
+    });
+
+    const outcome = await run();
+
+    expect(outcome.row).toBe(6);
+    expect((await committed(outcome)).outcome.validation).toEqual(
+      cleanValidation(classification)
+    );
+  });
+
+  it("discards the callbacks when only the probe established the commit", async () => {
+    const enqueue = vi.spyOn(globalEventQueue(), "add");
+    const notify = vi.spyOn(APIUpdateExtension, "notifyUpdate");
+    const onCommitted = vi.fn();
+    const { documentId, run } = await attempt({
+      callbacksAfterProbe: false,
+      onCommitted,
+    });
+    const queries = interceptQueries();
+    let broken = false;
+    queries.use(async (sql, args, next) => {
+      const result = await next();
+      if (sql === "COMMIT;" && !broken) {
+        broken = true;
+        (
+          (args[1] as { transaction: unknown }).transaction as {
+            connection: { connection: { stream: { destroy(): void } } };
+          }
+        ).connection.connection.stream.destroy();
+        throw Object.assign(new Error("read ECONNRESET"), {
+          code: "ECONNRESET",
+        });
+      }
+      return result;
+    });
+
+    const outcome = await run();
+
+    expect(outcome.row).toBe(6);
+    expect(onCommitted).toHaveBeenCalledTimes(1);
+    expect(
+      await Document.unscoped().findByPk(documentId, { paranoid: false })
+    ).not.toBeNull();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
   });
 });

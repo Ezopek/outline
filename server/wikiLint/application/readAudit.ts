@@ -14,7 +14,10 @@ import { AUDIT_WRITE_BOUND_MS } from "./deadline";
 import type { LintDocumentOutcome } from "./lintDocument";
 
 /** A read-only lint operation. */
-export type ReadOperation = AuditDataV1["operation"];
+export type ReadOperation = Extract<
+  AuditDataV1["operation"],
+  "lint_document" | "lint_wiki"
+>;
 
 /** The outcome of a lint invocation that returned a lint result. */
 export type ReadResultOutcome = Extract<
@@ -200,8 +203,39 @@ export async function recordReadAudit(
   },
   write: AuditEventWriter = insertAuditEvent
 ): Promise<void> {
-  const { invocationId } = input;
-  let requestId: string | undefined;
+  const candidate = input.extra?.requestId;
+  const requestId =
+    typeof candidate === "string" && UUID_PATTERN.test(candidate)
+      ? candidate
+      : undefined;
+  await awaitAuditWrite({ requestId, invocationId: input.invocationId }, () => {
+    if (requestId === undefined) {
+      throw new Error("Invalid audit attribution");
+    }
+    return write(readAuditRow(input, requestId), AUDIT_WRITE_BOUND_MS);
+  });
+}
+
+/**
+ * Starts an audit write and waits for it at most `AUDIT_WRITE_BOUND_MS`.
+ * Expiry and every error, including one thrown while starting it, are an
+ * audit failure: it is logged once with only the correlation identifiers and
+ * a reason, and never affects the caller. Expiry stops the wait, not the
+ * write's transaction, so `timeout` means the outcome is unknown: the summary
+ * may still be stored later.
+ *
+ * @param correlation - the identifiers logged on failure.
+ * @param correlation.requestId - the request ID, when it is valid.
+ * @param correlation.invocationId - the invocation ID.
+ * @param start - starts the write.
+ * @returns a promise that resolves once the write settles or its bound
+ *   expires; it never rejects.
+ */
+export async function awaitAuditWrite(
+  correlation: { requestId: string | undefined; invocationId: string },
+  start: () => Promise<void>
+): Promise<void> {
+  const { requestId, invocationId } = correlation;
   let timer: NodeJS.Timeout | undefined;
 
   /**
@@ -222,15 +256,7 @@ export async function recordReadAudit(
   };
 
   try {
-    const candidate = input.extra?.requestId;
-    if (typeof candidate !== "string" || !UUID_PATTERN.test(candidate)) {
-      throw new Error("Invalid audit attribution");
-    }
-    requestId = candidate;
-
-    const pending = Promise.resolve(
-      write(readAuditRow(input, requestId), AUDIT_WRITE_BOUND_MS)
-    );
+    const pending = Promise.resolve(start());
     pending.catch(() => undefined);
     const expiry = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => resolve("timeout"), AUDIT_WRITE_BOUND_MS);

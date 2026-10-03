@@ -1,5 +1,6 @@
 import mime from "mime-types";
 import { truncate } from "es-toolkit/compat";
+import type { Node } from "prosemirror-model";
 import type { ProsemirrorData } from "@shared/types";
 import { DocumentValidation } from "@shared/validations";
 import { serializer } from "@server/editor";
@@ -16,6 +17,8 @@ type Props = {
   fileName: string;
   content: Buffer | string;
   ctx: APIContext;
+  /** Replaces the default import of external images and embedded files. */
+  media?: (doc: Node) => Promise<Node> | Node;
 };
 
 type ImportResult = {
@@ -51,6 +54,7 @@ async function documentImporter({
   content,
   user,
   ctx,
+  media,
 }: Props): Promise<ImportResult> {
   // Find valid extensions and remove them from the title
   const extensions = [
@@ -84,11 +88,9 @@ async function documentImporter({
   let title = extractedTitle || fileTitle;
 
   // Replace external images with attachments
-  const processedDoc = await ProsemirrorHelper.replaceImagesWithAttachments(
-    ctx,
-    doc,
-    user
-  );
+  const processedDoc = media
+    ? await media(doc)
+    : await ProsemirrorHelper.replaceImagesWithAttachments(ctx, doc, user);
 
   // Serialize final text and handle empty documents
   let text = serializer.serialize(processedDoc).trim();

@@ -6,6 +6,7 @@ import { Second } from "@shared/utils/time";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
 import Metrics from "@server/logging/Metrics";
+import { loggableJobData } from "@server/queues/redaction";
 import Redis from "@server/storage/redis";
 import ShutdownHelper, { ShutdownOrder } from "@server/utils/ShutdownHelper";
 
@@ -60,7 +61,7 @@ export function createQueue(
       Logger.error(`Job failed in ${name} queue`, toError(err), {
         jobId: job?.id,
         attemptsMade: job?.attemptsMade,
-        data: job?.data,
+        data: loggableJobData(job?.data, job?.id),
       });
     }
   });

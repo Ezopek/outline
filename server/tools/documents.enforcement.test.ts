@@ -15,6 +15,7 @@ import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { globalEventQueue } from "@server/queues";
 import DocumentImportTask from "@server/queues/tasks/DocumentImportTask";
 import { sequelize } from "@server/storage/database";
+import FileStorage from "@server/storage/files";
 import {
   buildCollection,
   buildDocument,
@@ -624,16 +625,54 @@ describe("destination selection across policy states", () => {
           return;
         }
         if (expected === "enforced") {
-          // An HTML create keeps the interim fail-closed until Story 2.5.
+          // An HTML create runs in its worker task, which records its summary
+          // and deletes its staged source.
           if (path.args(fixture).format === "html") {
-            expectOperationFailed(
-              await callWithoutEffect(
-                fixture,
-                path.tool,
-                path.args(fixture),
-                fixture.target?.id
-              )
+            const documents = await Document.unscoped().count({
+              where: { teamId: fixture.user.teamId },
+              paranoid: false,
+            });
+            const stored = vi.spyOn(FileStorage, "store");
+            const response = await callMcpTool(
+              server,
+              fixture.accessToken,
+              path.tool,
+              path.args(fixture)
             );
+            expect(response?.result?.isError).toBeUndefined();
+            expect(response?.result?.content).toHaveLength(1);
+            expect(
+              normalizedText(response, [
+                fixture.collection.id,
+                fixture.decoy.id,
+              ])
+            ).toBe(
+              enforcedRejection(set, fixture.collection.id, "<allocated>", true)
+            );
+            expect(
+              await Document.unscoped().count({
+                where: { teamId: fixture.user.teamId },
+                paranoid: false,
+              })
+            ).toBe(documents);
+            const [{ key }] = stored.mock.calls.map(([args]) => args);
+            const invocationId = key.split("/")[2];
+            const events = await Event.findAll({
+              where: { teamId: fixture.user.teamId },
+              raw: true,
+            });
+            expect(
+              events.filter((event) => event.name.startsWith("documents."))
+            ).toEqual([]);
+            expect(
+              events
+                .filter((event) => event.name === "wikiLint.write_validation")
+                .map((event) => ({
+                  id: event.id,
+                  outcome: (event.data as { outcome?: string }).outcome,
+                }))
+            ).toEqual([{ id: invocationId, outcome: "rejected" }]);
+            await expect(FileStorage.getFileExists(key)).resolves.toBe(false);
             return;
           }
           const response = await callWithoutEffect(

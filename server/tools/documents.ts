@@ -19,6 +19,7 @@ import {
 import { SearchQuerySource } from "@server/models/SearchQuery";
 import { combineFilters } from "@server/models/helpers/Filters";
 import DocumentImportTask from "@server/queues/tasks/DocumentImportTask";
+import EnforcedDocumentImportTask from "@server/queues/tasks/EnforcedDocumentImportTask";
 import { sequelize } from "@server/storage/database";
 import { authorize, can } from "@server/policies";
 import {
@@ -47,7 +48,10 @@ import type { APIContext } from "@server/types";
 import { TextEditMode } from "@shared/types";
 import type { Filter } from "@shared/helpers/FilterHelper";
 import SearchProviderManager from "@server/utils/SearchProviderManager";
+import type { Deadline } from "@server/wikiLint/application/deadline";
 import { monotonicClock, within } from "@server/wikiLint/application/deadline";
+import type { EnforcedHtmlOutcome } from "@server/wikiLint/application/enforcedHtmlCreate";
+import { enforceHtmlCreate } from "@server/wikiLint/application/enforcedHtmlCreate";
 import type { EnforcedWriteOutcome } from "@server/wikiLint/application/enforcedWrite";
 import {
   enforceMarkdownCreate,
@@ -84,15 +88,15 @@ export function presentDocument(
 }
 
 /**
- * Ends an MCP create or update that is not a baseline write, without any
- * effect.
+ * Ends an MCP create or update classified under an invalid-policy sentinel or
+ * failed in P1, without any effect.
  *
  * @param classification - the write's classification.
  * @returns the modeled invalid-policy rejection, or an `isError` result with
  *   the fixed message.
  */
 function nonBaselineWriteResult(
-  classification: Exclude<WriteClassification, { kind: "baseline" }>
+  classification: Extract<WriteClassification, { kind: "sentinel" | "failed" }>
 ): CallToolResult {
   if (classification.kind === "sentinel") {
     try {
@@ -101,11 +105,6 @@ function nonBaselineWriteResult(
       return error(OPERATION_FAILED);
     }
   }
-  if (classification.kind === "failed") {
-    return error(OPERATION_FAILED);
-  }
-  // Interim fail-closed for an enforced HTML create: its worker task lands in
-  // Story 2.5. Enforced Markdown writes never reach this point.
   return error(OPERATION_FAILED);
 }
 
@@ -132,6 +131,25 @@ async function guarded<T>(step: () => Promise<T> | T): Promise<T | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Runs an optional step of post-commit response assembly, guarded and
+ * bounded by what remains of the assembly deadline.
+ *
+ * @param assembly - the post-commit assembly deadline.
+ * @param step - the step.
+ * @returns its value, or undefined when it fails or the deadline expires.
+ */
+async function optional<T>(
+  assembly: Deadline,
+  step: () => Promise<T> | T
+): Promise<T | undefined> {
+  if (assembly.expired()) {
+    return undefined;
+  }
+  const result = await within(guarded(step), assembly.remainingMs(), undefined);
+  return assembly.expired() ? undefined : result;
 }
 
 /**
@@ -184,24 +202,15 @@ async function enforcedWriteResult(
   const { document, validation, assembly } = outcome;
   const fallback = { success: true, id: document.id, validation };
   try {
-    const optional = async <T>(step: () => Promise<T> | T) => {
-      if (assembly.expired()) {
-        return undefined;
-      }
-      const result = await within(
-        guarded(step),
-        assembly.remainingMs(),
-        undefined
-      );
-      return assembly.expired() ? undefined : result;
-    };
     const [breadcrumb, shareUrl, presented] = await Promise.all([
-      optional(() => getDocumentBreadcrumb(document, user)),
+      optional(assembly, () => getDocumentBreadcrumb(document, user)),
       patch
-        ? optional(() => getPublicShareUrlForDocument(user.team, document.id))
+        ? optional(assembly, () =>
+            getPublicShareUrlForDocument(user.team, document.id)
+          )
         : undefined,
       patch
-        ? optional(() =>
+        ? optional(assembly, () =>
             presentDocument(document, {
               includeData: false,
               includeText: true,
@@ -249,6 +258,38 @@ async function enforcedWriteResult(
   } catch {
     return success(fallback);
   }
+}
+
+/**
+ * Maps the AD-20 row of an enforced HTML create to its tool result. A
+ * committed create loads its document within the post-commit assembly
+ * deadline, then returns what a committed Markdown create returns; a
+ * document that cannot be loaded returns `{ success: true, id, validation }`,
+ * never an `isError` result.
+ *
+ * @param outcome - the row.
+ * @param user - the acting user.
+ * @returns the tool result.
+ */
+async function enforcedHtmlResult(
+  outcome: EnforcedHtmlOutcome,
+  user: User
+): Promise<CallToolResult> {
+  if (outcome.row !== 6) {
+    return enforcedWriteResult(outcome, user, false);
+  }
+  const { documentId, validation, assembly } = outcome;
+  const document = await optional(assembly, () =>
+    Document.findByPk(documentId, { userId: user.id, rejectOnEmpty: true })
+  );
+  if (!document) {
+    return success({ success: true, id: documentId, validation });
+  }
+  return enforcedWriteResult(
+    { row: 6, document, validation, assembly },
+    user,
+    false
+  );
 }
 
 /** The `create_document` arguments P0 reads. */
@@ -700,6 +741,7 @@ export function documentTools(server: McpServer, scopes: string[]) {
       },
       withTracing("create_document", async (input, context) => {
         const enteredAt = monotonicClock();
+        const enteredAtEpochMs = Date.now();
         try {
           const { parentDocumentId } = input;
           const ctx = buildAPIContext(context);
@@ -747,6 +789,30 @@ export function documentTools(server: McpServer, scopes: string[]) {
               instanceOrigin: env.URL,
             });
             return await enforcedWriteResult(outcome, user, false);
+          }
+          if (classification.kind === "enforced") {
+            // An enforced HTML create runs in its own worker task.
+            const outcome = await enforceHtmlCreate({
+              ctx,
+              classification,
+              input: {
+                title: input.title,
+                text: input.text,
+                icon: input.icon,
+                color: input.color,
+                fullWidth: input.fullWidth,
+                publish: input.publish !== false,
+                parentDocumentId,
+                sourceFileName: input.sourceFileName,
+              },
+              extra: context.authInfo?.extra,
+              enteredAt,
+              enteredAtEpochMs,
+              signal: context.signal,
+              schedule: (intent) =>
+                new EnforcedDocumentImportTask().schedule(intent),
+            });
+            return await enforcedHtmlResult(outcome, user);
           }
           if (classification.kind !== "baseline") {
             return nonBaselineWriteResult(classification);

@@ -1,3 +1,4 @@
+import { UniqueConstraintError } from "sequelize";
 import documentCreator from "@server/commands/documentCreator";
 import type { Template } from "@server/models";
 import { Document } from "@server/models";
@@ -20,9 +21,24 @@ export class UnchangedUpdateError extends Error {
 }
 
 /**
- * Persists the projection of a Markdown create in P7 through the baseline
- * writer, which stores the given content as is: it neither parses nor
- * substitutes it.
+ * Whether a P7 failure is a unique violation of the documents primary key:
+ * another attempt already inserted the pre-allocated document ID.
+ *
+ * @param error - the failure.
+ * @returns whether it is such a violation.
+ */
+export function isPreallocatedIdConflict(error: unknown): boolean {
+  if (!(error instanceof UniqueConstraintError)) {
+    return false;
+  }
+  const parent = error.parent as { table?: unknown; constraint?: unknown };
+  return parent.table === "documents" && parent.constraint === "documents_pkey";
+}
+
+/**
+ * Persists the projection of a create in P7 through the baseline writer,
+ * which stores the given content as is: it neither parses nor substitutes
+ * it. An imported collaborative state is stored with it.
  *
  * @param ctx - the API context, bound to the enforcement transaction.
  * @param projection - the validated projection.
@@ -47,6 +63,7 @@ export function persistProjectedCreate(
     sourceMetadata: projection.sourceMetadata
       ? structuredClone(projection.sourceMetadata)
       : undefined,
+    ...(projection.state && { state: Buffer.from(projection.state) }),
     template,
   });
 }

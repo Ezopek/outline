@@ -422,6 +422,45 @@ export class EnforcementTransaction {
 }
 
 /**
+ * Runs one read on a fresh connection in a short transaction whose statement
+ * timeout comes from the bound. The whole read, acquisition included, runs
+ * within the bound.
+ *
+ * @param boundMs - the bound, in milliseconds.
+ * @param read - the read, given the transaction.
+ * @param unavailable - the value when the bound is below the floor, expires,
+ *   or the read fails.
+ * @returns the read's value, or `unavailable`.
+ */
+async function boundedRead<T, U>(
+  boundMs: number,
+  read: (transaction: Transaction) => Promise<T>,
+  unavailable: U
+): Promise<T | U> {
+  if (!(Math.floor(boundMs) >= SET_LOCAL_FLOOR_MS)) {
+    return unavailable;
+  }
+  const deadline = new Deadline(boundMs, monotonicClock);
+  const lookup = async (): Promise<T> => {
+    const transaction = await sequelize.transaction();
+    try {
+      await sequelize.query(
+        `SET LOCAL statement_timeout = ${deadline.batchTimeoutMs()}`,
+        { transaction }
+      );
+      return await read(transaction);
+    } finally {
+      await transaction.rollback().catch(() => undefined);
+    }
+  };
+  return within(
+    lookup().catch((): U => unavailable),
+    boundMs,
+    unavailable
+  );
+}
+
+/**
  * Looks up, on a fresh connection in a short transaction, whether the row an
  * attempt wrote exists: the pre-allocated document of a create, or the
  * attempt's mutation Event. The whole probe, acquisition included, runs
@@ -432,21 +471,13 @@ export class EnforcementTransaction {
  * @returns `present` or `absent`; `unavailable` when the bound is below the
  *   floor, expires, or the probe fails.
  */
-export async function probeCommit(
+export function probeCommit(
   target: ProbeTarget,
   boundMs: number
 ): Promise<ProbeOutcome> {
-  if (!(Math.floor(boundMs) >= SET_LOCAL_FLOOR_MS)) {
-    return "unavailable";
-  }
-  const deadline = new Deadline(boundMs, monotonicClock);
-  const lookup = async (): Promise<ProbeOutcome> => {
-    const transaction = await sequelize.transaction();
-    try {
-      await sequelize.query(
-        `SET LOCAL statement_timeout = ${deadline.batchTimeoutMs()}`,
-        { transaction }
-      );
+  return boundedRead(
+    boundMs,
+    async (transaction): Promise<ProbeOutcome> => {
       const rows =
         target.kind === "document"
           ? await sequelize.query("SELECT id FROM documents WHERE id = :id", {
@@ -468,14 +499,88 @@ export async function probeCommit(
               }
             );
       return rows.length > 0 ? "present" : "absent";
-    } finally {
-      await transaction.rollback().catch(() => undefined);
-    }
-  };
-  return within(
-    lookup().catch((): ProbeOutcome => "unavailable"),
+    },
+    "unavailable"
+  );
+}
+
+/** The Event name of an enforced write's audit summary. */
+const WRITE_SUMMARY_EVENT = "wikiLint.write_validation";
+
+/**
+ * The outcome of an enforced HTML requester's probe: the pre-allocated
+ * document with the stored `data` of the invocation's write summary, or null
+ * when it has none.
+ */
+export type ImportProbeOutcome =
+  | "absent"
+  | "unavailable"
+  | { present: true; summary: unknown };
+
+/**
+ * Looks up, in one statement on a fresh connection in a short transaction,
+ * the pre-allocated document of an enforced HTML create joined with the
+ * write summary whose Event ID is the invocation ID. The whole probe,
+ * acquisition included, runs within the bound, and it is never retried.
+ *
+ * @param documentId - the pre-allocated document.
+ * @param invocationId - the invocation, the summary's Event ID.
+ * @param boundMs - the bound, in milliseconds.
+ * @returns `absent`, or the found row's summary data; `unavailable` when the
+ *   bound is below the floor, expires, or the probe fails.
+ */
+export function probeImport(
+  documentId: string,
+  invocationId: string,
+  boundMs: number
+): Promise<ImportProbeOutcome> {
+  return boundedRead(
     boundMs,
-    "unavailable" as ProbeOutcome
+    async (transaction): Promise<ImportProbeOutcome> => {
+      const rows = await sequelize.query<{ summary: unknown }>(
+        `SELECT e.data AS summary FROM documents d LEFT JOIN events e ON e.id = :invocationId AND e.name = :name WHERE d.id = :documentId`,
+        {
+          replacements: { documentId, invocationId, name: WRITE_SUMMARY_EVENT },
+          transaction,
+          type: QueryTypes.SELECT,
+        }
+      );
+      return rows.length > 0
+        ? { present: true, summary: rows[0].summary ?? null }
+        : "absent";
+    },
+    "unavailable"
+  );
+}
+
+/**
+ * Reads, on a fresh connection in a short transaction, the stored `data` of
+ * the write summary whose Event ID is the invocation ID. The whole read,
+ * acquisition included, runs within the bound.
+ *
+ * @param invocationId - the invocation, the summary's Event ID.
+ * @param boundMs - the bound, in milliseconds.
+ * @returns the data; null when there is no summary, the bound is below the
+ *   floor, expires, or the read fails.
+ */
+export function readWriteSummary(
+  invocationId: string,
+  boundMs: number
+): Promise<unknown> {
+  return boundedRead(
+    boundMs,
+    async (transaction) => {
+      const rows = await sequelize.query<{ data: unknown }>(
+        `SELECT data FROM events WHERE id = :invocationId AND name = :name`,
+        {
+          replacements: { invocationId, name: WRITE_SUMMARY_EVENT },
+          transaction,
+          type: QueryTypes.SELECT,
+        }
+      );
+      return rows.length > 0 ? (rows[0].data ?? null) : null;
+    },
+    null
   );
 }
 

@@ -13,6 +13,7 @@ import {
   taskQueue,
 } from "../queues";
 import processors from "../queues/processors";
+import { loggableTaskProps } from "../queues/redaction";
 import tasks from "../queues/tasks";
 
 export default async function init() {
@@ -169,10 +170,13 @@ export default async function init() {
         isRoot: true,
       })(async function (job) {
         const { name, props } = job.data;
+        // Decided by name before the registration check, so an unregistered
+        // enforced task is redacted too.
+        const loggableProps = loggableTaskProps(name, props, job.id);
         const TaskClass = tasks[name];
 
         setResource(`Task.${name}`);
-        addTags({ props });
+        addTags({ props: loggableProps });
 
         if (!TaskClass) {
           throw new Error(
@@ -180,7 +184,7 @@ export default async function init() {
           );
         }
 
-        Logger.info("worker", `${name} running`, props);
+        Logger.info("worker", `${name} running`, loggableProps);
 
         // @ts-expect-error We will not instantiate an abstract class
         const task = new TaskClass();
@@ -193,7 +197,11 @@ export default async function init() {
             await task.onFailed(props).catch(); // suppress exception from 'onFailed'.
           }
 
-          Logger.error(`Error processing task in ${name}`, toError(err), props);
+          Logger.error(
+            `Error processing task in ${name}`,
+            toError(err),
+            loggableProps
+          );
           throw err;
         }
       })

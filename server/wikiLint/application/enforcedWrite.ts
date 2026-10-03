@@ -57,7 +57,7 @@ import type { LinkLookupKey } from "../core/internalLinks";
 import { extractInternalLinks, linkLookupBatches } from "../core/internalLinks";
 import { sortIssues } from "../core/ordering";
 import type { RuleConfig } from "../core/registry";
-import { createSystemFailure } from "../core/registry";
+import { OPERATION_FAILED, createSystemFailure } from "../core/registry";
 import {
   COMMIT_PROBE_BOUND_MS,
   Deadline,
@@ -328,8 +328,8 @@ export function writeValidation(input: {
   };
 }
 
-/** The inputs every enforced Markdown write shares. */
-interface ShellInput {
+/** The inputs every enforced write attempt shares. */
+export interface ShellInput {
   /** The handler's API context; the shell binds it to its transaction. */
   ctx: APIContext;
   classification: EnforcedClassification;
@@ -342,11 +342,11 @@ interface ShellInput {
 }
 
 /** The write-specific steps of one attempt. */
-interface AttemptPlan {
+export interface AttemptPlan {
   /** The document to lock after the collection; none for a create. */
   lockDocumentId?: string;
-  /** P2: input-only preparation. */
-  prepare(): void;
+  /** P2: preparation outside the transaction; a promise is awaited. */
+  prepare(): void | Promise<void>;
   /**
    * P3: re-fetches and re-authorizes under the transaction.
    *
@@ -355,35 +355,90 @@ interface AttemptPlan {
   reauthorize(): Promise<string | null | undefined>;
   /** P4: projects from the re-fetched state. */
   project(): Promise<ProjectedDocument>;
-  /** P7: persists the projection; returns the in-transaction re-fetch. */
-  persist(projection: ProjectedDocument): Promise<Document>;
+  /**
+   * P7: persists the projection; returns the in-transaction re-fetch.
+   *
+   * @param projection - the validated projection.
+   * @param validation - the decided validation.
+   */
+  persist(
+    projection: ProjectedDocument,
+    validation: WriteValidation
+  ): Promise<Document>;
   /** P8: what the commit probe looks up. */
   probeTarget(since: Date, invocationId: string): ProbeTarget;
 }
 
 /**
- * Runs one AD-20 P2 to P8 attempt of an enforced Markdown write in one
- * unmanaged transaction, bounded by AD-11.
+ * The optional differences of an attempt that does not run in the request,
+ * such as the enforced HTML import worker. Omitted, an attempt behaves as an
+ * enforced Markdown write does.
+ */
+export interface AttemptOptions {
+  /** The attempt's correlation ID; defaults to a fresh UUID. */
+  invocationId?: string;
+  /** The preparation bound; defaults to one started at shell entry. */
+  preparation?: Deadline;
+  /**
+   * Checked after a persist decision, before the persistence deadline
+   * starts; `false` rolls back and ends in row 5.
+   */
+  admitPersist?: () => boolean;
+  /**
+   * Whether the buffered callbacks run when only the commit probe
+   * established the commit; defaults to true.
+   */
+  callbacksAfterProbe?: boolean;
+  /** Called with the P5 validation, right after P5. */
+  onValidated?: (validated: ProjectionValidation) => void;
+  /** Called once the commit is established, before the callbacks start. */
+  onCommitted?: (committed: {
+    document: Document;
+    validation: WriteValidation;
+  }) => void;
+}
+
+/**
+ * Runs a hook of an attempt; a throwing hook changes nothing.
+ *
+ * @param hook - the hook.
+ * @returns the hook's value, or undefined when it threw.
+ */
+function runHook<T>(hook: () => T): T | undefined {
+  try {
+    return hook();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Runs one AD-20 P2 to P8 attempt of an enforced write in one unmanaged
+ * transaction, bounded by AD-11.
  *
  * @param shell - the shared inputs.
  * @param plan - the write-specific steps.
+ * @param options - the optional differences; see `AttemptOptions`.
  * @returns the row the attempt ended in.
  */
-async function runAttempt(
+export async function runAttempt(
   shell: ShellInput,
-  plan: AttemptPlan
+  plan: AttemptPlan,
+  options: AttemptOptions = {}
 ): Promise<EnforcedWriteOutcome> {
   const { ctx, classification, signal, requestId, instanceOrigin } = shell;
   const { entry, readable } = classification;
   const { collectionId } = entry;
   const actor = ctx.state.auth.user;
-  const invocationId = randomUUID();
-  const preparation = new Deadline(WRITE_PREPARATION_BOUND_MS, monotonicClock);
+  const invocationId = options.invocationId ?? randomUUID();
+  const preparation =
+    options.preparation ??
+    new Deadline(WRITE_PREPARATION_BOUND_MS, monotonicClock);
 
-  // P2: input-only preparation, then the transaction, within the bound.
+  // P2: preparation, then the transaction, within the bound.
   let enforcement: EnforcementTransaction;
   try {
-    plan.prepare();
+    await plan.prepare();
     throwIfAborted(signal);
     enforcement = await EnforcementTransaction.open(
       invocationId,
@@ -450,6 +505,9 @@ async function runAttempt(
             },
           }),
       });
+      if (options.onValidated) {
+        runHook(() => options.onValidated!(validated));
+      }
 
       // P6: decide; the signal is ignored from here on.
       throwIfAborted(signal);
@@ -469,6 +527,13 @@ async function runAttempt(
       await enforcement.rollback();
       return { row: 4, validation };
     }
+    if (
+      options.admitPersist &&
+      runHook(() => options.admitPersist!()) === false
+    ) {
+      await enforcement.rollback();
+      return { row: 5, message: OPERATION_FAILED };
+    }
 
     // P7: persist exactly the projection, within the persistence budget less
     // the probe reserve.
@@ -481,7 +546,7 @@ async function runAttempt(
       await enforcement.setLocalTimeouts(
         persistence.batchTimeoutMs(COMMIT_PROBE_BOUND_MS)
       );
-      document = await plan.persist(projection);
+      document = await plan.persist(projection, validation);
       await enforcement.setLocalTimeouts(
         persistence.batchTimeoutMs(COMMIT_PROBE_BOUND_MS)
       );
@@ -505,12 +570,18 @@ async function runAttempt(
           ? { row: 5, message: abortMessage(commit.error) }
           : { row: 7 };
       }
+      if (options.callbacksAfterProbe === false) {
+        enforcement.discard();
+      }
     }
     // The callback wait and the response enrichments share one deadline.
     const assembly = new Deadline(
       POST_COMMIT_ASSEMBLY_BOUND_MS,
       monotonicClock
     );
+    if (options.onCommitted) {
+      runHook(() => options.onCommitted!({ document, validation }));
+    }
     await enforcement.runCallbacks(assembly.remainingMs(), (reason) =>
       Logger.warn("Enforced write post-commit callback failed", {
         requestId,
