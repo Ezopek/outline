@@ -53,6 +53,7 @@ source_spec: `spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md`
 severity: low
 reason: server/tools/README.md presents "- Status: Active" / "- Last verified: 2026-09-20" as the shape that survives the Markdown/ProseMirror round trip. Story 1.10's HTTP suite (server/routes/mcp/wikiLint.test.ts, "round trip") shows MCP create_document + fetch return "* Status: Active"; the fields stay valid and lint clean, but agents copying the example as patch findText would miss. The README is a companion of the binding SPEC, so the edit needs a deliberate contract update rather than an unattended story change.
 status: open
+decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* Status: Active` / `* Last verified: 2026-09-20`, and record in the binding SPEC that canonical `* ` bullets round-trip byte-identically while `- ` input lints clean (Story 1.10 AC5 interpretation). No code change.
 
 ### DW-8: The lint-repair-relint loop needs repair knowledge that Findings do not carry: a missing metadata field value or a missing configured global index is not identified by the AD-12 Finding.
 origin: spec-deferred 656e36dfb1ba
