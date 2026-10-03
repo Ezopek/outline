@@ -3,7 +3,7 @@ title: 'DW-1: Pin the canonical block start-line invariant'
 type: 'chore'
 created: '2026-10-04'
 baseline_revision: 'd68c67baae16ae7f1b2bff4f69d5d4179d1fe776'
-status: 'done'
+status: 'blocked'
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
@@ -97,6 +97,20 @@ deferred: []
   - `[low]` `[reject]` Intent Alignment: the "none exists" evidence partly lives in spec prose. — The fix is to edit this build's spec. The committed sweep is the evidence the intent requests.
   - `[false]` `[reject]` Intent Alignment: the intent's expectations live at the production readers, while the test exercises the unit pair. — The intent explicitly asks for a collocated sweep in `canonicalSyntax.test.ts`, and the readers call the same pair (`wikiReader.ts:193-200`, `documentReader.ts:334-335`).
 
+### 2026-10-04 — Follow-up review pass
+- verdicts: 10 findings — high 0, medium 0, low 9, false 1, maybe-false 0
+- findings:
+  - `[low]` `[reject]` Blind Hunter: a named leaf or container can lose all valid fixtures while node-type coverage still passes. — Carried from the previous silent per-leaf drop row; the code still filters with `check()` and asserts node types, and the previously recorded low verdict and reject route stand.
+  - `[low]` `[patch]` Blind Hunter: stored legacy notice shapes are excluded by `check()`. — Carried from the previous skip-premise row; its comment correction remains, and the schema-valid intent boundary still excludes legacy invalid content. No patch was applied in this pass.
+  - `[low]` `[reject]` Blind Hunter: the test does not assert mapped tokens and empty fixtures may parse to zero blocks. — Carried from the previous throw-dependent pin row; the unchanged throw is the specified observable and other fixtures cover the shapes.
+  - `[low]` `[reject]` Blind Hunter: the current spec lacks `## Auto Run Result` while its log cites it. — Verified before finalization; this pass writes a fresh result below. The proposed fix edits this build's spec, so the finding is rejected under the review rule.
+  - `[low]` `[reject]` Blind Hunter: Code Map line anchors are inaccurate. — Carried from the previous Code Map row; correcting this build's spec is excluded by the review rule.
+  - `[low]` `[reject]` Blind Hunter: the earlier mutation proves detection of broad mapped-token failure, not a blank-line mapping specifically. — Carried from the previous mutation-wording row; changing the verification plan edits this build's spec.
+  - `[low]` `[reject]` Edge Case Hunter: a named leaf or wrapper could be filtered out entirely. — Carried from the previous silent per-leaf drop row; the code and low-risk assessment are unchanged.
+  - `[low]` `[patch]` Verification Gap: legacy notice content can reach Wiki readers but is filtered out by this sweep. — Carried from the previous verification-gap row; the same `check()` filter remains. No patch was applied in this pass because widening fixtures needs an intent-boundary decision.
+  - `[low]` `[patch]` Intent Alignment: the broad DW-1 question reaches production content outside the curated schema-valid fixtures. — Carried from the previous narrowed-input row; the explicit acceptance surface is the public serializer/parser pair for schema-valid fixtures. No patch was applied in this pass.
+  - `[false]` `[reject]` Intent Alignment: the ledger diff breaches this story's no-ledger-edit boundary. — The ledger is owned and changed by the orchestrator; this run did not edit, reopen, rewrite, or stage its entries. Its bookkeeping is outside this story's reviewed change.
+
 ## Design Notes
 
 Planning evidence: a throwaway probe serialized and parsed 40,149 schema-valid documents covering 37 leaf shapes × 11 containers (pairs, nesting, trailing siblings). It produced 339,466 syntax nodes and 0 throws. Mechanism: the markdown-it block tokenizer skips empty lines before invoking any rule. A raw whitespace-only line is empty in every list and blockquote context. Custom block rules map from their marker line. The core rules (`breaks`, `links`, `checkboxes`, `tables`, mentions) create tokens without maps, or nested-parse inside cells, where positions are taken from the row. A blank-start block is therefore unreachable from canonical Markdown, and the throw stays as a guard, not a degraded `null`.
@@ -113,42 +127,16 @@ Planning evidence: a throwaway probe serialized and parsed 40,149 schema-valid d
 
 ## Auto Run Result
 
-Status: done
+Status: blocked
 
-**Summary:** DW-1 is settled as unreachable. No `toCanonicalMarkdown` output produced a mapped block token that starts on a whitespace-only line. The markdown-it block loop skips empty lines before every rule, and Outline's custom block rules map from their marker lines. The `blockPosition` throw, the CR guard and every other `CanonicalMarkdownError` path are unchanged; `canonicalSyntax.ts` is byte-identical to the baseline. A collocated sweep now pins the invariant.
+**Summary:** The follow-up review found no new code changes to make under the schema-valid intent contract. The collocated sweep remains the implementation of DW-1; `canonicalSyntax.ts` is unchanged from the baseline.
 
-**Files changed:**
-- `server/wikiLint/adapters/canonicalSyntax.test.ts` — new `canonical block start lines` sweep. It covers 45 leaf shapes × 12 containers (alone, ordered pairs, two-deep nesting, nesting followed by a sibling): 37,800 generated fixtures, of which the schema-valid ones go through `toCanonicalMarkdown` → `parseCanonicalMarkdown`. It asserts no failures and coverage of every non-inline schema node type.
-- `_bmad-output/implementation-artifacts/spec-dw-1-canonical-block-blank-line-position.md` — this spec.
+**Files changed in this pass:** `_bmad-output/implementation-artifacts/spec-dw-1-canonical-block-blank-line-position.md` — follow-up triage and verification result. The previously committed implementation is in `server/wikiLint/adapters/canonicalSyntax.test.ts`. The orchestrator-owned ledger change was not edited or staged by this run.
 
-**Review findings:** 23 findings (low 19, false 4).
-- Patches applied (6 entries, all low):
-  - corrected the false skip comment;
-  - newline-text leaves;
-  - nested container followed by a sibling;
-  - `toggle title` container;
-  - upper-alpha past `z` and checked checkbox items;
-  - padded ordered marker preserved at document level.
-- Deferred: none.
-- Rejected:
-  - silent per-leaf drop (low, unlikely, adds guard logic);
-  - pin through the throw and vacuous fixtures (low, intent keeps the throw);
-  - probe numbers, mutation wording, Code Map anchors and evidence in prose (fix is editing this spec);
-  - duplicate fixtures and unreadable failure output (low, cosmetic, adds logic);
-  - DW-1 closure (false: the orchestrator records it);
-  - table cells (false: by design);
-  - attribute variety (false: intent scopes to block node types);
-  - production surface (false: intent names this test file).
+**Review findings:** 10 findings: 9 low and 1 false. No patch was applied in this pass; no new deferred item was added. Eight findings carry earlier verdicts and routes, the missing-result issue is addressed by this finalization but rejected under the review rule, and the ledger finding is false because that file is orchestrator-owned. Patched entries by verdict in this pass: high 0, medium 0, low 0. Follow-up review recommended: false.
 
-**Follow-up review recommendation:** false. Patched entries by verdict: high 0, medium 0, low 6.
+**Verification:** `scripts/test-db.sh ensure` exited 0. Targeted Vitest passed 58/58 tests. `corepack yarn tsc`, type-aware `oxlint`, `oxfmt --check`, and the baseline comparison for `canonicalSyntax.ts` all exited 0. The prior pass's temporary mutation was not repeated because the implementation code did not change in this pass.
 
-**Verification:**
-- `scripts/test-db.sh ensure` exit 0.
-- `TZ=UTC node_modules/.bin/vitest run --project server server/wikiLint/adapters/canonicalSyntax.test.ts`: 58/58 passed; the sweep runs in about 1.2 s.
-- `corepack yarn tsc` exit 0.
-- `oxlint --type-aware` and `oxfmt --check` on the test file: clean.
-- Mutation run: making `blockPosition` throw for any mapped token at line index ≥ 1 failed the sweep with named fixtures. It was reverted, and the `git diff --exit-code d68c67baae16ae7f1b2bff4f69d5d4179d1fe776 -- server/wikiLint/adapters/canonicalSyntax.ts` check run afterwards exited 0.
+**Residual risk:** The sweep excludes stored legacy notice content that fails the current schema's `Node.check()`. Extending coverage requires a decision to widen the intent contract. The pin also depends on the existing `blockPosition` throw continuing to report blank-start mappings.
 
-**Residual risks:**
-- Per the frozen intent-contract, the sweep skips fixtures that `Node.check()` rejects. Production loads stored content with `Node.fromJSON` and no `check()`, so legacy notices from before `3b43460a0` can still hold math, embed, video, table, toggle or notice children. A review probe found that all 846 such fixtures serialize and parse without throwing today, but they are not pinned. Pinning them needs a decision to amend the intent-contract boundary.
-- The pin relies on the `blockPosition` throw. If someone later degrades it to `null`, the sweep no longer guards blank-start mapping.
+**Blocking condition:** The workflow requires a clean working tree after committing reviewed files. The deferred-work ledger has a pre-existing orchestrator-owned modification that this run is forbidden to change or commit, so that gate cannot pass here.
