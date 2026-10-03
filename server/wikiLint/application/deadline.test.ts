@@ -78,6 +78,30 @@ describe("Deadline", () => {
     expect(() => deadline.batchTimeoutMs()).toThrow(DeadlineFloorError);
   });
 
+  it("keeps a reserve back from the floored remainder", () => {
+    const { clock, set } = manualClock(0);
+    const deadline = new Deadline(9000, clock);
+
+    expect(deadline.batchTimeoutMs(2000)).toBe(7000);
+    set(1000.5);
+    expect(deadline.batchTimeoutMs(2000)).toBe(5999);
+    expect(deadline.batchTimeoutMs(0)).toBe(7999);
+    expect(deadline.batchTimeoutMs()).toBe(7999);
+  });
+
+  it("checks the floor after the reserve", () => {
+    const { clock, set } = manualClock(0);
+    const deadline = new Deadline(9000, clock);
+
+    set(9000 - 2000 - SET_LOCAL_FLOOR_MS);
+    expect(deadline.batchTimeoutMs(2000)).toBe(SET_LOCAL_FLOOR_MS);
+    set(9000 - 2000 - SET_LOCAL_FLOOR_MS + 0.5);
+    expect(() => deadline.batchTimeoutMs(2000)).toThrow(DeadlineFloorError);
+    expect(deadline.batchTimeoutMs()).toBe(2000 + SET_LOCAL_FLOOR_MS - 1);
+    set(8000);
+    expect(() => deadline.batchTimeoutMs(2000)).toThrow(DeadlineFloorError);
+  });
+
   it("uses the code-owned provisional floor", () => {
     expect(SET_LOCAL_FLOOR_MS).toBe(100);
   });

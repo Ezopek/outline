@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import documentCreator, {
@@ -8,7 +9,13 @@ import documentCreator, {
 import documentMover from "@server/commands/documentMover";
 import documentRestorer from "@server/commands/documentRestorer";
 import documentUpdater from "@server/commands/documentUpdater";
-import { Collection, Document, SearchQuery, Template } from "@server/models";
+import {
+  Collection,
+  Document,
+  SearchQuery,
+  Template,
+  type User,
+} from "@server/models";
 import { SearchQuerySource } from "@server/models/SearchQuery";
 import { combineFilters } from "@server/models/helpers/Filters";
 import DocumentImportTask from "@server/queues/tasks/DocumentImportTask";
@@ -34,17 +41,27 @@ import {
   pathToUrl,
   withTracing,
 } from "./util";
+import env from "@server/env";
 import { ValidationError } from "@server/errors";
+import type { APIContext } from "@server/types";
 import { TextEditMode } from "@shared/types";
 import type { Filter } from "@shared/helpers/FilterHelper";
 import SearchProviderManager from "@server/utils/SearchProviderManager";
 import { monotonicClock } from "@server/wikiLint/application/deadline";
+import type { EnforcedWriteOutcome } from "@server/wikiLint/application/enforcedWrite";
+import {
+  enforceMarkdownCreate,
+  enforceMarkdownUpdate,
+} from "@server/wikiLint/application/enforcedWrite";
 import type { WriteClassification } from "@server/wikiLint/application/writeClassification";
 import {
   classifyWrite,
   rejectInvalidPolicyWrite,
 } from "@server/wikiLint/application/writeClassification";
-import { OPERATION_FAILED } from "@server/wikiLint/core/registry";
+import {
+  COLLECTION_CONFLICT,
+  OPERATION_FAILED,
+} from "@server/wikiLint/core/registry";
 
 /**
  * Presents a document for a tool response. Adds MCP-specific fields
@@ -87,9 +104,218 @@ function nonBaselineWriteResult(
   if (classification.kind === "failed") {
     return error(OPERATION_FAILED);
   }
-  // Interim fail-closed for a valid enforced policy: projection, the AD-8
-  // transaction and validation, and the HTML worker land in Stories 2.2/2.3/2.5.
+  // Interim fail-closed for an enforced HTML create: its worker task lands in
+  // Story 2.5. Enforced Markdown writes never reach this point.
   return error(OPERATION_FAILED);
+}
+
+/**
+ * Reads the request ID that `/mcp` attaches to the authentication info.
+ *
+ * @param context - the MCP request context.
+ * @returns the request ID, if any.
+ */
+function requestIdOf(context: { authInfo?: AuthInfo }): string | undefined {
+  const requestId = context.authInfo?.extra?.requestId;
+  return typeof requestId === "string" ? requestId : undefined;
+}
+
+/**
+ * Runs a guarded step of response assembly.
+ *
+ * @param step - the step.
+ * @returns its value, or undefined when it fails.
+ */
+async function guarded<T>(step: () => Promise<T> | T): Promise<T | undefined> {
+  try {
+    return await step();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Maps the AD-20 row of an enforced Markdown write to its tool result. A
+ * committed write returns the baseline success object for its mode with
+ * `validation` appended as the last key of the first block; each enrichment
+ * is guarded, and an identity that cannot be assembled falls back to
+ * `{ success: true, id, validation }`.
+ *
+ * @param outcome - the row.
+ * @param user - the acting user.
+ * @param patch - whether the write is a `patch` update.
+ * @returns the tool result.
+ */
+async function enforcedWriteResult(
+  outcome: EnforcedWriteOutcome,
+  user: User,
+  patch: boolean
+): Promise<CallToolResult> {
+  switch (outcome.row) {
+    case 2:
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ error: { id: COLLECTION_CONFLICT } }),
+          },
+        ],
+        isError: true,
+      };
+    case 3:
+    case 5:
+      return error(outcome.message);
+    case 4:
+      return success({ success: false, validation: outcome.validation });
+    case 6:
+      break;
+    case 7:
+      return error(OPERATION_FAILED);
+    default: {
+      const unhandled: never = outcome;
+      return unhandled;
+    }
+  }
+
+  const { document, validation } = outcome;
+  const fallback = () =>
+    success({ success: true, id: document.id, validation });
+  const breadcrumb = await guarded(() => getDocumentBreadcrumb(document, user));
+
+  if (!patch) {
+    const identity = await guarded(() =>
+      pathToUrl(user.team, {
+        id: document.id,
+        title: document.title,
+        url: document.url,
+      })
+    );
+    return identity
+      ? success({
+          success: true,
+          ...identity,
+          ...(breadcrumb !== undefined && { breadcrumb }),
+          validation,
+        })
+      : fallback();
+  }
+
+  const [presented, shareUrl] = await Promise.all([
+    guarded(async () => {
+      const { text, ...attributes } = await presentDocument(document, {
+        includeData: false,
+        includeText: true,
+        includeUpdatedAt: true,
+      });
+      return { text, document: pathToUrl(user.team, attributes) };
+    }),
+    guarded(() => getPublicShareUrlForDocument(user.team, document.id)),
+  ]);
+  if (!presented) {
+    return fallback();
+  }
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify({
+          document: presented.document,
+          ...(breadcrumb !== undefined && { breadcrumb }),
+          ...(shareUrl !== undefined && { shareUrl }),
+          validation,
+        }),
+      },
+      {
+        type: "text" as const,
+        text: typeof presented.text === "string" ? presented.text : "",
+      },
+    ],
+  } satisfies CallToolResult;
+}
+
+/** The `create_document` arguments P0 reads. */
+interface CreateLocationInput {
+  collectionId?: string;
+  parentDocumentId?: string;
+  templateId?: string;
+}
+
+/**
+ * The P0 of `create_document`: authorizes the location and reads the
+ * template. Bound to `ctx.state.transaction` when one is set, so an enforced
+ * write re-runs it in P3.
+ *
+ * @param ctx - the API context.
+ * @param input - the location and template arguments.
+ * @returns the resolved collection, if any, and the template, if any.
+ */
+async function authorizeCreateInput(
+  ctx: APIContext,
+  input: CreateLocationInput
+): Promise<{ collection?: Collection | null; template?: Template | null }> {
+  const { user } = ctx.state.auth;
+  const { collection } = await authorizeDocumentCreate(ctx, {
+    collectionId: input.collectionId,
+    parentDocumentId: input.parentDocumentId,
+  });
+
+  let template: Template | null | undefined;
+  if (input.templateId) {
+    template = await Template.findByPk(input.templateId, {
+      userId: user.id,
+      transaction: ctx.state.transaction,
+    });
+    authorize(user, "read", template);
+  }
+  return { collection, template };
+}
+
+/** The `update_document` arguments P0 reads. */
+interface UpdateTargetInput {
+  id: string;
+  publish?: boolean;
+  collectionId?: string;
+}
+
+/**
+ * The P0 of `update_document`: reads the document with its state and
+ * authorizes the update, publication, or unpublish. Bound to
+ * `ctx.state.transaction` when one is set, so an enforced write re-runs it
+ * in P3.
+ *
+ * @param ctx - the API context.
+ * @param input - the target and publication arguments.
+ * @returns the document and the post-operation collection: publication
+ *   resolves it, and any other update or unpublish keeps the document's own.
+ */
+async function authorizeUpdateInput(
+  ctx: APIContext,
+  input: UpdateTargetInput
+): Promise<{ document: Document; collectionId: string | null | undefined }> {
+  const { user } = ctx.state.auth;
+  const document = await Document.findByPk(input.id, {
+    userId: user.id,
+    includeState: true,
+    rejectOnEmpty: true,
+    transaction: ctx.state.transaction,
+  });
+
+  let collectionId: string | null | undefined = document.collectionId;
+  if (input.publish === false) {
+    authorize(user, "unpublish", document);
+  } else {
+    authorize(user, "update", document);
+
+    if (input.publish) {
+      const collection = await authorizeDocumentPublish(
+        ctx,
+        document,
+        input.collectionId
+      );
+      collectionId = collection?.id;
+    }
+  }
+  return { document, collectionId };
 }
 
 /**
@@ -457,22 +683,14 @@ export function documentTools(server: McpServer, scopes: string[]) {
       withTracing("create_document", async (input, context) => {
         const enteredAt = monotonicClock();
         try {
-          const { collectionId, parentDocumentId, templateId } = input;
+          const { parentDocumentId } = input;
           const ctx = buildAPIContext(context);
           const { user } = ctx.state.auth;
 
-          const { collection } = await authorizeDocumentCreate(ctx, {
-            collectionId,
-            parentDocumentId,
-          });
-
-          let template: Template | null | undefined;
-          if (templateId) {
-            template = await Template.findByPk(templateId, {
-              userId: user.id,
-            });
-            authorize(user, "read", template);
-          }
+          const { collection, template } = await authorizeCreateInput(
+            ctx,
+            input
+          );
 
           const classification = await classifyWrite({
             collectionId: collection?.id,
@@ -480,6 +698,38 @@ export function documentTools(server: McpServer, scopes: string[]) {
             create: true,
             enteredAt,
           });
+          if (classification.kind === "enforced" && input.format !== "html") {
+            const outcome = await enforceMarkdownCreate({
+              ctx,
+              classification,
+              input: {
+                title: input.title,
+                text: input.text,
+                icon: input.icon,
+                color: input.color,
+                fullWidth: input.fullWidth,
+                publish: input.publish !== false,
+                parentDocumentId,
+                sourceMetadata: input.sourceFileName
+                  ? {
+                      fileName: input.sourceFileName,
+                      mimeType: "text/markdown",
+                    }
+                  : undefined,
+              },
+              reauthorize: async () => {
+                const reauthorized = await authorizeCreateInput(ctx, input);
+                return {
+                  collectionId: reauthorized.collection?.id,
+                  template: reauthorized.template,
+                };
+              },
+              signal: context.signal,
+              requestId: requestIdOf(context),
+              instanceOrigin: env.URL,
+            });
+            return await enforcedWriteResult(outcome, user, false);
+          }
           if (classification.kind !== "baseline") {
             return nonBaselineWriteResult(classification);
           }
@@ -723,30 +973,8 @@ export function documentTools(server: McpServer, scopes: string[]) {
           const ctx = buildAPIContext(context);
           const { user } = ctx.state.auth;
 
-          const document = await Document.findByPk(input.id, {
-            userId: user.id,
-            includeState: true,
-            rejectOnEmpty: true,
-          });
-
-          // The post-operation collection: publication resolves it, and any
-          // other update or unpublish keeps the document's own.
-          let postOperationCollectionId: string | null | undefined =
-            document.collectionId;
-          if (input.publish === false) {
-            authorize(user, "unpublish", document);
-          } else {
-            authorize(user, "update", document);
-
-            if (input.publish) {
-              const collection = await authorizeDocumentPublish(
-                ctx,
-                document,
-                input.collectionId
-              );
-              postOperationCollectionId = collection?.id;
-            }
-          }
+          const { document, collectionId: postOperationCollectionId } =
+            await authorizeUpdateInput(ctx, input);
 
           const classification = await classifyWrite({
             collectionId: postOperationCollectionId,
@@ -754,6 +982,32 @@ export function documentTools(server: McpServer, scopes: string[]) {
             create: false,
             enteredAt,
           });
+          if (classification.kind === "enforced") {
+            const outcome = await enforceMarkdownUpdate({
+              ctx,
+              classification,
+              documentId: document.id,
+              input: {
+                title: input.title,
+                text: input.text,
+                editMode: input.editMode,
+                findText: input.findText,
+                icon: input.icon,
+                color: input.color,
+                fullWidth: input.fullWidth,
+                publish: input.publish,
+              },
+              reauthorize: () => authorizeUpdateInput(ctx, input),
+              signal: context.signal,
+              requestId: requestIdOf(context),
+              instanceOrigin: env.URL,
+            });
+            return await enforcedWriteResult(
+              outcome,
+              user,
+              input.editMode === TextEditMode.Patch
+            );
+          }
           if (classification.kind !== "baseline") {
             return nonBaselineWriteResult(classification);
           }

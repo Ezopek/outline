@@ -14,6 +14,38 @@ export const SET_LOCAL_FLOOR_MS = 100;
 export const AUDIT_WRITE_BOUND_MS = 3000;
 
 /**
+ * The AD-11 validation deadline, in milliseconds: an enforced write's P3 to
+ * P5, from the opening of its transaction, and the whole of `lint_document`.
+ */
+export const VALIDATION_DEADLINE_MS = 9000;
+
+/**
+ * The AD-11 bound, in milliseconds, of an enforced write's P2 preparation and
+ * the opening of its transaction, measured from shell entry, which
+ * immediately follows classification.
+ */
+export const WRITE_PREPARATION_BOUND_MS = 30000;
+
+/**
+ * The AD-11 persistence budget, in milliseconds, of an enforced write's P7
+ * and P8, measured from P7 entry. It includes the commit probe.
+ */
+export const WRITE_PERSISTENCE_BUDGET_MS = 9000;
+
+/**
+ * The AD-11 bound, in milliseconds, of the probe that follows a rejected
+ * commit, connection acquisition included. Reserved within the persistence
+ * budget.
+ */
+export const COMMIT_PROBE_BOUND_MS = 2000;
+
+/**
+ * The AD-11 bound, in milliseconds, of the post-commit callbacks of an
+ * enforced write.
+ */
+export const POST_COMMIT_ASSEMBLY_BOUND_MS = 2000;
+
+/**
  * Thrown when the remaining time is below the floor, so a database batch is
  * refused before any statement is sent.
  */
@@ -66,13 +98,16 @@ export class Deadline {
 
   /**
    * Returns the timeout for the next database batch: the remaining time
-   * floored to an integer.
+   * floored to an integer, less a reserve.
    *
+   * @param reserveMs - the time kept back for a later step, in whole
+   *   milliseconds; defaults to none.
    * @returns the timeout in whole milliseconds, never below the floor.
-   * @throws DeadlineFloorError when the remainder is below the floor.
+   * @throws DeadlineFloorError when the remainder less the reserve is below
+   *   the floor.
    */
-  batchTimeoutMs(): number {
-    const timeoutMs = Math.floor(this.remainingMs());
+  batchTimeoutMs(reserveMs = 0): number {
+    const timeoutMs = Math.floor(this.remainingMs()) - reserveMs;
     if (!(timeoutMs >= SET_LOCAL_FLOOR_MS)) {
       throw new DeadlineFloorError();
     }

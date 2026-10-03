@@ -1,0 +1,1720 @@
+import { createHash, randomUUID } from "node:crypto";
+import { DatabaseError } from "sequelize";
+import { DocumentPermission, TextEditMode } from "@shared/types";
+import type { ProsemirrorData } from "@shared/types";
+import { APIUpdateExtension } from "@server/collaboration/APIUpdateExtension";
+import {
+  authorizeDocumentCreate,
+  authorizeDocumentPublish,
+} from "@server/commands/documentCreator";
+import { createContext } from "@server/context";
+import {
+  Attachment,
+  Collection,
+  Document,
+  Event,
+  Template,
+  UserMembership,
+} from "@server/models";
+import type { User } from "@server/models";
+import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
+import { authorize } from "@server/policies";
+import { globalEventQueue } from "@server/queues";
+import { sequelize } from "@server/storage/database";
+import {
+  buildCollection,
+  buildDocument,
+  buildTemplate,
+  buildUser,
+} from "@server/test/factories";
+import type { APIContext } from "@server/types";
+import { AuthenticationType } from "@server/types";
+import { toCanonicalMarkdown } from "../adapters/canonicalSyntax";
+import type {
+  MarkdownCreateInput,
+  MarkdownUpdateInput,
+} from "../adapters/documentProjection";
+import { ContainedReadError } from "../adapters/writeTransaction";
+import { buildPolicySet } from "../core/policySet";
+import { OPERATION_FAILED } from "../core/registry";
+import type * as DeadlineModule from "./deadline";
+import {
+  AUDIT_WRITE_BOUND_MS,
+  COMMIT_PROBE_BOUND_MS,
+  Deadline,
+  DeadlineFloorError,
+  POST_COMMIT_ASSEMBLY_BOUND_MS,
+  SET_LOCAL_FLOOR_MS,
+  VALIDATION_DEADLINE_MS,
+  WRITE_PERSISTENCE_BUDGET_MS,
+  WRITE_PREPARATION_BOUND_MS,
+} from "./deadline";
+import type {
+  EnforcedClassification,
+  EnforcedWriteOutcome,
+  LinkResolver,
+} from "./enforcedWrite";
+import {
+  enforceMarkdownCreate,
+  enforceMarkdownUpdate,
+  validateProjection,
+} from "./enforcedWrite";
+import { LINT_DOCUMENT_DEADLINE_MS } from "./lintDocument";
+import { ENFORCED_PRE_WRITE_BOUND_MS } from "./writeClassification";
+import { WRITE_ELIGIBLE_MARKDOWN_BYTES } from "./writeDecision";
+
+/** The served monotonic clock; the real clock serves when unset. */
+const state = vi.hoisted(() => ({
+  clock: undefined as (() => number) | undefined,
+}));
+
+vi.mock("@server/wikiLint/application/deadline", async (importOriginal) => {
+  const actual = await importOriginal<typeof DeadlineModule>();
+  return {
+    ...actual,
+    monotonicClock: () => (state.clock ?? actual.monotonicClock)(),
+  };
+});
+
+/** The generic instance origin of the link fixtures. */
+const ORIGIN = "https://wiki.example.test";
+
+const sha256Hex = (bytes: Uint8Array) =>
+  createHash("sha256").update(bytes).digest("hex");
+
+/** Requires an Overview section. */
+const REQUIRED = {
+  kind: "required_sections",
+  headingLevel: 2,
+  headings: ["Overview"],
+};
+
+/** Discourages block quotes: a Warning. */
+const DISCOURAGED = {
+  kind: "discouraged_markdown_structures",
+  structures: ["blockquote"],
+};
+
+/** Forbids tables: an Error. */
+const UNSUPPORTED = {
+  kind: "unsupported_markdown_structures",
+  structures: ["table"],
+};
+
+const LINKS = { kind: "internal_links" };
+
+/** A body that satisfies `REQUIRED`. */
+const VALID_BODY = "## Overview\n\nAll good.";
+
+/** A body that violates `REQUIRED`. */
+const INVALID_BODY = "No overview here";
+
+/** A table, which `UNSUPPORTED` forbids. */
+const TABLE = "| a | b |\n|---|---|\n| 1 | 2 |";
+
+/**
+ * Builds a Markdown link to a document path.
+ *
+ * @param ref - the document reference.
+ * @returns the link.
+ */
+const linkTo = (ref: string) => `[target](/doc/${ref})`;
+
+/**
+ * Classifies a write under a valid `enforced` policy with the given rules.
+ *
+ * @param collectionId - the classified collection.
+ * @param rules - the policy rules.
+ * @param options.readable - whether the actor can read the collection.
+ * @param options.create - whether the write is a create.
+ * @param options.open - whether runtime failures may fail open.
+ * @returns the classification.
+ */
+function classify(
+  collectionId: string,
+  rules: unknown[],
+  options: { readable?: boolean; create?: boolean; open?: boolean } = {}
+): EnforcedClassification {
+  const result = buildPolicySet(
+    Buffer.from(
+      JSON.stringify({
+        schemaVersion: 1,
+        collections: {
+          [collectionId]: {
+            activation: "enforced",
+            ...(options.open && { runtimeFailureMode: "open" }),
+            rules,
+          },
+        },
+      }),
+      "utf8"
+    ),
+    sha256Hex
+  );
+  const entry = result.ok ? result.policySet.entries[0] : undefined;
+  if (entry?.status !== "valid") {
+    throw new Error("The test policy must be valid");
+  }
+  return Object.freeze({
+    kind: "enforced" as const,
+    entry,
+    readable: options.readable ?? true,
+    ...(options.create && { documentId: randomUUID() }),
+  });
+}
+
+/**
+ * Builds the MCP-style API context of an actor.
+ *
+ * @param user - the actor.
+ * @returns the context.
+ */
+const contextOf = (user: User) =>
+  createContext({ user, ip: "127.0.0.1", authType: AuthenticationType.MCP });
+
+/**
+ * Runs an enforced create with the MCP handler's P0 as its re-authorization.
+ *
+ * @param ctx - the context.
+ * @param classification - the classification.
+ * @param input - the create arguments, with the location and template.
+ * @param signal - the cancellation signal.
+ * @returns the outcome.
+ */
+function create(
+  ctx: APIContext,
+  classification: EnforcedClassification,
+  input: MarkdownCreateInput & { collectionId?: string; templateId?: string },
+  signal?: AbortSignal
+): Promise<EnforcedWriteOutcome> {
+  const { collectionId, templateId, ...mapped } = input;
+  return enforceMarkdownCreate({
+    ctx,
+    classification,
+    input: mapped,
+    reauthorize: async () => {
+      const { user } = ctx.state.auth;
+      const { collection } = await authorizeDocumentCreate(ctx, {
+        collectionId,
+        parentDocumentId: mapped.parentDocumentId,
+      });
+      let template: Template | null | undefined;
+      if (templateId) {
+        template = await Template.findByPk(templateId, {
+          userId: user.id,
+          transaction: ctx.state.transaction,
+        });
+        authorize(user, "read", template);
+      }
+      return { collectionId: collection?.id, template };
+    },
+    signal,
+    requestId: "test-request",
+    instanceOrigin: ORIGIN,
+  });
+}
+
+/**
+ * Runs an enforced update with the MCP handler's P0 as its
+ * re-authorization.
+ *
+ * @param ctx - the context.
+ * @param classification - the classification.
+ * @param input - the update arguments, with the target and publication
+ *   collection.
+ * @param signal - the cancellation signal.
+ * @returns the outcome.
+ */
+function update(
+  ctx: APIContext,
+  classification: EnforcedClassification,
+  input: MarkdownUpdateInput & { id: string; collectionId?: string },
+  signal?: AbortSignal
+): Promise<EnforcedWriteOutcome> {
+  const { id, collectionId, ...mapped } = input;
+  return enforceMarkdownUpdate({
+    ctx,
+    classification,
+    documentId: id,
+    input: mapped,
+    reauthorize: async () => {
+      const { user } = ctx.state.auth;
+      const document = await Document.findByPk(id, {
+        userId: user.id,
+        includeState: true,
+        rejectOnEmpty: true,
+        transaction: ctx.state.transaction,
+      });
+      let postOperation = document.collectionId;
+      if (mapped.publish === false) {
+        authorize(user, "unpublish", document);
+      } else {
+        authorize(user, "update", document);
+        if (mapped.publish) {
+          postOperation = (
+            await authorizeDocumentPublish(ctx, document, collectionId)
+          )?.id;
+        }
+      }
+      return { document, collectionId: postOperation };
+    },
+    signal,
+    requestId: "test-request",
+    instanceOrigin: ORIGIN,
+  });
+}
+
+/** One intercepted `sequelize.query` call. */
+type QueryHandler = (
+  sql: string,
+  args: unknown[],
+  next: () => Promise<unknown>
+) => Promise<unknown>;
+
+/** The `sequelize.query` recorder of a test. */
+interface QueryInterceptor {
+  /** Every statement seen, in order. */
+  statements: string[];
+  /** Adds a handler around the real query. */
+  use: (handler: QueryHandler) => void;
+  /** The real query. */
+  original: (...args: unknown[]) => Promise<unknown>;
+}
+
+/** The recorder of the running test, if it has one. */
+let activeQueries: QueryInterceptor | undefined;
+
+/**
+ * Replaces `sequelize.query`, once per test, with a recorder that runs
+ * handlers around the real query, the first handler outermost.
+ *
+ * @returns the test's recorder.
+ */
+function interceptQueries(): QueryInterceptor {
+  if (activeQueries) {
+    return activeQueries;
+  }
+  const original = sequelize.query.bind(sequelize) as unknown as (
+    ...args: unknown[]
+  ) => Promise<unknown>;
+  const statements: string[] = [];
+  const handlers: QueryHandler[] = [];
+  vi.spyOn(sequelize, "query").mockImplementation(((...args: unknown[]) => {
+    const [first] = args;
+    const sql =
+      typeof first === "string" ? first : (first as { query: string }).query;
+    statements.push(sql);
+    const run = handlers.reduceRight<() => Promise<unknown>>(
+      (next, handler) => () => handler(sql, args, next),
+      () => original(...args)
+    );
+    return run();
+  }) as unknown as typeof sequelize.query);
+  activeQueries = {
+    statements,
+    use: (handler) => {
+      handlers.push(handler);
+    },
+    original,
+  };
+  return activeQueries;
+}
+
+/**
+ * Serves a manual clock.
+ *
+ * @returns a function that advances it.
+ */
+function manualClock() {
+  let now = 0;
+  state.clock = () => now;
+  return (ms: number) => {
+    now += ms;
+  };
+}
+
+/**
+ * Runs an action after the n-th `SET LOCAL lock_timeout` completes.
+ *
+ * @param queries - the interceptor.
+ * @param n - the one-based statement count.
+ * @param action - the action.
+ */
+function afterSetLocal(
+  queries: QueryInterceptor,
+  n: number,
+  action: () => void
+) {
+  let seen = 0;
+  queries.use(async (sql, _args, next) => {
+    const result = await next();
+    if (sql.startsWith("SET LOCAL lock_timeout") && ++seen === n) {
+      action();
+    }
+    return result;
+  });
+}
+
+/**
+ * Makes every read inside a shell savepoint fail with a server error, which
+ * the savepoint contains.
+ *
+ * @param queries - the interceptor.
+ * @param sql - the statement that replaces the read.
+ */
+function failSavepointReads(queries: QueryInterceptor, sql = "SELECT 1/0") {
+  let inside = false;
+  queries.use((statement, args, next) => {
+    if (statement.startsWith("SAVEPOINT wiki_lint_read_")) {
+      inside = true;
+      return next();
+    }
+    if (inside) {
+      inside = false;
+      return queries.original(sql, args[1]);
+    }
+    return next();
+  });
+}
+
+/**
+ * Reads a team's Document, Collection, Event, and Attachment rows as stored.
+ *
+ * @param teamId - the team.
+ * @returns the rows.
+ */
+async function storedState(teamId: string) {
+  const order: [string, string][] = [["id", "ASC"]];
+  const [documents, collections, events, attachments] = await Promise.all([
+    Document.unscoped().findAll({
+      where: { teamId },
+      paranoid: false,
+      order,
+      raw: true,
+    }),
+    Collection.unscoped().findAll({
+      where: { teamId },
+      paranoid: false,
+      order,
+      raw: true,
+    }),
+    Event.findAll({ where: { teamId }, order, raw: true }),
+    Attachment.unscoped().findAll({ where: { teamId }, order, raw: true }),
+  ]);
+  return { documents, collections, events, attachments };
+}
+
+/**
+ * Runs a write that must leave no effect and proves it: the stored rows are
+ * unchanged, no post-commit callback ran, and, unless mutations are allowed
+ * because the transaction rolls them back, no mutating SQL was sent.
+ *
+ * @param teamId - the team.
+ * @param run - the write.
+ * @param options.mutations - whether rolled-back mutations are allowed.
+ * @returns the outcome.
+ */
+async function withoutEffect(
+  teamId: string,
+  run: () => Promise<EnforcedWriteOutcome>,
+  options: { mutations?: boolean } = {}
+): Promise<EnforcedWriteOutcome> {
+  const before = await storedState(teamId);
+  const enqueue = vi.spyOn(globalEventQueue(), "add");
+  const notify = vi.spyOn(APIUpdateExtension, "notifyUpdate");
+  const queries = interceptQueries();
+  const from = queries.statements.length;
+
+  const outcome = await run();
+
+  const statements = queries.statements.slice(from);
+  if (!options.mutations) {
+    expect(
+      statements.filter((sql) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql))
+    ).toEqual([]);
+  }
+  expect(enqueue).not.toHaveBeenCalled();
+  expect(notify).not.toHaveBeenCalled();
+  enqueue.mockRestore();
+  notify.mockRestore();
+  await expect(storedState(teamId)).resolves.toEqual(before);
+  return outcome;
+}
+
+/**
+ * Builds an actor and a collection.
+ *
+ * @returns the fixture.
+ */
+async function fixture() {
+  const user = await buildUser();
+  const collection = await buildCollection({
+    teamId: user.teamId,
+    userId: user.id,
+  });
+  return { user, collection, ctx: contextOf(user) };
+}
+
+/**
+ * Builds a published document of an actor.
+ *
+ * @param user - the actor.
+ * @param collectionId - the collection.
+ * @param text - the body.
+ * @param overrides - other attributes.
+ * @returns the document.
+ */
+const documentOf = (
+  user: User,
+  collectionId: string | null,
+  text: string,
+  overrides: Parameters<typeof buildDocument>[0] = {}
+) =>
+  buildDocument({
+    teamId: user.teamId,
+    userId: user.id,
+    collectionId,
+    title: "Target",
+    text,
+    ...overrides,
+  });
+
+/**
+ * Asserts a committed outcome and returns its stored document.
+ *
+ * @param outcome - the outcome.
+ * @returns the outcome as row 6, and the stored row.
+ */
+async function committed(outcome: EnforcedWriteOutcome) {
+  if (outcome.row !== 6) {
+    throw new Error(`Expected row 6, got ${JSON.stringify(outcome)}`);
+  }
+  const stored = await Document.unscoped().findOne({
+    where: { id: outcome.document.id },
+    paranoid: false,
+    rejectOnEmpty: true,
+  });
+  return { outcome, stored };
+}
+
+/**
+ * Builds the readable validation of a clean write.
+ *
+ * @param classification - the classification.
+ * @param status - the status.
+ * @returns the validation.
+ */
+const cleanValidation = (
+  classification: EnforcedClassification,
+  status = "validated"
+) => ({
+  status,
+  policySchemaVersion: 1,
+  policyFingerprint: classification.entry.policyFingerprint,
+  errors: [],
+  warnings: [],
+  systemFailures: [],
+});
+
+afterEach(() => {
+  state.clock = undefined;
+  activeQueries = undefined;
+  vi.restoreAllMocks();
+});
+
+describe("validateProjection", () => {
+  const documentId = randomUUID();
+  const collectionId = randomUUID();
+
+  /**
+   * Converts Markdown to ProseMirror JSON.
+   *
+   * @param markdown - the Markdown.
+   * @returns the content.
+   */
+  const contentOf = (markdown: string): ProsemirrorData =>
+    ProsemirrorHelper.toProsemirror(markdown).toJSON();
+
+  /**
+   * Validates content with defaults for the other inputs.
+   *
+   * @param overrides - the inputs to replace.
+   * @returns the validation.
+   */
+  const validate = (
+    overrides: Partial<Parameters<typeof validateProjection>[0]> = {}
+  ) =>
+    validateProjection({
+      documentId,
+      content: contentOf(INVALID_BODY),
+      rules: [REQUIRED] as never,
+      collectionId,
+      readable: true,
+      instanceOrigin: ORIGIN,
+      deadline: new Deadline(VALIDATION_DEADLINE_MS, () => 0),
+      resolve: () => Promise.resolve(new Map()),
+      ...overrides,
+    });
+
+  /**
+   * Lists the codes of some items.
+   *
+   * @param items - the items.
+   * @returns their codes.
+   */
+  const codesOf = (items: { issue: { code: string } }[]) =>
+    items.map((item) => item.issue.code);
+
+  it("returns nothing when no document-surface rule is enabled", async () => {
+    const resolve = vi.fn<LinkResolver>();
+
+    const result = await validate({
+      rules: [{ kind: "parent_collection_consistent" }] as never,
+      resolve,
+    });
+
+    expect(result).toEqual({ items: [], measures: {} });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("reports an expired deadline even without document rules", async () => {
+    let now = 0;
+    const deadline = new Deadline(VALIDATION_DEADLINE_MS, () => now);
+    now = VALIDATION_DEADLINE_MS;
+
+    const result = await validate({ rules: [], deadline });
+
+    expect(codesOf(result.items)).toEqual(["VALIDATION_TIMEOUT"]);
+    expect(result.measures).toEqual({});
+  });
+
+  it("measures the canonical Markdown and its internal links", async () => {
+    const markdown = `${VALID_BODY}\n\n${linkTo(randomUUID())} ${linkTo(
+      "any-title-abcdefghij"
+    )} [outside](https://elsewhere.example/doc/x) é`;
+    const resolve = vi.fn<LinkResolver>();
+
+    const result = await validate({ content: contentOf(markdown), resolve });
+
+    const canonical = await toCanonicalMarkdown(contentOf(markdown));
+    expect(result.measures).toEqual({
+      markdownBytes: Buffer.byteLength(canonical, "utf8"),
+      linkReferences: 2,
+    });
+    expect(result.items).toEqual([]);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("keeps the other kinds' Findings when a link target has no state", async () => {
+    const result = await validate({
+      content: contentOf(`${INVALID_BODY} ${linkTo(randomUUID())}`),
+      rules: [REQUIRED, LINKS] as never,
+      resolve: () => Promise.resolve(new Map()),
+    });
+
+    expect(codesOf(result.items)).toEqual([
+      "REQUIRED_SECTION_MISSING",
+      "VALIDATION_RUNTIME_FAILED",
+    ]);
+    expect(
+      result.items.every((item) => item.sortCollectionId === collectionId)
+    ).toBe(true);
+  });
+
+  it("reports a floor refusal and a contained timeout as VALIDATION_TIMEOUT", async () => {
+    const timeout = new DatabaseError(
+      Object.assign(new Error("canceling statement due to statement timeout"), {
+        code: "57014",
+        sql: "SELECT 1",
+      })
+    );
+    for (const failure of [
+      new DeadlineFloorError(),
+      new ContainedReadError(timeout),
+    ]) {
+      const result = await validate({
+        content: contentOf(`${INVALID_BODY} ${linkTo(randomUUID())}`),
+        rules: [REQUIRED, LINKS] as never,
+        resolve: () => Promise.reject(failure),
+      });
+
+      expect(codesOf(result.items)).toEqual([
+        "REQUIRED_SECTION_MISSING",
+        "VALIDATION_TIMEOUT",
+      ]);
+    }
+  });
+
+  it("reports any other contained read as VALIDATION_RUNTIME_FAILED", async () => {
+    const result = await validate({
+      content: contentOf(`${INVALID_BODY} ${linkTo(randomUUID())}`),
+      rules: [REQUIRED, LINKS] as never,
+      resolve: () =>
+        Promise.reject(new ContainedReadError(new Error("division by zero"))),
+    });
+
+    expect(codesOf(result.items)).toEqual([
+      "REQUIRED_SECTION_MISSING",
+      "VALIDATION_RUNTIME_FAILED",
+    ]);
+  });
+
+  it("evaluates nothing once the deadline has expired", async () => {
+    let now = 0;
+    const deadline = new Deadline(VALIDATION_DEADLINE_MS, () => now);
+
+    const result = await validate({
+      rules: [REQUIRED, LINKS] as never,
+      deadline,
+      resolve: async () => {
+        now = VALIDATION_DEADLINE_MS;
+        return new Map();
+      },
+    });
+
+    expect(codesOf(result.items)).toEqual(["VALIDATION_TIMEOUT"]);
+    expect(result.measures.markdownBytes).toBeGreaterThan(0);
+  });
+
+  it("discards findings when evaluation crosses the deadline", async () => {
+    let readings = 0;
+    const deadline = new Deadline(VALIDATION_DEADLINE_MS, () =>
+      readings++ >= 3 ? VALIDATION_DEADLINE_MS : 0
+    );
+
+    const result = await validate({ deadline });
+
+    expect(codesOf(result.items)).toEqual(["VALIDATION_TIMEOUT"]);
+    expect(result.measures.markdownBytes).toBeGreaterThan(0);
+  });
+
+  it("propagates a failure that is not contained", async () => {
+    const failure = new Error("connection lost");
+
+    await expect(
+      validate({
+        content: contentOf(linkTo(randomUUID())),
+        rules: [LINKS] as never,
+        resolve: () => Promise.reject(failure),
+      })
+    ).rejects.toBe(failure);
+  });
+
+  it("reports content without canonical Markdown as a runtime failure with no Findings", async () => {
+    const result = await validate({
+      content: { type: "doc", content: [{ type: "no_such_node" }] },
+    });
+
+    expect(codesOf(result.items)).toEqual(["VALIDATION_RUNTIME_FAILED"]);
+    expect(result.measures).toEqual({});
+  });
+
+  it("reports a timeout when canonicalization fails after the deadline", async () => {
+    let readings = 0;
+    const deadline = new Deadline(VALIDATION_DEADLINE_MS, () =>
+      readings++ >= 2 ? VALIDATION_DEADLINE_MS : 0
+    );
+
+    const result = await validate({
+      content: { type: "doc", content: [{ type: "no_such_node" }] },
+      deadline,
+    });
+
+    expect(codesOf(result.items)).toEqual(["VALIDATION_TIMEOUT"]);
+    expect(result.measures).toEqual({});
+  });
+
+  it("names the missing item and the collection only for a reader", async () => {
+    const readable = await validate({ rules: [REQUIRED, LINKS] as never });
+    const hidden = await validate({
+      rules: [REQUIRED, LINKS] as never,
+      readable: false,
+      resolve: () => Promise.reject(new DeadlineFloorError()),
+    });
+    const failure = await validate({
+      rules: [REQUIRED, LINKS] as never,
+      resolve: () => Promise.reject(new DeadlineFloorError()),
+    });
+
+    expect(readable.items[0].issue).toEqual({
+      code: "REQUIRED_SECTION_MISSING",
+      severity: "error",
+      message: "A required section is missing.",
+      location: { kind: "document", documentId },
+      detail: { kind: "section", heading: "Overview", headingLevel: 2 },
+    });
+    expect(hidden.items.map((item) => item.issue)).toEqual([
+      {
+        code: "REQUIRED_SECTION_MISSING",
+        severity: "error",
+        message: "A required section is missing.",
+        location: { kind: "document", documentId },
+      },
+      expect.objectContaining({
+        code: "VALIDATION_TIMEOUT",
+        location: { kind: "scope", scopeKind: "collection" },
+      }),
+    ]);
+    expect(failure.items[1].issue.location).toEqual({
+      kind: "scope",
+      scopeKind: "collection",
+      collectionId,
+    });
+  });
+});
+
+describe("AD-11 bounds", () => {
+  it("keeps a Markdown write within 55 seconds", () => {
+    expect(
+      ENFORCED_PRE_WRITE_BOUND_MS +
+        WRITE_PREPARATION_BOUND_MS +
+        VALIDATION_DEADLINE_MS +
+        WRITE_PERSISTENCE_BUDGET_MS +
+        AUDIT_WRITE_BOUND_MS +
+        POST_COMMIT_ASSEMBLY_BOUND_MS
+    ).toBeLessThanOrEqual(55000);
+    // The probe is reserved within the persistence budget.
+    expect(COMMIT_PROBE_BOUND_MS + SET_LOCAL_FLOOR_MS).toBeLessThan(
+      WRITE_PERSISTENCE_BUDGET_MS
+    );
+    expect(LINT_DOCUMENT_DEADLINE_MS).toBe(VALIDATION_DEADLINE_MS);
+  });
+});
+
+describe("valid writes", () => {
+  it.each([
+    {
+      name: "published",
+      input: { title: "Doc", text: VALID_BODY, publish: true },
+    },
+    {
+      name: "draft",
+      input: { title: "Doc", text: VALID_BODY, publish: false },
+    },
+  ])(
+    "commits a $name create with correlated Events and its callbacks",
+    async ({ input }) => {
+      const { collection, ctx } = await fixture();
+      const classification = classify(collection.id, [REQUIRED], {
+        create: true,
+      });
+      const enqueue = vi.spyOn(globalEventQueue(), "add");
+
+      const { outcome, stored } = await committed(
+        await create(ctx, classification, {
+          ...input,
+          collectionId: collection.id,
+        })
+      );
+
+      expect(outcome.validation).toEqual(cleanValidation(classification));
+      expect(stored.id).toBe(classification.documentId);
+      expect(stored.text).toBe(VALID_BODY);
+      expect(!!stored.publishedAt).toBe(input.publish);
+      const events = await Event.findAll({ where: { documentId: stored.id } });
+      expect(events.length).toBeGreaterThan(0);
+      for (const event of events) {
+        expect(event.data?.validationCorrelationId).toEqual(expect.any(String));
+      }
+      expect(enqueue).toHaveBeenCalledTimes(events.length);
+      expect(ctx.state.transaction).toBeUndefined();
+    }
+  );
+
+  it("commits a template create whose substituted body is valid", async () => {
+    const { user, collection, ctx } = await fixture();
+    const template = await buildTemplate({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+      title: "From template",
+      text: VALID_BODY,
+    });
+    const classification = classify(collection.id, [REQUIRED], {
+      create: true,
+    });
+
+    const { stored } = await committed(
+      await create(ctx, classification, {
+        publish: true,
+        collectionId: collection.id,
+        templateId: template.id,
+      })
+    );
+
+    expect(stored.templateId).toBe(template.id);
+    expect(stored.title).toBe("From template");
+    expect(stored.text).toBe(VALID_BODY);
+  });
+
+  const UPDATES: {
+    name: string;
+    input: MarkdownUpdateInput;
+    draft?: boolean;
+    text: string;
+  }[] = [
+    {
+      name: "replace",
+      input: { text: "## Overview\n\nReplaced" },
+      text: "## Overview\n\nReplaced",
+    },
+    {
+      name: "append",
+      input: { text: "\n\nAppended", editMode: TextEditMode.Append },
+      text: `${VALID_BODY}\n\nAppended`,
+    },
+    {
+      name: "prepend",
+      input: { text: "Prepended\n\n", editMode: TextEditMode.Prepend },
+      text: `Prepended\n\n${VALID_BODY}`,
+    },
+    {
+      name: "patch",
+      input: {
+        text: "Patched.",
+        editMode: TextEditMode.Patch,
+        findText: "All good.",
+      },
+      text: "## Overview\n\nPatched.",
+    },
+    { name: "title-only", input: { title: "Renamed" }, text: VALID_BODY },
+    {
+      name: "publish",
+      input: { publish: true },
+      draft: true,
+      text: VALID_BODY,
+    },
+    { name: "unpublish", input: { publish: false }, text: VALID_BODY },
+  ];
+
+  it.each(UPDATES)("commits a $name update", async ({ input, draft, text }) => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY, {
+      ...(draft && { publishedAt: null }),
+    });
+    const classification = classify(collection.id, [REQUIRED]);
+
+    const { outcome, stored } = await committed(
+      await update(ctx, classification, { id: document.id, ...input })
+    );
+
+    expect(outcome.validation).toEqual(cleanValidation(classification));
+    expect(stored.text).toBe(text);
+    expect(stored.revisionCount).toBeGreaterThan(document.revisionCount);
+    if (input.title) {
+      expect(stored.title).toBe(input.title);
+    }
+    if (input.publish !== undefined) {
+      expect(!!stored.publishedAt).toBe(input.publish);
+      expect(stored.collectionId).toBe(collection.id);
+    }
+  });
+
+  it("commits without any document rule as validated with empty arrays", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, INVALID_BODY);
+    const classification = classify(collection.id, [
+      { kind: "parent_collection_consistent" },
+      { kind: "hierarchy_acyclic" },
+    ]);
+
+    const { outcome } = await committed(
+      await update(ctx, classification, { id: document.id, text: "Anything" })
+    );
+
+    expect(outcome.validation).toEqual(cleanValidation(classification));
+  });
+
+  it("commits Warnings as validated_with_warnings", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED, DISCOURAGED]);
+
+    const { outcome, stored } = await committed(
+      await update(ctx, classification, {
+        id: document.id,
+        text: "\n\n> quoted",
+        editMode: TextEditMode.Append,
+      })
+    );
+
+    expect(outcome.validation.status).toBe("validated_with_warnings");
+    expect(outcome.validation.warnings.map((finding) => finding.code)).toEqual([
+      "DISCOURAGED_MARKDOWN_STRUCTURE",
+    ]);
+    expect(stored.text).toContain("> quoted");
+  });
+
+  it("omits every identity and detail for an actor who cannot read the collection", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED], {
+      readable: false,
+    });
+
+    const { outcome } = await committed(
+      await update(ctx, classification, { id: document.id, title: "Hidden" })
+    );
+    const rejected = await update(ctx, classification, {
+      id: document.id,
+      text: INVALID_BODY,
+    });
+
+    expect(outcome.validation).toEqual({
+      status: "validated",
+      errors: [],
+      warnings: [],
+      systemFailures: [],
+    });
+    expect(rejected).toEqual({
+      row: 4,
+      validation: {
+        status: "rejected",
+        errors: [
+          {
+            code: "REQUIRED_SECTION_MISSING",
+            severity: "error",
+            message: "A required section is missing.",
+            location: { kind: "document", documentId: document.id },
+          },
+        ],
+        warnings: [],
+        systemFailures: [],
+      },
+    });
+  });
+});
+
+describe("rejected writes", () => {
+  const HIDDEN: { name: string; input: MarkdownUpdateInput }[] = [
+    {
+      name: "append",
+      input: { text: "\n\nA fine tail.", editMode: TextEditMode.Append },
+    },
+    {
+      name: "prepend",
+      input: { text: "A fine head.\n\n", editMode: TextEditMode.Prepend },
+    },
+    {
+      name: "patch",
+      input: {
+        text: "Fine words.",
+        editMode: TextEditMode.Patch,
+        findText: "All good.",
+      },
+    },
+    { name: "title-only", input: { title: "Fine title" } },
+  ];
+
+  it.each(HIDDEN)(
+    "rejects a valid-looking $name fragment over an Error in unchanged content",
+    async ({ input }) => {
+      const { user, collection, ctx } = await fixture();
+      const document = await documentOf(
+        user,
+        collection.id,
+        `${VALID_BODY}\n\n${TABLE}`
+      );
+      const classification = classify(collection.id, [REQUIRED, UNSUPPORTED]);
+
+      const outcome = await withoutEffect(user.teamId, () =>
+        update(ctx, classification, { id: document.id, ...input })
+      );
+
+      expect(outcome.row).toBe(4);
+      const { validation } = outcome as Extract<
+        EnforcedWriteOutcome,
+        { row: 4 }
+      >;
+      expect(validation.status).toBe("rejected");
+      expect(validation.errors).toEqual([
+        expect.objectContaining({
+          code: "MARKDOWN_STRUCTURE_UNSUPPORTED",
+          location: expect.objectContaining({
+            kind: "text",
+            documentId: document.id,
+          }),
+        }),
+      ]);
+    }
+  );
+
+  it("rejects a create without persisting or allocating anything", async () => {
+    const { user, collection, ctx } = await fixture();
+    const classification = classify(collection.id, [REQUIRED], {
+      create: true,
+    });
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      create(ctx, classification, {
+        title: "Invalid",
+        text: INVALID_BODY,
+        publish: true,
+        collectionId: collection.id,
+      })
+    );
+
+    expect(outcome).toEqual({
+      row: 4,
+      validation: {
+        ...cleanValidation(classification, "rejected"),
+        errors: [
+          {
+            code: "REQUIRED_SECTION_MISSING",
+            severity: "error",
+            message: "A required section is missing.",
+            location: {
+              kind: "document",
+              documentId: classification.documentId,
+            },
+            detail: { kind: "section", heading: "Overview", headingLevel: 2 },
+          },
+        ],
+      },
+    });
+  });
+});
+
+describe("runtime failures", () => {
+  /**
+   * Builds Markdown with one internal link whose canonical form has an
+   * exact UTF-8 byte length.
+   *
+   * @param bytes - the byte length.
+   * @returns the Markdown.
+   */
+  async function sizedBody(bytes: number) {
+    const prefix = `${VALID_BODY}\n\n${linkTo(randomUUID())}\n\n> quoted\n\n`;
+    const measure = async (padding: number) =>
+      Buffer.byteLength(
+        await toCanonicalMarkdown(
+          ProsemirrorHelper.toProsemirror(
+            `${prefix}${"a".repeat(padding)}`
+          ).toJSON()
+        ),
+        "utf8"
+      );
+    const padding = 1 + bytes - (await measure(1));
+    expect(await measure(padding)).toBe(bytes);
+    return `${prefix}${"a".repeat(padding)}`;
+  }
+
+  it("rejects a contained link-read failure under a closed policy", async () => {
+    const { user, collection, ctx } = await fixture();
+    const classification = classify(
+      collection.id,
+      [REQUIRED, LINKS, DISCOURAGED],
+      { create: true }
+    );
+    const queries = interceptQueries();
+    failSavepointReads(queries);
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      create(ctx, classification, {
+        title: "Linked",
+        text: `${VALID_BODY}\n\n${linkTo(randomUUID())}\n\n> quoted`,
+        publish: true,
+        collectionId: collection.id,
+      })
+    );
+
+    expect(outcome).toEqual({
+      row: 4,
+      validation: expect.objectContaining({
+        status: "rejected",
+        warnings: [
+          expect.objectContaining({ code: "DISCOURAGED_MARKDOWN_STRUCTURE" }),
+        ],
+        systemFailures: [
+          {
+            code: "VALIDATION_RUNTIME_FAILED",
+            message: expect.any(String),
+            location: {
+              kind: "scope",
+              scopeKind: "collection",
+              collectionId: collection.id,
+            },
+          },
+        ],
+      }),
+    });
+  });
+
+  it.each([
+    { bytes: WRITE_ELIGIBLE_MARKDOWN_BYTES, row: 6 },
+    { bytes: WRITE_ELIGIBLE_MARKDOWN_BYTES + 1, row: 4 },
+  ])(
+    "fails open under an open policy at $bytes bytes: row $row",
+    async ({ bytes, row }) => {
+      const { user, collection, ctx } = await fixture();
+      const classification = classify(
+        collection.id,
+        [REQUIRED, LINKS, DISCOURAGED],
+        { create: true, open: true }
+      );
+      const text = await sizedBody(bytes);
+      const queries = interceptQueries();
+      failSavepointReads(queries);
+
+      const outcome =
+        row === 4
+          ? await withoutEffect(user.teamId, () =>
+              create(ctx, classification, {
+                title: "Sized",
+                text,
+                publish: true,
+                collectionId: collection.id,
+              })
+            )
+          : await create(ctx, classification, {
+              title: "Sized",
+              text,
+              publish: true,
+              collectionId: collection.id,
+            });
+
+      expect(outcome.row).toBe(row);
+      const { validation } = outcome as Extract<
+        EnforcedWriteOutcome,
+        { row: 4 | 6 }
+      >;
+      expect(validation.status).toBe(
+        row === 6 ? "degraded_validation" : "rejected"
+      );
+      expect(validation.warnings).toHaveLength(1);
+      expect(validation.systemFailures.map((failure) => failure.code)).toEqual([
+        "VALIDATION_RUNTIME_FAILED",
+      ]);
+      if (row === 6) {
+        const { stored } = await committed(outcome);
+        expect(stored.id).toBe(classification.documentId);
+      }
+    }
+  );
+
+  it.each([
+    { queued: false, row: 6, status: "degraded_validation" },
+    { queued: true, row: 4, status: "rejected" },
+  ])(
+    "times out in P5 with queued: $queued, ending in row $row",
+    async ({ queued, row, status }) => {
+      const { user, collection, ctx } = await fixture();
+      const document = await documentOf(
+        user,
+        collection.id,
+        `${VALID_BODY}\n\n${linkTo(randomUUID())}`
+      );
+      const classification = classify(collection.id, [REQUIRED, LINKS], {
+        open: true,
+      });
+      const advance = manualClock();
+      const queries = interceptQueries();
+      // A queued write enters P5 with less than half of its deadline left.
+      if (queued) {
+        afterSetLocal(queries, 2, () => advance(5000));
+      }
+      // The link batch then finds the remainder below the floor.
+      afterSetLocal(queries, 3, () =>
+        advance(queued ? 3950 : VALIDATION_DEADLINE_MS - 50)
+      );
+
+      const run = () =>
+        update(ctx, classification, { id: document.id, title: "Timed" });
+      const outcome =
+        row === 4 ? await withoutEffect(user.teamId, run) : await run();
+
+      expect(outcome.row).toBe(row);
+      const { validation } = outcome as Extract<
+        EnforcedWriteOutcome,
+        { row: 4 | 6 }
+      >;
+      expect(validation.status).toBe(status);
+      expect(validation.systemFailures.map((failure) => failure.code)).toEqual([
+        "VALIDATION_TIMEOUT",
+      ]);
+      if (row === 6) {
+        const { stored } = await committed(outcome);
+        expect(stored.title).toBe("Timed");
+      }
+    }
+  );
+});
+
+describe("collection conflicts", () => {
+  it("ends in collection_conflict when the parent moved before P3", async () => {
+    const { user, collection, ctx } = await fixture();
+    const other = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    const parent = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED], {
+      create: true,
+    });
+    await Document.unscoped().update(
+      { collectionId: other.id },
+      { where: { id: parent.id }, hooks: false }
+    );
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      create(ctx, classification, {
+        title: "Child",
+        text: VALID_BODY,
+        publish: true,
+        parentDocumentId: parent.id,
+      })
+    );
+
+    expect(outcome).toEqual({ row: 2 });
+  });
+
+  it("ends in collection_conflict when the draft-publication target changed", async () => {
+    const { user, collection, ctx } = await fixture();
+    const other = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    const draft = await documentOf(user, null, VALID_BODY, {
+      publishedAt: null,
+    });
+    const classification = classify(collection.id, [REQUIRED]);
+    await Document.unscoped().update(
+      { collectionId: other.id },
+      { where: { id: draft.id }, hooks: false }
+    );
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(ctx, classification, {
+        id: draft.id,
+        publish: true,
+        collectionId: collection.id,
+      })
+    );
+
+    expect(outcome).toEqual({ row: 2 });
+  });
+});
+
+describe("aborts before the decision", () => {
+  it("ends in row 3 when re-authorization is denied in P3", async () => {
+    const { user, collection } = await fixture();
+    const privateCollection = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+      permission: null,
+    });
+    const editor = await buildUser({ teamId: user.teamId });
+    const document = await documentOf(user, privateCollection.id, VALID_BODY);
+    const membership = await UserMembership.create({
+      documentId: document.id,
+      userId: editor.id,
+      createdById: user.id,
+      permission: DocumentPermission.ReadWrite,
+    });
+    const classification = classify(privateCollection.id, [REQUIRED], {
+      readable: false,
+    });
+    await membership.destroy();
+    void collection;
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(contextOf(editor), classification, {
+        id: document.id,
+        title: "Denied",
+      })
+    );
+
+    expect(outcome).toEqual({ row: 3, message: "Authorization error" });
+  });
+
+  it("ends in row 3 when the target was deleted", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    await document.destroy();
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(ctx, classification, { id: document.id, title: "Gone" })
+    );
+
+    expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
+  });
+
+  it("ends in row 3 on a lock timeout", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const holder = await sequelize.transaction();
+    try {
+      await sequelize.query(
+        `SELECT id FROM collections WHERE id = '${collection.id}' FOR UPDATE`,
+        { transaction: holder }
+      );
+      const queries = interceptQueries();
+      queries.use(async (sql, args, next) => {
+        if (/FROM collections WHERE id = .* FOR NO KEY UPDATE/.test(sql)) {
+          // Shortens the wait so that the held lock times out quickly.
+          await queries.original("SET LOCAL lock_timeout = 200", args[1]);
+        }
+        return next();
+      });
+
+      const outcome = await withoutEffect(user.teamId, () =>
+        update(ctx, classification, { id: document.id, title: "Locked" })
+      );
+
+      expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
+    } finally {
+      await holder.rollback();
+    }
+  });
+
+  it("ends in row 3 with the baseline message when the patch target is absent", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(ctx, classification, {
+        id: document.id,
+        text: "x",
+        editMode: TextEditMode.Patch,
+        findText: "absent text",
+      })
+    );
+
+    expect(outcome).toEqual({
+      row: 3,
+      message: "The specified text was not found in the document",
+    });
+  });
+
+  it("ends in row 3 in P2 for an importable image, opening no transaction", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const transaction = vi.spyOn(sequelize, "transaction");
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(ctx, classification, {
+        id: document.id,
+        text: `${VALID_BODY}\n\n![pixel](data:image/png;base64,iVBORw0KGgo=)`,
+      })
+    );
+
+    expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("ends in row 3 when the preparation bound expires before the transaction opens", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    // The first reading starts the preparation deadline; by the next one, which
+    // bounds the opening of the transaction, the bound has passed.
+    let readings = 0;
+    state.clock = () => (readings++ === 0 ? 0 : WRITE_PREPARATION_BOUND_MS);
+    const transaction = vi.spyOn(sequelize, "transaction");
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(ctx, classification, { id: document.id, title: "Late" })
+    );
+
+    expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("ends in row 3 when cancelled before the transaction", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const controller = new AbortController();
+    controller.abort();
+    const transaction = vi.spyOn(sequelize, "transaction");
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(
+        ctx,
+        classification,
+        { id: document.id, title: "Cancelled" },
+        controller.signal
+      )
+    );
+
+    expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("ends in row 3 when cancelled during P5", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const controller = new AbortController();
+    const queries = interceptQueries();
+    afterSetLocal(queries, 3, () => controller.abort());
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(
+        ctx,
+        classification,
+        { id: document.id, title: "Cancelled" },
+        controller.signal
+      )
+    );
+
+    expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
+  });
+
+  it("ignores a cancellation after the decision", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const controller = new AbortController();
+    const queries = interceptQueries();
+    afterSetLocal(queries, 4, () => controller.abort());
+
+    const { stored } = await committed(
+      await update(
+        ctx,
+        classification,
+        { id: document.id, title: "Kept" },
+        controller.signal
+      )
+    );
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(stored.title).toBe("Kept");
+  });
+
+  it("ends in row 3 when P3 begins below the floor", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    // The first reading after BEGIN starts the validation deadline; the next
+    // one, at P3 entry, finds it exhausted.
+    let now = 0;
+    let begun = false;
+    let readings = 0;
+    state.clock = () => {
+      if (begun && ++readings === 2) {
+        now += VALIDATION_DEADLINE_MS;
+      }
+      return now;
+    };
+    const queries = interceptQueries();
+    queries.use(async (sql, _args, next) => {
+      const result = await next();
+      if (sql === "START TRANSACTION;") {
+        begun = true;
+      }
+      return result;
+    });
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(ctx, classification, { id: document.id, title: "Late" })
+    );
+
+    expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
+    expect(
+      queries.statements.filter((sql) => sql.startsWith("SET LOCAL"))
+    ).toEqual([]);
+  });
+
+  it.each([
+    { phase: "P4", after: 1 },
+    { phase: "P5", after: 2 },
+  ])("ends in row 3 when $phase begins below the floor", async ({ after }) => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const advance = manualClock();
+    const queries = interceptQueries();
+    afterSetLocal(queries, after, () =>
+      advance(VALIDATION_DEADLINE_MS - SET_LOCAL_FLOOR_MS + 1)
+    );
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(ctx, classification, { id: document.id, title: "Late" })
+    );
+
+    expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
+    expect(
+      queries.statements.filter((sql) => sql.startsWith("SET LOCAL lock"))
+    ).toHaveLength(after);
+  });
+
+  it("reports VALIDATION_TIMEOUT once P5 has begun", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const advance = manualClock();
+    const queries = interceptQueries();
+    afterSetLocal(queries, 3, () => advance(VALIDATION_DEADLINE_MS));
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      update(ctx, classification, { id: document.id, title: "Late" })
+    );
+
+    expect(outcome).toEqual({
+      row: 4,
+      validation: expect.objectContaining({
+        status: "rejected",
+        errors: [],
+        systemFailures: [
+          expect.objectContaining({ code: "VALIDATION_TIMEOUT" }),
+        ],
+      }),
+    });
+  });
+});
+
+describe("aborts after the decision", () => {
+  it("ends in row 5 with the baseline message when unpublishing a parent", async () => {
+    const { user, collection, ctx } = await fixture();
+    const parent = await documentOf(user, collection.id, VALID_BODY);
+    await documentOf(user, collection.id, VALID_BODY, {
+      parentDocumentId: parent.id,
+    });
+    const classification = classify(collection.id, [REQUIRED]);
+
+    const outcome = await withoutEffect(
+      user.teamId,
+      () => update(ctx, classification, { id: parent.id, publish: false }),
+      { mutations: true }
+    );
+
+    expect(outcome).toEqual({
+      row: 5,
+      message: "Cannot unpublish document with child documents",
+    });
+  });
+
+  it.each([
+    { name: "an identical title", input: { title: "Target" } },
+    { name: "no field", input: {} },
+  ])("ends in row 5 for an update with $name", async ({ input }) => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+
+    const outcome = await withoutEffect(
+      user.teamId,
+      () => update(ctx, classification, { id: document.id, ...input }),
+      { mutations: true }
+    );
+
+    expect(outcome).toEqual({ row: 5, message: OPERATION_FAILED });
+  });
+
+  it("ends in row 5 when the persistence budget falls below the floor before commit", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const advance = manualClock();
+    const queries = interceptQueries();
+    afterSetLocal(queries, 4, () =>
+      advance(WRITE_PERSISTENCE_BUDGET_MS - COMMIT_PROBE_BOUND_MS)
+    );
+
+    const outcome = await withoutEffect(
+      user.teamId,
+      () => update(ctx, classification, { id: document.id, title: "Late" }),
+      { mutations: true }
+    );
+
+    expect(outcome).toEqual({ row: 5, message: OPERATION_FAILED });
+    expect(queries.statements).not.toContain("COMMIT;");
+  });
+});
+
+describe("the SQL of an enforced write", () => {
+  /**
+   * Checks the bounds of the recorded statements: integers at or above the
+   * floor, never inside a savepoint.
+   *
+   * @param statements - the statements.
+   */
+  function expectBounds(statements: readonly string[]) {
+    let savepoint: string | undefined;
+    for (const sql of statements) {
+      const opened = /^SAVEPOINT (\w+)$/.exec(sql);
+      if (opened) {
+        savepoint = opened[1];
+        continue;
+      }
+      if (
+        savepoint &&
+        (sql === `RELEASE SAVEPOINT ${savepoint}` ||
+          sql === `ROLLBACK TO SAVEPOINT ${savepoint}`)
+      ) {
+        savepoint = undefined;
+        continue;
+      }
+      const bound =
+        /^SET LOCAL (?:lock_timeout|statement_timeout) = (.*)$/.exec(sql);
+      if (bound) {
+        expect(savepoint).toBeUndefined();
+        expect(bound[1]).toMatch(/^\d+$/);
+        expect(Number(bound[1])).toBeGreaterThanOrEqual(SET_LOCAL_FLOOR_MS);
+      }
+    }
+  }
+
+  it("locks the collection, then the document, never FOR UPDATE", async () => {
+    const { user, collection, ctx } = await fixture();
+    const target = await documentOf(user, collection.id, VALID_BODY);
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED, LINKS]);
+    const queries = interceptQueries();
+
+    await committed(
+      await update(ctx, classification, {
+        id: document.id,
+        text: `\n\n${linkTo(target.id)}`,
+        editMode: TextEditMode.Append,
+      })
+    );
+
+    const { statements } = queries;
+    const collectionLock = statements.findIndex((sql) =>
+      /FROM collections WHERE id = .* FOR NO KEY UPDATE/.test(sql)
+    );
+    const documentLock = statements.findIndex((sql) =>
+      /FROM documents WHERE id = .* FOR NO KEY UPDATE/.test(sql)
+    );
+    expect(collectionLock).toBeGreaterThan(0);
+    expect(documentLock).toBeGreaterThan(collectionLock);
+    expect(statements.filter((sql) => /\bFOR UPDATE\b/.test(sql))).toEqual([]);
+    expect(
+      statements.filter((sql) => sql.startsWith("SAVEPOINT wiki_lint_read_"))
+    ).toHaveLength(1);
+    expectBounds(statements);
+  });
+
+  it("takes no parent lock on a create", async () => {
+    const { user, collection, ctx } = await fixture();
+    const parent = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED, LINKS], {
+      create: true,
+    });
+    const queries = interceptQueries();
+
+    await committed(
+      await create(ctx, classification, {
+        title: "Child",
+        text: `${VALID_BODY}\n\n${linkTo(parent.id)}`,
+        publish: true,
+        parentDocumentId: parent.id,
+      })
+    );
+
+    const { statements } = queries;
+    expect(
+      statements.filter((sql) =>
+        /FROM documents .*FOR (NO KEY )?UPDATE/.test(sql)
+      )
+    ).toEqual([]);
+    expect(statements.filter((sql) => /\bFOR UPDATE\b/.test(sql))).toEqual([]);
+    expectBounds(statements);
+  });
+});

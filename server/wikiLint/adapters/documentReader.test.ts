@@ -20,11 +20,13 @@ import {
 } from "@server/test/factories";
 import { Deadline, DeadlineFloorError } from "../application/deadline";
 import { parseCanonicalMarkdown } from "./canonicalSyntax";
+import { linkLookupBatches } from "../core/internalLinks";
 import {
   DocumentSnapshotError,
   authorizeLintTarget,
   isDatabaseTimeout,
   readDocumentSnapshot,
+  resolveLinkTargets,
 } from "./documentReader";
 
 /** The generic instance origin of the link fixtures. */
@@ -844,6 +846,86 @@ describe("readDocumentSnapshot with internal links", () => {
       1
     );
     expect(recorded.at(-1)).toBe("ROLLBACK;");
+  });
+});
+
+describe("resolveLinkTargets with a read wrapper", () => {
+  /**
+   * Builds the references of some keys.
+   *
+   * @param keys - lowercased document UUIDs.
+   * @returns the references.
+   */
+  const referencesOf = (keys: string[]) =>
+    keys.map((key) => ({ key, keyKind: "id" as const, position: null }));
+
+  it("wraps only each batch's read, after the batch is bounded", async () => {
+    const { user, document } = await buildFixture();
+    const keys = [
+      document.id,
+      ...Array.from(
+        { length: 500 },
+        (_, index) =>
+          `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`
+      ),
+    ];
+    const statements = recordStatements();
+    const reads: { from: number; to: number }[] = [];
+
+    const targets = await sequelize.transaction((transaction) =>
+      resolveLinkTargets({
+        batches: linkLookupBatches(referencesOf(keys)),
+        actor: user,
+        transaction,
+        deadline: fixedDeadline(),
+        read: async (run) => {
+          const from = statements().length;
+          const result = await run();
+          reads.push({ from, to: statements().length });
+          return result;
+        },
+      })
+    );
+
+    expect(targets.get(document.id)).toBe("resolved");
+    expect(targets.size).toBe(501);
+    expect(
+      [...targets.values()].filter((state) => state === "unresolved")
+    ).toHaveLength(500);
+    const recorded = statements().map(({ sql }) => statementOf(sql));
+    expect(reads).toHaveLength(2);
+    for (const { from, to } of reads) {
+      expect(recorded.slice(from - 2, from)).toEqual([
+        "SET LOCAL lock_timeout = 1234",
+        "SET LOCAL statement_timeout = 1234",
+      ]);
+      // The membership includes may add their own reads, never a bound.
+      const inside = recorded.slice(from, to);
+      expect(inside[0]).toBe("SELECT documents");
+      expect(inside.filter((sql) => sql.startsWith("SET LOCAL"))).toEqual([]);
+    }
+  });
+
+  it("propagates the wrapper's error and stops", async () => {
+    const { user } = await buildFixture();
+    const failure = new Error("wrapped read failed");
+    const read = vi.fn(() => Promise.reject(failure));
+
+    await expect(
+      sequelize.transaction((transaction) =>
+        resolveLinkTargets({
+          batches: [
+            [{ key: randomUUID(), keyKind: "id" }],
+            [{ key: randomUUID(), keyKind: "id" }],
+          ],
+          actor: user,
+          transaction,
+          deadline: fixedDeadline(),
+          read,
+        })
+      )
+    ).rejects.toBe(failure);
+    expect(read).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1,0 +1,136 @@
+import documentCreator from "@server/commands/documentCreator";
+import type { Template } from "@server/models";
+import { Document } from "@server/models";
+import type { APIContext } from "@server/types";
+import type {
+  MarkdownUpdateInput,
+  ProjectedDocument,
+} from "./documentProjection";
+
+/**
+ * Thrown in P7 when an update persisted nothing: the `revisionCount` read
+ * after the lock is unchanged after the save. It has no stable identifier.
+ */
+export class UnchangedUpdateError extends Error {
+  name = "UnchangedUpdateError";
+
+  constructor() {
+    super("The update resulted in no changes to the document");
+  }
+}
+
+/**
+ * Persists the projection of a Markdown create in P7 through the baseline
+ * writer, which stores the given content as is: it neither parses nor
+ * substitutes it.
+ *
+ * @param ctx - the API context, bound to the enforcement transaction.
+ * @param projection - the validated projection.
+ * @param template - the template re-fetched in P3, if any.
+ * @returns the document as re-fetched inside the transaction.
+ */
+export function persistProjectedCreate(
+  ctx: APIContext,
+  projection: ProjectedDocument,
+  template: Template | null | undefined
+): Promise<Document> {
+  return documentCreator(ctx, {
+    id: projection.documentId,
+    title: projection.title,
+    content: structuredClone(projection.content),
+    icon: projection.icon,
+    color: projection.color,
+    fullWidth: projection.fullWidth,
+    parentDocumentId: projection.parentDocumentId,
+    publish: projection.published,
+    collectionId: projection.collectionId,
+    sourceMetadata: projection.sourceMetadata
+      ? structuredClone(projection.sourceMetadata)
+      : undefined,
+    template,
+  });
+}
+
+/**
+ * Persists the projection of a Markdown update in P7 on the locked,
+ * re-fetched document, replaying only the tail of `documentUpdater`: no edit
+ * is re-applied and no row is re-locked. An unpublish goes through the
+ * baseline unpublish; any other update assigns only the fields the input
+ * names, from the projection, then publishes or saves.
+ *
+ * @param ctx - the API context, bound to the enforcement transaction.
+ * @param args.document - the document re-fetched after the lock.
+ * @param args.projection - the validated projection.
+ * @param args.input - the update arguments.
+ * @returns the document as re-fetched inside the transaction.
+ * @throws UnchangedUpdateError when an update other than an unpublish
+ *   persisted nothing.
+ * @throws the baseline error of a failed save, publish, or unpublish.
+ */
+export async function persistProjectedUpdate(
+  ctx: APIContext,
+  args: {
+    document: Document;
+    projection: ProjectedDocument;
+    input: Readonly<MarkdownUpdateInput>;
+  }
+): Promise<Document> {
+  const { document, projection, input } = args;
+  const { user } = ctx.state.auth;
+  const { transaction } = ctx.state;
+  /**
+   * Re-fetches the document inside the transaction.
+   *
+   * @returns the document.
+   */
+  const refetch = () =>
+    Document.findByPk(document.id, {
+      userId: user.id,
+      rejectOnEmpty: true,
+      transaction,
+    });
+
+  if (input.publish === false) {
+    await document.unpublishWithCtx(ctx, { detach: false });
+    return refetch();
+  }
+
+  const { revisionCount } = document;
+  if (input.title !== undefined) {
+    document.title = projection.title;
+  }
+  if (input.icon !== undefined) {
+    document.icon = projection.icon;
+  }
+  if (input.color !== undefined) {
+    document.color = projection.color;
+  }
+  if (input.fullWidth !== undefined) {
+    document.fullWidth = projection.fullWidth;
+  }
+  if (input.text !== undefined) {
+    document.content = structuredClone(projection.content);
+    document.text = projection.text;
+    document.state = projection.state ? Buffer.from(projection.state) : null;
+    if (projection.state) {
+      document.changed("state", true);
+    }
+  }
+
+  if (input.publish === true) {
+    if (!document.collectionId) {
+      document.collectionId = projection.collectionId;
+    }
+    await document.publish(ctx, { collectionId: projection.collectionId });
+  } else if (document.changed()) {
+    document.lastModifiedById = user.id;
+    document.updatedBy = user;
+    await document.saveWithCtx(ctx);
+  }
+
+  const updated = await refetch();
+  if (updated.revisionCount === revisionCount) {
+    throw new UnchangedUpdateError();
+  }
+  return updated;
+}

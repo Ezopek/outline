@@ -190,6 +190,14 @@ router.post(
 
     await server.connect(transport);
 
+    // A response closed before it finished writing has lost its client. Closing
+    // the transport aborts the handler signals; a stream cancel alone does not.
+    ctx.res.on("close", () => {
+      if (!ctx.res.writableFinished) {
+        void transport.close().catch(() => undefined);
+      }
+    });
+
     // Attach auth info to the raw request so the MCP transport
     // passes it through as `extra.authInfo` to tool handlers. The audit
     // attribution comes only from the private authentication result, never

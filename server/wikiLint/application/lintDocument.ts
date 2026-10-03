@@ -24,10 +24,10 @@ import {
   readDocumentSnapshot,
 } from "../adapters/documentReader";
 import type { Deadline, MonotonicClock } from "./deadline";
-import { DeadlineFloorError } from "./deadline";
+import { DeadlineFloorError, VALIDATION_DEADLINE_MS } from "./deadline";
 
 /** The server-owned `lint_document` deadline, in milliseconds. */
-export const LINT_DOCUMENT_DEADLINE_MS = 9000;
+export const LINT_DOCUMENT_DEADLINE_MS = VALIDATION_DEADLINE_MS;
 
 /** The database steps of `lint_document`. */
 export interface LintDocumentReader {

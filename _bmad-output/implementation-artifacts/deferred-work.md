@@ -59,3 +59,11 @@ source_spec: `spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md`
 severity: medium
 reason: Story 1.10's acceptance loop (server/routes/mcp/wikiLint.test.ts, "repair loop") reaches a Clean Result only because the test agent is given the collection's documented conventions (field values, global index id); the Finding is fixed to {code, severity, message, location} with a generic registry message. This is the pre-existing DW-2/DW-3 gap (deferred-work ledger), now observed at the accepted MCP surface; settling it needs an architecture decision on readability-gated detail.
 status: open
+
+### DW-9: Enforced writes that end in AD-20 rows 3, 5, or 7 leave no operator log; only post-commit callback failures are logged.
+origin: spec-deferred 74f952c7d695
+location: server/wikiLint/application/enforcedWrite.ts:369-497
+source_spec: `spec-2-3-enforce-markdown-creates-and-updates-atomically.md`
+severity: medium
+reason: runAttempt maps every non-application failure to OPERATION_FAILED through abortMessage and logs nothing, and row 7 (a COMMIT whose outcome cannot be established, which the hang fixture shows can still land) is not logged either. An operator investigating a failed enforced write has no requestId/invocationId-correlated trace. This is the same gap as Epic 1 retrospective action item 9 (F-6: log unmodellable lint failures with invocationId and error class only), which the project deferred to Epic 3 hardening; Story 2.7 adds summaries for rows 3, 4, 5, and 6 but none for row 7.
+status: open

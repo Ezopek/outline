@@ -241,17 +241,21 @@ export async function findReadableDocuments(input: {
  * @param input.actor - the acting user.
  * @param input.transaction - the snapshot transaction.
  * @param input.deadline - the request deadline.
+ * @param input.read - wraps each batch's read, after the batch is bounded;
+ *   for example in a savepoint. By default the read runs as is.
  * @returns the state of each key.
  * @throws DeadlineFloorError when the remainder is below the floor before a
- *   batch, or the query error of a batch.
+ *   batch, or the error of a batch's read.
  */
 export async function resolveLinkTargets(input: {
   batches: readonly (readonly LinkLookupKey[])[];
   actor: User;
   transaction: Transaction;
   deadline: Deadline;
+  read?: <T>(run: () => Promise<T>) => Promise<T>;
 }): Promise<Map<string, LinkTargetState>> {
   const { batches, actor, transaction, deadline } = input;
+  const read = input.read ?? (<T>(run: () => Promise<T>) => run());
   const targets = new Map<string, LinkTargetState>();
   for (const batch of batches) {
     const ids = batch
@@ -262,16 +266,18 @@ export async function resolveLinkTargets(input: {
       .map((key) => key.key);
 
     await boundBatch(transaction, deadline);
-    const readable = await findReadableDocuments({
-      where: {
-        [Op.or]: [
-          ...(ids.length ? [{ id: ids }] : []),
-          ...(urlIds.length ? [{ urlId: urlIds }] : []),
-        ],
-      },
-      actor,
-      transaction,
-    });
+    const readable = await read(() =>
+      findReadableDocuments({
+        where: {
+          [Op.or]: [
+            ...(ids.length ? [{ id: ids }] : []),
+            ...(urlIds.length ? [{ urlId: urlIds }] : []),
+          ],
+        },
+        actor,
+        transaction,
+      })
+    );
     const readableIds = new Set(readable.map((row) => row.id));
     const readableUrlIds = new Set(readable.map((row) => row.urlId));
     for (const { key, keyKind } of batch) {

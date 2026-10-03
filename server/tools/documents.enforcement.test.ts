@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { DocumentPermission, Scope } from "@shared/types";
+import { yDocToProsemirrorJSON } from "y-prosemirror";
+import * as Y from "yjs";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { DocumentPermission, Scope, TextEditMode } from "@shared/types";
 import {
   Attachment,
   Collection,
@@ -8,6 +11,8 @@ import {
   type User,
   UserMembership,
 } from "@server/models";
+import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
+import { globalEventQueue } from "@server/queues";
 import DocumentImportTask from "@server/queues/tasks/DocumentImportTask";
 import { sequelize } from "@server/storage/database";
 import {
@@ -17,13 +22,21 @@ import {
   buildTemplate,
   buildUser,
 } from "@server/test/factories";
-import { buildOAuthUser, callMcpTool } from "@server/test/McpHelper";
+import {
+  buildOAuthUser,
+  callMcpTool,
+  mcpHeaders,
+  mcpRequest,
+} from "@server/test/McpHelper";
 import { getTestServer } from "@server/test/support";
 import type * as PolicyConfig from "@server/wikiLint/adapters/policyConfig";
 import type * as DeadlineModule from "@server/wikiLint/application/deadline";
 import type { PolicySet } from "@server/wikiLint/core/policySet";
 import { buildPolicySet } from "@server/wikiLint/core/policySet";
-import { OPERATION_FAILED } from "@server/wikiLint/core/registry";
+import {
+  COLLECTION_CONFLICT,
+  OPERATION_FAILED,
+} from "@server/wikiLint/core/registry";
 
 /** What the two replaced seams serve; reset after each test. */
 const state = vi.hoisted(() => ({
@@ -235,21 +248,25 @@ async function storedState(teamId: string, targetId?: string) {
 }
 
 /**
- * Calls a write that must have no effect and proves it: no transaction, no
- * import job, no scheduled Event, no mutating SQL, and no snapshotted row or
- * target field changed.
+ * Calls a write that must have no effect and proves it: no import job, no
+ * scheduled or enqueued Event, no mutating SQL, and no snapshotted row or
+ * target field changed. A sentinel or pre-classification failure opens no
+ * transaction; an enforced write rejected before persistence opens exactly
+ * its one enforcement transaction.
  *
  * @param actor - the actor and their access token.
  * @param tool - the tool.
  * @param args - the arguments.
  * @param targetId - the target document, if any.
+ * @param transactions - the number of transactions the write may open.
  * @returns the response.
  */
 async function callWithoutEffect(
   actor: { user: User; accessToken: string },
   tool: string,
   args: Record<string, unknown>,
-  targetId?: string
+  targetId?: string,
+  transactions = 0
 ): Promise<McpResponse> {
   // Settles the throttled authentication activity writes first.
   await callMcpTool(server, actor.accessToken, "list_collections");
@@ -257,6 +274,7 @@ async function callWithoutEffect(
   const transaction = vi.spyOn(sequelize, "transaction");
   const importJob = vi.spyOn(DocumentImportTask, "scheduleAndWait");
   const scheduledEvent = vi.spyOn(Event, "schedule");
+  const enqueued = vi.spyOn(globalEventQueue(), "add");
   const query = vi.spyOn(sequelize, "query");
 
   const response = await callMcpTool(server, actor.accessToken, tool, args);
@@ -264,9 +282,10 @@ async function callWithoutEffect(
   const statements = query.mock.calls.map(([sql]) =>
     typeof sql === "string" ? sql : sql.query
   );
-  expect(transaction).not.toHaveBeenCalled();
+  expect(transaction).toHaveBeenCalledTimes(transactions);
   expect(importJob).not.toHaveBeenCalled();
   expect(scheduledEvent).not.toHaveBeenCalled();
+  expect(enqueued).not.toHaveBeenCalled();
   // The recorder sees the request's own reads, so it would see a mutation.
   expect(statements.some((sql) => /^\s*SELECT\b/i.test(sql))).toBe(true);
   expect(
@@ -275,11 +294,77 @@ async function callWithoutEffect(
   transaction.mockRestore();
   importJob.mockRestore();
   scheduledEvent.mockRestore();
+  enqueued.mockRestore();
   query.mockRestore();
   await expect(storedState(actor.user.teamId, targetId)).resolves.toEqual(
     before
   );
   return response;
+}
+
+/** Matches a UUID. */
+const UUID_PATTERN =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+
+/**
+ * Returns the first content block of a response with every UUID that is not
+ * a known fixture identifier replaced by `<allocated>`: the pre-allocated ID
+ * of a create.
+ *
+ * @param response - the response.
+ * @param known - the fixture identifiers to keep.
+ * @returns the normalized text.
+ */
+function normalizedText(response: McpResponse, known: readonly string[]) {
+  return (response?.result?.content?.[0]?.text ?? "").replace(
+    UUID_PATTERN,
+    (id) => (known.includes(id) ? id : "<allocated>")
+  );
+}
+
+/**
+ * Builds the modeled rejection of a written body that lacks the required
+ * Overview section.
+ *
+ * @param set - the served set.
+ * @param collectionId - the enforced collection.
+ * @param documentId - the written document, or `<allocated>` for a create.
+ * @param readable - whether the actor can read the collection.
+ * @returns the exact text of the first content block.
+ */
+function enforcedRejection(
+  set: PolicySet,
+  collectionId: string,
+  documentId: string,
+  readable: boolean
+): string {
+  const entry = set.entries.find((item) => item.collectionId === collectionId);
+  if (entry?.status !== "valid") {
+    throw new Error("Expected a valid policy");
+  }
+  return JSON.stringify({
+    success: false,
+    validation: {
+      status: "rejected",
+      ...(readable && {
+        policySchemaVersion: 1,
+        policyFingerprint: entry.policyFingerprint,
+      }),
+      errors: [
+        {
+          code: "REQUIRED_SECTION_MISSING",
+          severity: "error",
+          message: "A required section is missing.",
+          location: { kind: "document", documentId },
+          ...(readable && {
+            detail: { kind: "section", heading: "Overview", headingLevel: 2 },
+          }),
+        },
+      ],
+      warnings: [],
+      systemFailures: [],
+    },
+  });
 }
 
 /**
@@ -539,12 +624,41 @@ describe("destination selection across policy states", () => {
           return;
         }
         if (expected === "enforced") {
-          expectOperationFailed(
-            await callWithoutEffect(
-              fixture,
-              path.tool,
-              path.args(fixture),
-              fixture.target?.id
+          // An HTML create keeps the interim fail-closed until Story 2.5.
+          if (path.args(fixture).format === "html") {
+            expectOperationFailed(
+              await callWithoutEffect(
+                fixture,
+                path.tool,
+                path.args(fixture),
+                fixture.target?.id
+              )
+            );
+            return;
+          }
+          const response = await callWithoutEffect(
+            fixture,
+            path.tool,
+            path.args(fixture),
+            fixture.target?.id,
+            1
+          );
+          expect(response?.result?.isError).toBeUndefined();
+          expect(response?.result?.content).toHaveLength(1);
+          expect(
+            normalizedText(response, [
+              fixture.collection.id,
+              fixture.decoy.id,
+              ...(fixture.target ? [fixture.target.id] : []),
+            ])
+          ).toBe(
+            enforcedRejection(
+              set,
+              fixture.collection.id,
+              path.tool === "create_document"
+                ? "<allocated>"
+                : fixture.target!.id,
+              true
             )
           );
           return;
@@ -663,84 +777,92 @@ describe("invalid-policy sentinel", () => {
     }
   );
 
-  it("keeps the baseline result when P0 fails", async () => {
-    const owner = await buildOAuthUser();
-    const outsider = await actorOf(
-      await buildUser({ teamId: owner.user.teamId })
-    );
-    const collection = await buildCollection({
-      teamId: owner.user.teamId,
-      userId: owner.user.id,
-      permission: null,
-    });
-    const publicCollection = await buildCollection({
-      teamId: owner.user.teamId,
-      userId: owner.user.id,
-    });
-    const privateTemplate = await buildTemplate({
-      teamId: owner.user.teamId,
-      userId: owner.user.id,
-      collectionId: collection.id,
-    });
-    const document = await buildDocument({
-      teamId: owner.user.teamId,
-      userId: owner.user.id,
-      collectionId: collection.id,
-    });
-    const outsiderDraft = await buildDocument({
-      teamId: owner.user.teamId,
-      userId: outsider.user.id,
-      collectionId: null,
-    });
-    const calls: [typeof owner, string, Record<string, unknown>][] = [
-      [owner, "update_document", { id: randomUUID(), text: BODY }],
-      [
-        outsider,
-        "create_document",
-        {
-          title: "Denied",
-          text: BODY,
-          collectionId: publicCollection.id,
-          templateId: privateTemplate.id,
-        },
-      ],
-      [
-        outsider,
-        "update_document",
-        { id: outsiderDraft.id, publish: true, collectionId: collection.id },
-      ],
-      [outsider, "update_document", { id: document.id, text: BODY }],
-      [outsider, "update_document", { id: document.id, publish: false }],
-      [
-        outsider,
-        "create_document",
-        { title: "Denied", text: BODY, collectionId: collection.id },
-      ],
-      [
-        outsider,
-        "create_document",
-        { title: "Denied", text: BODY, parentDocumentId: document.id },
-      ],
-    ];
-
-    for (const [actor, tool, args] of calls) {
-      configure([]);
-      const unconfigured = await callMcpTool(
-        server,
-        actor.accessToken,
-        tool,
-        args
+  it.each(["sentinel", "enforced"] as const)(
+    "keeps the baseline result when P0 fails under a %s policy",
+    async (policyState) => {
+      const owner = await buildOAuthUser();
+      const outsider = await actorOf(
+        await buildUser({ teamId: owner.user.teamId })
       );
-      configure([
-        [collection, "sentinel"],
-        [publicCollection, "sentinel"],
-      ]);
-      const sentinel = await callWithoutEffect(actor, tool, args, document.id);
+      const collection = await buildCollection({
+        teamId: owner.user.teamId,
+        userId: owner.user.id,
+        permission: null,
+      });
+      const publicCollection = await buildCollection({
+        teamId: owner.user.teamId,
+        userId: owner.user.id,
+      });
+      const privateTemplate = await buildTemplate({
+        teamId: owner.user.teamId,
+        userId: owner.user.id,
+        collectionId: collection.id,
+      });
+      const document = await buildDocument({
+        teamId: owner.user.teamId,
+        userId: owner.user.id,
+        collectionId: collection.id,
+      });
+      const outsiderDraft = await buildDocument({
+        teamId: owner.user.teamId,
+        userId: outsider.user.id,
+        collectionId: null,
+      });
+      const calls: [typeof owner, string, Record<string, unknown>][] = [
+        [owner, "update_document", { id: randomUUID(), text: BODY }],
+        [
+          outsider,
+          "create_document",
+          {
+            title: "Denied",
+            text: BODY,
+            collectionId: publicCollection.id,
+            templateId: privateTemplate.id,
+          },
+        ],
+        [
+          outsider,
+          "update_document",
+          { id: outsiderDraft.id, publish: true, collectionId: collection.id },
+        ],
+        [outsider, "update_document", { id: document.id, text: BODY }],
+        [outsider, "update_document", { id: document.id, publish: false }],
+        [
+          outsider,
+          "create_document",
+          { title: "Denied", text: BODY, collectionId: collection.id },
+        ],
+        [
+          outsider,
+          "create_document",
+          { title: "Denied", text: BODY, parentDocumentId: document.id },
+        ],
+      ];
 
-      expect(unconfigured?.result?.isError).toBe(true);
-      expect(sentinel?.result).toEqual(unconfigured?.result);
+      for (const [actor, tool, args] of calls) {
+        configure([]);
+        const unconfigured = await callMcpTool(
+          server,
+          actor.accessToken,
+          tool,
+          args
+        );
+        configure([
+          [collection, policyState],
+          [publicCollection, policyState],
+        ]);
+        const configured = await callWithoutEffect(
+          actor,
+          tool,
+          args,
+          document.id
+        );
+
+        expect(unconfigured?.result?.isError).toBe(true);
+        expect(configured?.result).toEqual(unconfigured?.result);
+      }
     }
-  });
+  );
 });
 
 describe("actors who cannot read the classified collection", () => {
@@ -750,7 +872,7 @@ describe("actors who cannot read the classified collection", () => {
    *
    * @returns the fixture.
    */
-  async function buildMembershipFixture() {
+  async function buildMembershipFixture(policyState: "sentinel" | "enforced") {
     const member = await buildOAuthUser();
     const documentEditor = await actorOf(
       await buildUser({ teamId: member.user.teamId })
@@ -772,7 +894,7 @@ describe("actors who cannot read the classified collection", () => {
       createdById: member.user.id,
       permission: DocumentPermission.ReadWrite,
     });
-    const set = configure([[collection, "sentinel"]]);
+    const set = configure([[collection, policyState]]);
     return { member, documentEditor, collection, document, set };
   }
 
@@ -820,45 +942,83 @@ describe("actors who cannot read the classified collection", () => {
     },
   ];
 
-  it.each(paths)(
-    "omits every identity on $name and keeps it for a collection reader",
-    async ({ tool, call }) => {
-      const fixture = await buildMembershipFixture();
-      const { member, documentEditor, collection, set } = fixture;
+  describe.each(["sentinel", "enforced"] as const)(
+    "under a %s policy",
+    (policyState) => {
+      it.each(paths)(
+        "omits every identity on $name and keeps it for a collection reader",
+        async ({ tool, call }) => {
+          const fixture = await buildMembershipFixture(policyState);
+          const { member, documentEditor, collection, set } = fixture;
+          const transactions = policyState === "enforced" ? 1 : 0;
+          /**
+           * Builds the expected rejection of one actor's call.
+           *
+           * @param targetId - the written document, if it exists.
+           * @param readable - whether the actor can read the collection.
+           * @returns the exact text of the first content block.
+           */
+          const expected = (targetId: string | undefined, readable: boolean) =>
+            policyState === "sentinel"
+              ? sentinelRejection(set, collection.id, readable)
+              : enforcedRejection(
+                  set,
+                  collection.id,
+                  targetId ?? "<allocated>",
+                  readable
+                );
 
-      const editorCall = await call(documentEditor, fixture);
-      const hidden = await callWithoutEffect(
-        documentEditor,
-        tool,
-        editorCall.args,
-        editorCall.targetId
-      );
-      const memberCall = await call(member, fixture);
-      const visible = await callWithoutEffect(
-        member,
-        tool,
-        memberCall.args,
-        memberCall.targetId
-      );
+          const editorCall = await call(documentEditor, fixture);
+          const hidden = await callWithoutEffect(
+            documentEditor,
+            tool,
+            editorCall.args,
+            editorCall.targetId,
+            transactions
+          );
+          const memberCall = await call(member, fixture);
+          const visible = await callWithoutEffect(
+            member,
+            tool,
+            memberCall.args,
+            memberCall.targetId,
+            transactions
+          );
 
-      expectRejection(hidden, sentinelRejection(set, collection.id, false));
-      const hiddenText = hidden?.result?.content?.[0]?.text ?? "";
-      for (const field of [
-        "invalidFingerprint",
-        "policyFingerprint",
-        "policySchemaVersion",
-        "collectionId",
-        collection.id,
-      ]) {
-        expect(hiddenText).not.toContain(field);
-      }
-      expectRejection(visible, sentinelRejection(set, collection.id, true));
+          const known = [
+            collection.id,
+            fixture.document.id,
+            ...[editorCall.targetId, memberCall.targetId].filter(
+              (id): id is string => id !== undefined
+            ),
+          ];
+          expect(hidden?.result?.isError).toBeUndefined();
+          expect(normalizedText(hidden, known)).toBe(
+            expected(editorCall.targetId, false)
+          );
+          const hiddenText = hidden?.result?.content?.[0]?.text ?? "";
+          for (const field of [
+            "invalidFingerprint",
+            "policyFingerprint",
+            "policySchemaVersion",
+            "collectionId",
+            "detail",
+            collection.id,
+          ]) {
+            expect(hiddenText).not.toContain(field);
+          }
+          expect(visible?.result?.isError).toBeUndefined();
+          expect(normalizedText(visible, known)).toBe(
+            expected(memberCall.targetId, true)
+          );
+        }
+      );
     }
   );
 });
 
-describe("valid enforced policy before validation exists", () => {
-  it("fails closed when publishing a collectionless draft, leaving it unpublished", async () => {
+describe("collectionless-draft publication into an enforced collection", () => {
+  it("rejects a draft with a known Error before publication, leaving it unpublished", async () => {
     const actor = await buildOAuthUser();
     const { user } = actor;
     const collection = await buildCollection({
@@ -872,15 +1032,17 @@ describe("valid enforced policy before validation exists", () => {
       text: BODY,
     });
     const revisionCount = draft.revisionCount;
-    configure([[collection, "enforced"]]);
+    const set = configure([[collection, "enforced"]]);
 
-    expectOperationFailed(
+    expectRejection(
       await callWithoutEffect(
         actor,
         "update_document",
         { id: draft.id, publish: true, collectionId: collection.id },
-        draft.id
-      )
+        draft.id,
+        1
+      ),
+      enforcedRejection(set, collection.id, draft.id, true)
     );
 
     const stored = await Document.unscoped().findByPk(draft.id, {
@@ -950,13 +1112,29 @@ describe("request-supplied values", () => {
       const call = (tool: string, args: Record<string, unknown>) =>
         policyState === "read_only"
           ? callMcpTool(server, actor.accessToken, tool, args)
-          : callWithoutEffect(actor, tool, args, args.id as string | undefined);
+          : callWithoutEffect(
+              actor,
+              tool,
+              args,
+              args.id as string | undefined,
+              policyState === "enforced" ? 1 : 0
+            );
 
       for (const [plain, extra, tool] of pairs) {
         const without = await call(tool, plain);
         const withExtra = await call(tool, extra);
 
-        if (policyState === "read_only") {
+        if (policyState === "enforced") {
+          // Only the written document's identity differs between the two.
+          const written = (response: McpResponse, id?: unknown) =>
+            normalizedText(response, [collection.id]).replace(
+              typeof id === "string" ? id : "<allocated>",
+              "<written>"
+            );
+          expect(withExtra?.result?.isError).toBeUndefined();
+          expect(written(withExtra, extra.id)).toBe(written(without, plain.id));
+          expect(written(without, plain.id)).toContain('"status":"rejected"');
+        } else if (policyState === "read_only") {
           for (const response of [without, withExtra]) {
             expect(response?.result?.isError).toBeUndefined();
             expect(JSON.stringify(response)).not.toContain("validation");
@@ -1112,33 +1290,39 @@ describe("baseline writes", () => {
     expect(stored.collectionId).toBe(collection.id);
   });
 
-  it("keeps the documents.create and documents.update API routes baseline in a sentinel collection", async () => {
-    const user = await buildUser();
-    const collection = await buildCollection({
-      teamId: user.teamId,
-      userId: user.id,
-    });
-    configure([[collection, "sentinel"]]);
+  it.each(["sentinel", "enforced"] as const)(
+    "keeps the documents.create and documents.update API routes baseline in a %s collection",
+    async (policyState) => {
+      const user = await buildUser();
+      const collection = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      configure([[collection, policyState]]);
 
-    const created = await server.post("/api/documents.create", user, {
-      body: {
-        title: "Created",
-        text: BODY,
-        collectionId: collection.id,
-        publish: true,
-      },
-    });
-    expect(created.status).toBe(200);
-    const { data } = await created.json();
-    expect(data.collectionId).toBe(collection.id);
+      const created = await server.post("/api/documents.create", user, {
+        body: {
+          title: "Created",
+          text: BODY,
+          collectionId: collection.id,
+          publish: true,
+        },
+      });
+      expect(created.status).toBe(200);
+      const { data } = await created.json();
+      expect(data.collectionId).toBe(collection.id);
 
-    const updated = await server.post("/api/documents.update", user, {
-      body: { id: data.id, text: `${BODY} again` },
-    });
-    expect(updated.status).toBe(200);
-    const stored = await Document.findByPk(data.id, { rejectOnEmpty: true });
-    expect(stored.text).toBe(`${BODY} again`);
-  });
+      expect(JSON.stringify(data)).not.toContain("validation");
+
+      const updated = await server.post("/api/documents.update", user, {
+        body: { id: data.id, text: `${BODY} again` },
+      });
+      expect(updated.status).toBe(200);
+      expect(JSON.stringify(await updated.json())).not.toContain("validation");
+      const stored = await Document.findByPk(data.id, { rejectOnEmpty: true });
+      expect(stored.text).toBe(`${BODY} again`);
+    }
+  );
 });
 
 describe("move_document and restore_document compatibility evidence", () => {
@@ -1262,6 +1446,959 @@ describe("move_document and restore_document compatibility evidence", () => {
           ).toEqual(["POLICY_CONFIGURATION_INVALID"]);
         }
       }
+    }
+  );
+});
+
+describe("enforced Markdown writes", () => {
+  /** A body that satisfies `rules`. */
+  const VALID = "## Overview\n\nAll good.";
+
+  /** One valid enforced write and how to build its target. */
+  interface ValidWrite {
+    name: string;
+    tool: "create_document" | "update_document";
+    /** The target's attributes, when the write updates one. */
+    target?: Parameters<typeof buildDocument>[0];
+    template?: boolean;
+    args: (fixture: {
+      collection: Collection;
+      target?: Document;
+      templateId?: string;
+    }) => Record<string, unknown>;
+  }
+
+  const VALID_WRITES: ValidWrite[] = [
+    {
+      name: "published create",
+      tool: "create_document",
+      args: ({ collection }) => ({
+        title: "Written",
+        text: VALID,
+        collectionId: collection.id,
+      }),
+    },
+    {
+      name: "draft create",
+      tool: "create_document",
+      args: ({ collection }) => ({
+        title: "Written",
+        text: VALID,
+        collectionId: collection.id,
+        publish: false,
+      }),
+    },
+    {
+      name: "template create",
+      tool: "create_document",
+      template: true,
+      args: ({ collection, templateId }) => ({
+        collectionId: collection.id,
+        templateId,
+      }),
+    },
+    {
+      name: "replace",
+      tool: "update_document",
+      target: {},
+      args: ({ target }) => ({
+        id: target!.id,
+        text: "## Overview\n\nReplaced",
+      }),
+    },
+    {
+      name: "append",
+      tool: "update_document",
+      target: {},
+      args: ({ target }) => ({
+        id: target!.id,
+        text: "\n\nAppended",
+        editMode: TextEditMode.Append,
+      }),
+    },
+    {
+      name: "prepend",
+      tool: "update_document",
+      target: {},
+      args: ({ target }) => ({
+        id: target!.id,
+        text: "Prepended\n\n",
+        editMode: TextEditMode.Prepend,
+      }),
+    },
+    {
+      name: "patch",
+      tool: "update_document",
+      target: {},
+      args: ({ target }) => ({
+        id: target!.id,
+        text: "Patched.",
+        editMode: TextEditMode.Patch,
+        findText: "All good.",
+      }),
+    },
+    {
+      name: "title-only",
+      tool: "update_document",
+      target: {},
+      args: ({ target }) => ({ id: target!.id, title: "Renamed" }),
+    },
+    {
+      name: "publish",
+      tool: "update_document",
+      target: { publishedAt: null },
+      args: ({ target }) => ({ id: target!.id, publish: true }),
+    },
+    {
+      name: "unpublish",
+      tool: "update_document",
+      target: {},
+      args: ({ target }) => ({ id: target!.id, publish: false }),
+    },
+    {
+      name: "display-field create",
+      tool: "create_document",
+      args: ({ collection }) => ({
+        title: "Written",
+        text: VALID,
+        collectionId: collection.id,
+        icon: "🚀",
+        color: "#FF0000",
+        fullWidth: true,
+      }),
+    },
+    {
+      name: "sourceFileName create",
+      tool: "create_document",
+      args: ({ collection }) => ({
+        title: "Written",
+        text: VALID,
+        collectionId: collection.id,
+        sourceFileName: "notes.md",
+      }),
+    },
+    {
+      name: "parent-derived create",
+      tool: "create_document",
+      target: {},
+      args: ({ target }) => ({
+        title: "Child",
+        text: VALID,
+        parentDocumentId: target!.id,
+      }),
+    },
+    {
+      name: "display-field-only update",
+      tool: "update_document",
+      target: {},
+      args: ({ target }) => ({
+        id: target!.id,
+        icon: "🔥",
+        color: "#123456",
+        fullWidth: true,
+      }),
+    },
+  ];
+
+  /**
+   * Builds the fixture of one valid write.
+   *
+   * @param write - the write.
+   * @returns the actor, collection, target, and template.
+   */
+  async function validFixture(write: ValidWrite) {
+    const { user, accessToken } = await buildOAuthUser();
+    const collection = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    const target = write.target
+      ? await buildDocument({
+          teamId: user.teamId,
+          userId: user.id,
+          collectionId: collection.id,
+          title: "Target",
+          text: VALID,
+          ...write.target,
+        })
+      : undefined;
+    const template = write.template
+      ? await buildTemplate({
+          teamId: user.teamId,
+          userId: user.id,
+          collectionId: collection.id,
+          title: "From template",
+          text: VALID,
+        })
+      : undefined;
+    return {
+      user,
+      accessToken,
+      collection,
+      target,
+      templateId: template?.id,
+    };
+  }
+
+  /**
+   * Reads the written document of a successful response.
+   *
+   * @param first - the parsed first content block.
+   * @returns the stored row.
+   */
+  const writtenDocument = (first: { id?: string; document?: { id: string } }) =>
+    Document.unscoped().findOne({
+      where: { id: first.id ?? first.document!.id },
+      paranoid: false,
+      rejectOnEmpty: true,
+    });
+
+  it.each(VALID_WRITES)(
+    "commits a valid $name with the baseline response plus validation",
+    async (write) => {
+      const enforced = await validFixture(write);
+      const set = configure([[enforced.collection, "enforced"]]);
+      const entry = set.entries[0];
+      const response = await callMcpTool(
+        server,
+        enforced.accessToken,
+        write.tool,
+        write.args(enforced)
+      );
+      const plainFixture = await validFixture(write);
+      configure([]);
+      const plain = await callMcpTool(
+        server,
+        plainFixture.accessToken,
+        write.tool,
+        write.args(plainFixture)
+      );
+
+      expect(response?.error).toBeUndefined();
+      expect(response?.result?.isError).toBeUndefined();
+      expect(plain?.result?.isError).toBeUndefined();
+      const first = JSON.parse(response?.result?.content?.[0]?.text ?? "");
+      const plainFirst = JSON.parse(plain?.result?.content?.[0]?.text ?? "");
+      expect(Object.keys(first)).toEqual([
+        ...Object.keys(plainFirst),
+        "validation",
+      ]);
+      expect(first.validation).toEqual({
+        status: "validated",
+        policySchemaVersion: 1,
+        policyFingerprint:
+          entry.status === "valid" ? entry.policyFingerprint : undefined,
+        errors: [],
+        warnings: [],
+        systemFailures: [],
+      });
+      expect(response?.result?.content).toHaveLength(
+        plain?.result?.content?.length ?? 0
+      );
+      if ((plain?.result?.content?.length ?? 0) > 1) {
+        expect(response?.result?.content?.[1]).toEqual(
+          plain?.result?.content?.[1]
+        );
+      }
+      const [stored, plainStored] = await Promise.all([
+        writtenDocument(first),
+        writtenDocument(plainFirst),
+      ]);
+      /**
+       * Reduces a stored document to the fields the handler maps, with the
+       * fixture's own target replaced by its role.
+       *
+       * @param row - the stored document.
+       * @param fixture - its fixture.
+       * @returns the mapped fields.
+       */
+      const mapped = (row: Document, fixture: { target?: Document }) => ({
+        title: row.title,
+        text: row.text,
+        published: !!row.publishedAt,
+        icon: row.icon,
+        color: row.color,
+        fullWidth: row.fullWidth,
+        sourceMetadata: row.sourceMetadata,
+        parentDocumentId:
+          row.parentDocumentId && row.parentDocumentId === fixture.target?.id
+            ? "target"
+            : row.parentDocumentId,
+      });
+      expect(mapped(stored, enforced)).toEqual(
+        mapped(plainStored, plainFixture)
+      );
+    }
+  );
+
+  it("persists the appended content in the decoded Y.js state", async () => {
+    const { user, accessToken } = await buildOAuthUser();
+    const collection = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    const document = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+      text: VALID,
+    });
+    document.state = Buffer.from(
+      Y.encodeStateAsUpdate(ProsemirrorHelper.toYDoc(document.content!))
+    );
+    await document.save();
+    configure([[collection, "enforced"]]);
+
+    const response = await callMcpTool(server, accessToken, "update_document", {
+      id: document.id,
+      text: "\n\nAppended with state",
+      editMode: TextEditMode.Append,
+    });
+
+    expect(response?.result?.isError).toBeUndefined();
+    const stored = await Document.unscoped().findOne({
+      where: { id: document.id },
+      rejectOnEmpty: true,
+    });
+    const ydoc = new Y.Doc();
+    Y.applyUpdate(ydoc, stored.state!);
+    expect(JSON.stringify(yDocToProsemirrorJSON(ydoc, "default"))).toContain(
+      "Appended with state"
+    );
+    expect(stored.text).toContain("Appended with state");
+  });
+
+  it("returns collection_conflict when the parent moves before the transaction locks", async () => {
+    const actor = await buildOAuthUser();
+    const { user } = actor;
+    const [collection, other] = [
+      await buildCollection({ teamId: user.teamId, userId: user.id }),
+      await buildCollection({ teamId: user.teamId, userId: user.id }),
+    ];
+    const parent = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+      text: VALID,
+    });
+    configure([[collection, "enforced"]]);
+    const documents = await Document.unscoped().count({
+      where: { teamId: user.teamId },
+      paranoid: false,
+    });
+    const query = sequelize.query.bind(sequelize);
+    let moved = false;
+    vi.spyOn(sequelize, "query").mockImplementation((async (
+      ...args: Parameters<typeof query>
+    ) => {
+      const [sql] = args;
+      if (
+        !moved &&
+        typeof sql === "string" &&
+        /FROM collections WHERE id = .* FOR NO KEY UPDATE/.test(sql)
+      ) {
+        moved = true;
+        await query(
+          `UPDATE documents SET "collectionId" = '${other.id}' WHERE id = '${parent.id}'`
+        );
+      }
+      return query(...args);
+    }) as typeof sequelize.query);
+    const enqueued = vi.spyOn(globalEventQueue(), "add");
+
+    const response = await callMcpTool(
+      server,
+      actor.accessToken,
+      "create_document",
+      { title: "Child", text: VALID, parentDocumentId: parent.id }
+    );
+
+    expect(moved).toBe(true);
+    expect(response?.result).toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: { id: COLLECTION_CONFLICT } }),
+        },
+      ],
+      isError: true,
+    });
+    expect(enqueued).not.toHaveBeenCalled();
+    await expect(
+      Document.unscoped().count({
+        where: { teamId: user.teamId },
+        paranoid: false,
+      })
+    ).resolves.toBe(documents);
+  });
+
+  it("returns collection_conflict when the target moves before the transaction locks", async () => {
+    const actor = await buildOAuthUser();
+    const { user } = actor;
+    const [collection, other] = [
+      await buildCollection({ teamId: user.teamId, userId: user.id }),
+      await buildCollection({ teamId: user.teamId, userId: user.id }),
+    ];
+    const document = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+      text: VALID,
+    });
+    configure([[collection, "enforced"]]);
+    await callMcpTool(server, actor.accessToken, "list_collections");
+    const before = await storedState(user.teamId, document.id);
+    const query = sequelize.query.bind(sequelize);
+    let moved = false;
+    vi.spyOn(sequelize, "query").mockImplementation((async (
+      ...args: Parameters<typeof query>
+    ) => {
+      const [sql] = args;
+      if (
+        !moved &&
+        typeof sql === "string" &&
+        /FROM collections WHERE id = .* FOR NO KEY UPDATE/.test(sql)
+      ) {
+        moved = true;
+        await query(
+          `UPDATE documents SET "collectionId" = '${other.id}' WHERE id = '${document.id}'`
+        );
+      }
+      return query(...args);
+    }) as typeof sequelize.query);
+    const enqueued = vi.spyOn(globalEventQueue(), "add");
+
+    const response = await callMcpTool(
+      server,
+      actor.accessToken,
+      "update_document",
+      { id: document.id, title: "Conflicted" }
+    );
+
+    expect(moved).toBe(true);
+    expect(response?.result).toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ error: { id: COLLECTION_CONFLICT } }),
+        },
+      ],
+      isError: true,
+    });
+    expect(enqueued).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    expect(
+      (await storedState(user.teamId, document.id)).target?.collectionId
+    ).toBe(other.id);
+    // Only the out-of-band move remains: undoing it restores every row.
+    await sequelize.query(
+      `UPDATE documents SET "collectionId" = '${collection.id}' WHERE id = '${document.id}'`
+    );
+    await expect(storedState(user.teamId, document.id)).resolves.toEqual(
+      before
+    );
+  });
+
+  it.each([
+    {
+      name: "an absent patch target",
+      transactions: 1,
+      args: (id: string) => ({
+        id,
+        text: "x",
+        editMode: TextEditMode.Patch,
+        findText: "absent text",
+      }),
+      message: "The specified text was not found in the document",
+    },
+    {
+      name: "an importable image",
+      transactions: 0,
+      args: (id: string) => ({
+        id,
+        text: `${VALID}\n\n![image](data:image/png;base64,${PNG_BASE64})`,
+      }),
+      message: OPERATION_FAILED,
+    },
+  ])(
+    "aborts before the decision on $name",
+    async ({ args, transactions, message }) => {
+      const actor = await buildOAuthUser();
+      const { user } = actor;
+      const collection = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const document = await buildDocument({
+        teamId: user.teamId,
+        userId: user.id,
+        collectionId: collection.id,
+        text: VALID,
+      });
+      configure([[collection, "enforced"]]);
+
+      const response = await callWithoutEffect(
+        actor,
+        "update_document",
+        args(document.id),
+        document.id,
+        transactions
+      );
+
+      expect(response?.result).toEqual({
+        content: [{ type: "text", text: message }],
+        isError: true,
+      });
+    }
+  );
+
+  it.each([
+    {
+      name: "an unchanged update",
+      child: false,
+      args: (id: string) => ({ id, title: "Target" }),
+      message: OPERATION_FAILED,
+    },
+    {
+      name: "an unpublish of a parent",
+      child: true,
+      args: (id: string) => ({ id, publish: false }),
+      message: "Cannot unpublish document with child documents",
+    },
+  ])(
+    "aborts after the decision on $name, rolling back",
+    async ({ child, args, message }) => {
+      const actor = await buildOAuthUser();
+      const { user } = actor;
+      const collection = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const document = await buildDocument({
+        teamId: user.teamId,
+        userId: user.id,
+        collectionId: collection.id,
+        title: "Target",
+        text: VALID,
+      });
+      if (child) {
+        await buildDocument({
+          teamId: user.teamId,
+          userId: user.id,
+          collectionId: collection.id,
+          parentDocumentId: document.id,
+          text: VALID,
+        });
+      }
+      configure([[collection, "enforced"]]);
+      await callMcpTool(server, actor.accessToken, "list_collections");
+      const before = await storedState(user.teamId, document.id);
+      const enqueued = vi.spyOn(globalEventQueue(), "add");
+
+      const response = await callMcpTool(
+        server,
+        actor.accessToken,
+        "update_document",
+        args(document.id)
+      );
+
+      expect(response?.result).toEqual({
+        content: [{ type: "text", text: message }],
+        isError: true,
+      });
+      expect(enqueued).not.toHaveBeenCalled();
+      await expect(storedState(user.teamId, document.id)).resolves.toEqual(
+        before
+      );
+    }
+  );
+});
+
+describe("client cancellation", () => {
+  /**
+   * Starts an MCP update whose write is held after the n-th `SET LOCAL
+   * lock_timeout`, then disconnects the client while it is held.
+   *
+   * @param n - the one-based statement count: 3 holds P5 entry, 4 holds P7.
+   * @returns the written document and a promise that settles when the
+   *   attempt's transaction has ended.
+   */
+  async function disconnectWhileHeld(n: number) {
+    const { user, accessToken } = await buildOAuthUser();
+    const collection = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    const document = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+      title: "Original",
+      text: "## Overview\n\nAll good.",
+    });
+    configure([[collection, "enforced"]]);
+    await callMcpTool(server, accessToken, "list_collections");
+
+    const query = sequelize.query.bind(sequelize);
+    let seen = 0;
+    let reached: () => void = () => undefined;
+    let release: () => void = () => undefined;
+    let ended: () => void = () => undefined;
+    const atHold = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const settled = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    vi.spyOn(sequelize, "query").mockImplementation((async (
+      ...args: Parameters<typeof query>
+    ) => {
+      const [sql] = args;
+      const result = await query(...args);
+      if (typeof sql === "string") {
+        if (sql.startsWith("SET LOCAL lock_timeout") && ++seen === n) {
+          reached();
+          await released;
+        }
+        if (sql === "COMMIT;" || sql === "ROLLBACK;") {
+          ended();
+        }
+      }
+      return result;
+    }) as typeof sequelize.query);
+    const close = vi.spyOn(StreamableHTTPServerTransport.prototype, "close");
+
+    const controller = new AbortController();
+    const { body } = mcpRequest("tools/call", {
+      name: "update_document",
+      arguments: { id: document.id, title: "Disconnected" },
+    });
+    const request = server
+      .post("/mcp/", {
+        headers: mcpHeaders(accessToken),
+        body,
+        signal: controller.signal,
+      })
+      .catch((error: unknown) => error);
+    await atHold;
+    controller.abort();
+    await request;
+    await vi.waitFor(() => expect(close).toHaveBeenCalled());
+    release();
+    await settled;
+    return document;
+  }
+
+  it("rolls back a write whose client disconnects before the decision", async () => {
+    const document = await disconnectWhileHeld(3);
+
+    const stored = await Document.unscoped().findOne({
+      where: { id: document.id },
+      rejectOnEmpty: true,
+    });
+    expect(stored.title).toBe("Original");
+    expect(stored.revisionCount).toBe(document.revisionCount);
+  });
+
+  it("commits a write whose client disconnects after the decision", async () => {
+    const document = await disconnectWhileHeld(4);
+
+    const stored = await Document.unscoped().findOne({
+      where: { id: document.id },
+      rejectOnEmpty: true,
+    });
+    expect(stored.title).toBe("Disconnected");
+  });
+});
+
+describe("internal-link disclosure across actors", () => {
+  /** A distinctive title of every link target. */
+  const TARGET_TITLE = "Protected target title";
+
+  /**
+   * Builds two actors who can both write in an enforced collection, and link
+   * targets: one only the first actor can read, a missing one, a deleted
+   * one, and one neither can read.
+   *
+   * @returns the fixture.
+   */
+  async function linkFixture() {
+    const owner = await buildOAuthUser();
+    const reader = await actorOf(
+      await buildUser({ teamId: owner.user.teamId })
+    );
+    const outsider = await buildUser({ teamId: owner.user.teamId });
+    const collection = await buildCollection({
+      teamId: owner.user.teamId,
+      userId: owner.user.id,
+    });
+    const ownerOnly = await buildCollection({
+      teamId: owner.user.teamId,
+      userId: owner.user.id,
+      permission: null,
+    });
+    const outsiderOnly = await buildCollection({
+      teamId: owner.user.teamId,
+      userId: outsider.id,
+      permission: null,
+    });
+    const visible = await buildDocument({
+      teamId: owner.user.teamId,
+      userId: owner.user.id,
+      collectionId: ownerOnly.id,
+      title: TARGET_TITLE,
+    });
+    const deleted = await buildDocument({
+      teamId: owner.user.teamId,
+      userId: owner.user.id,
+      collectionId: collection.id,
+      title: TARGET_TITLE,
+    });
+    await deleted.destroy();
+    const inaccessible = await buildDocument({
+      teamId: owner.user.teamId,
+      userId: outsider.id,
+      collectionId: outsiderOnly.id,
+      title: TARGET_TITLE,
+    });
+    const missing = randomUUID();
+    const links = [
+      `[visible](/doc/${visible.id})`,
+      `[missing](/doc/${missing})`,
+      `[deleted](/doc/any-title-${deleted.urlId})`,
+      `[inaccessible](/doc/${inaccessible.id})`,
+    ].join(" ");
+    // A link-only policy: every Finding is a link Finding.
+    state.policySet = buildPolicySetFor(collection.id);
+    return {
+      owner,
+      reader,
+      collection,
+      links,
+      secrets: [
+        visible.id,
+        visible.urlId,
+        deleted.id,
+        deleted.urlId,
+        inaccessible.id,
+        inaccessible.urlId,
+        missing,
+        TARGET_TITLE,
+      ],
+    };
+  }
+
+  /**
+   * Builds a policy set whose collection only checks internal links.
+   *
+   * @param collectionId - the collection.
+   * @returns the set.
+   */
+  function buildPolicySetFor(collectionId: string): PolicySet {
+    const result = buildPolicySet(
+      Buffer.from(
+        JSON.stringify({
+          schemaVersion: 1,
+          collections: {
+            [collectionId]: {
+              activation: "enforced",
+              rules: [{ kind: "internal_links" }],
+            },
+          },
+        }),
+        "utf8"
+      ),
+      sha256Hex
+    );
+    if (!result.ok) {
+      throw new Error("The test configuration must load");
+    }
+    return result.policySet;
+  }
+
+  /** One write mode, as the calls of two actors. */
+  const MODES: {
+    name: string;
+    tool: string;
+    /**
+     * Builds an actor's arguments; shared targets are built once.
+     *
+     * @param fixture - the fixture.
+     * @param actor - the actor.
+     * @param shared - the documents both actors write.
+     * @returns the arguments.
+     */
+    args: (
+      fixture: Awaited<ReturnType<typeof linkFixture>>,
+      actor: { user: User },
+      shared: { plain: Document; linked: Document }
+    ) => Promise<Record<string, unknown>>;
+  }[] = [
+    {
+      name: "create",
+      tool: "create_document",
+      args: async ({ collection, links }) => ({
+        title: "Linked",
+        text: links,
+        collectionId: collection.id,
+      }),
+    },
+    {
+      name: "replace",
+      tool: "update_document",
+      args: async ({ links }, _actor, { plain }) => ({
+        id: plain.id,
+        text: links,
+      }),
+    },
+    {
+      name: "append",
+      tool: "update_document",
+      args: async ({ links }, _actor, { plain }) => ({
+        id: plain.id,
+        text: `\n\n${links}`,
+        editMode: TextEditMode.Append,
+      }),
+    },
+    {
+      name: "prepend",
+      tool: "update_document",
+      args: async ({ links }, _actor, { plain }) => ({
+        id: plain.id,
+        text: `${links}\n\n`,
+        editMode: TextEditMode.Prepend,
+      }),
+    },
+    {
+      name: "patch",
+      tool: "update_document",
+      args: async ({ links }, _actor, { plain }) => ({
+        id: plain.id,
+        text: links,
+        editMode: TextEditMode.Patch,
+        findText: "Plain body",
+      }),
+    },
+    {
+      name: "title-only",
+      tool: "update_document",
+      args: async (_fixture, _actor, { linked }) => ({
+        id: linked.id,
+        title: "Renamed",
+      }),
+    },
+    {
+      name: "publish",
+      tool: "update_document",
+      args: async ({ collection, links }, { user }) => {
+        const draft = await buildDocument({
+          teamId: user.teamId,
+          userId: user.id,
+          collectionId: collection.id,
+          publishedAt: null,
+          text: links,
+        });
+        return { id: draft.id, publish: true };
+      },
+    },
+    {
+      name: "unpublish",
+      tool: "update_document",
+      args: async (_fixture, _actor, { linked }) => ({
+        id: linked.id,
+        publish: false,
+      }),
+    },
+  ];
+
+  it.each(MODES)(
+    "reveals no protected target on $name and differs only in the unresolved link",
+    async ({ tool, args }) => {
+      const fixture = await linkFixture();
+      const { owner, reader, collection, links, secrets } = fixture;
+      const shared = {
+        plain: await buildDocument({
+          teamId: owner.user.teamId,
+          userId: owner.user.id,
+          collectionId: collection.id,
+          text: "Plain body",
+        }),
+        linked: await buildDocument({
+          teamId: owner.user.teamId,
+          userId: owner.user.id,
+          collectionId: collection.id,
+          text: links,
+        }),
+      };
+      const ownerArgs = await args(fixture, owner, shared);
+      const readerArgs = await args(fixture, reader, shared);
+
+      const responses = [
+        await callWithoutEffect(
+          owner,
+          tool,
+          ownerArgs,
+          ownerArgs.id as string,
+          1
+        ),
+        await callWithoutEffect(
+          reader,
+          tool,
+          readerArgs,
+          readerArgs.id as string,
+          1
+        ),
+      ];
+
+      const [ownerResult, readerResult] = responses.map((response) => {
+        expect(response?.result?.isError).toBeUndefined();
+        const text = response?.result?.content?.[0]?.text ?? "";
+        for (const secret of secrets) {
+          expect(text).not.toContain(secret);
+        }
+        const parsed = JSON.parse(text);
+        // Each actor's own written document is not a target identity.
+        return JSON.parse(
+          JSON.stringify(parsed).replace(
+            /"documentId":"[^"]+"/g,
+            '"documentId":"<written>"'
+          )
+        );
+      });
+      const ownerErrors: unknown[] = ownerResult.validation.errors;
+      const readerErrors: unknown[] = readerResult.validation.errors;
+      expect(ownerErrors).toHaveLength(3);
+      expect(readerErrors).toHaveLength(4);
+      const extra = readerErrors.filter(
+        (error) =>
+          !ownerErrors.some(
+            (other) => JSON.stringify(other) === JSON.stringify(error)
+          )
+      );
+      expect(extra).toEqual([
+        expect.objectContaining({
+          code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+          location: expect.objectContaining({ kind: "text" }),
+        }),
+      ]);
+      for (const error of [...ownerErrors, ...readerErrors]) {
+        expect(error).toEqual(
+          expect.objectContaining({
+            code: "INTERNAL_LINK_TARGET_UNRESOLVED",
+            location: expect.objectContaining({ kind: "text" }),
+          })
+        );
+      }
+      expect({
+        ...readerResult,
+        validation: { ...readerResult.validation, errors: [] },
+      }).toEqual({
+        ...ownerResult,
+        validation: { ...ownerResult.validation, errors: [] },
+      });
     }
   );
 });
