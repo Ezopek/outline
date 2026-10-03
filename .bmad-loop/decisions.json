@@ -35,6 +35,15 @@
     "label": "Backfill Story 1.10 Spec Change Log",
     "resolution": ""
   },
+  "DW-19": {
+    "answered_at": "2026-10-04",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "In the lint_document and lint_wiki shells (server/wikiLint/application/lintDocument.ts, lintWiki.ts, server/tools/wikiLint.ts), log each unmodellable failure that maps to the fixed message or a tool-execution error with only invocationId/requestId and the error class name, never message, stack, content or identifiers; add collocated tests asserting the exact log fields. Write-path rows are left to DW-9 after Story 2.7.",
+    "key": "1",
+    "label": "Build read-surface logging now",
+    "resolution": ""
+  },
   "DW-7": {
     "answered_at": "2026-10-04",
     "bundle_name": "",
