@@ -1,14 +1,32 @@
+import httpErrors from "http-errors";
+import {
+  DatabaseError,
+  ValidationError as SequelizeValidationError,
+} from "sequelize";
+import {
+  InternalError,
+  InvalidRequestError,
+  ValidationError,
+} from "@server/errors";
+import { CanonicalMarkdownError } from "../adapters/canonicalSyntax";
+import { UnstagedMediaError } from "../adapters/documentProjection";
+import { WikiLintContractError } from "../core/contracts";
 import type {
   Finding,
   SystemFailure,
   SystemFailureCode,
 } from "../core/contracts";
-import { createFinding, createSystemFailure } from "../core/registry";
+import {
+  OPERATION_FAILED,
+  createFinding,
+  createSystemFailure,
+} from "../core/registry";
 import { WIKI_SNAPSHOT_LIMITS } from "./snapshotLimits";
 import type { WriteDecisionInput } from "./writeDecision";
 import {
   WRITE_ELIGIBLE_LINK_REFERENCES,
   WRITE_ELIGIBLE_MARKDOWN_BYTES,
+  abortMessage,
   decideWrite,
   withinWriteEligibility,
 } from "./writeDecision";
@@ -301,5 +319,49 @@ describe("withinWriteEligibility", () => {
     [{}, false],
   ])("treats %o as within: %s", (measures, expected) => {
     expect(withinWriteEligibility(measures)).toBe(expected);
+  });
+});
+
+describe("abortMessage", () => {
+  it.each([
+    ["a ValidationError", ValidationError("findText is required")],
+    ["an InvalidRequestError", InvalidRequestError("Cannot unpublish")],
+    ["an InternalError", InternalError()],
+  ])("keeps the message of %s", (_case, error) => {
+    expect(abortMessage(error)).toBe(error.message);
+  });
+
+  it.each([
+    ["an UnstagedMediaError", new UnstagedMediaError()],
+    [
+      "a Sequelize ValidationError",
+      new SequelizeValidationError("Validation error", []),
+    ],
+    ["a WikiLintContractError", new WikiLintContractError("Misused")],
+    ["a CanonicalMarkdownError", new CanonicalMarkdownError("Unpositioned")],
+    ["a plain Error", new Error("connection reset")],
+    [
+      "a Sequelize DatabaseError",
+      new DatabaseError(
+        Object.assign(new Error("relation does not exist"), {
+          sql: "SELECT 1",
+          parameters: {},
+        })
+      ),
+    ],
+    [
+      "an http error with a non-string id",
+      httpErrors(400, "Numbered", { id: 7 }),
+    ],
+    ["an http error with an empty id", httpErrors(400, "Empty", { id: "" })],
+    ["an http error without an id", httpErrors(400, "Bare")],
+    [
+      "a non-Error object with a string id",
+      { id: "validation_error", message: "Lookalike" },
+    ],
+    ["a string", "validation_error"],
+    ["undefined", undefined],
+  ])("returns the fixed message for %s", (_case, error) => {
+    expect(abortMessage(error)).toBe(OPERATION_FAILED);
   });
 });

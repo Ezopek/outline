@@ -1,3 +1,4 @@
+import httpErrors from "http-errors";
 import type {
   Finding,
   SystemFailure,
@@ -5,6 +6,7 @@ import type {
   ValidationStatus,
 } from "../core/contracts";
 import type { CollectionPolicy } from "../core/policySet";
+import { OPERATION_FAILED } from "../core/registry";
 
 /**
  * The largest canonical Markdown, in UTF-8 bytes, of a projected document
@@ -100,4 +102,20 @@ export function decideWrite(input: WriteDecisionInput): ValidationStatus {
   return systemFailures.every((failure) => eligible(failure.code))
     ? "degraded_validation"
     : "rejected";
+}
+
+/**
+ * Applies the AD-20 row 3 and row 5 message rule to a failure: an Outline
+ * application error with a stable identifier keeps its message, and anything
+ * else gets the fixed generic message.
+ *
+ * @param error - the failure.
+ * @returns the Tool-Execution Error message.
+ */
+export function abortMessage(error: unknown): string {
+  return httpErrors.isHttpError(error) &&
+    typeof error.id === "string" &&
+    error.id !== ""
+    ? error.message
+    : OPERATION_FAILED;
 }
