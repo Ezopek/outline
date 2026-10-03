@@ -1,4 +1,13 @@
 {
+  "DW-12": {
+    "answered_at": "2026-10-04",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Change the server/tools/README.md visible-metadata example to `* ` bullets and add the Story 1.10 AC5 interpretation (canonical `* ` round-trips byte-identically; `- ` input lints clean) to the binding SPEC. Close DW-7 with the same change.",
+    "key": "1",
+    "label": "Apply README and SPEC reconciliation",
+    "resolution": ""
+  },
   "DW-7": {
     "answered_at": "2026-10-04",
     "bundle_name": "",
