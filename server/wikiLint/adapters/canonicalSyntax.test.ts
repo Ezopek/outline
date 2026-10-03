@@ -1,6 +1,7 @@
 import type Token from "markdown-it/lib/token.mjs";
-import type { ProsemirrorData } from "@shared/types";
-import { parser } from "@server/editor";
+import { Node } from "prosemirror-model";
+import type { JSONObject, ProsemirrorData } from "@shared/types";
+import { parser, schema } from "@server/editor";
 import { Document } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
@@ -622,6 +623,245 @@ describe("serializer-produced regressions", () => {
         path: [1, 1, 0, 1],
       },
     ]);
+  });
+});
+
+describe("canonical block start lines", () => {
+  type Blocks = ProsemirrorData[];
+
+  /**
+   * Builds ProseMirror data for a text node.
+   *
+   * @param value - the text, which must not be empty.
+   * @returns the text node.
+   */
+  const text = (value: string): ProsemirrorData => ({
+    type: "text",
+    text: value,
+  });
+  const emptyParagraph: ProsemirrorData = { type: "paragraph" };
+
+  /**
+   * Builds a list whose items hold the given blocks.
+   *
+   * @param type - the list node type.
+   * @param attrs - the list attributes.
+   * @returns a function from item contents to the list node.
+   */
+  const list =
+    (type: string, attrs: JSONObject = {}) =>
+    (...items: Blocks[]): ProsemirrorData => ({
+      type,
+      attrs,
+      content: items.map((content, index) =>
+        type === "checkbox_list"
+          ? {
+              type: "checkbox_item",
+              attrs: { checked: index % 2 === 1 },
+              content,
+            }
+          : { type: "list_item", content }
+      ),
+    });
+
+  const lists = {
+    bullet: list("bullet_list"),
+    ordered: list("ordered_list", { order: 9 }),
+    alpha: list("ordered_list", { listStyle: "lower-alpha" }),
+    "upper alpha": list("ordered_list", {
+      order: 26,
+      listStyle: "upper-alpha",
+    }),
+    checkbox: list("checkbox_list"),
+  };
+
+  /**
+   * Builds a table whose first row holds header cells.
+   *
+   * @param rows - the blocks of each cell, row by row.
+   * @returns the table node.
+   */
+  const table = (...rows: Blocks[][]): ProsemirrorData => ({
+    type: "table",
+    content: rows.map((cells, index) => ({
+      type: "tr",
+      content: cells.map((content) => ({
+        type: index === 0 ? "th" : "td",
+        content,
+      })),
+    })),
+  });
+
+  const leaves: Record<string, ProsemirrorData> = {
+    "empty paragraph": emptyParagraph,
+    "whitespace paragraph": paragraph(" \t "),
+    "paragraph with blank lines": paragraph("a\n\n \t\nb"),
+    "paragraph with br": {
+      type: "paragraph",
+      content: [text("a"), { type: "br" }, text("b")],
+    },
+    "br paragraph": { type: "paragraph", content: [{ type: "br" }] },
+    "image paragraph": {
+      type: "paragraph",
+      content: [{ type: "image", attrs: { src: "/images/a.png", alt: "a" } }],
+    },
+    heading: { type: "heading", attrs: { level: 2 }, content: [text("Head")] },
+    "empty heading": { type: "heading", attrs: { level: 2 } },
+    "heading starting with newlines": {
+      type: "heading",
+      attrs: { level: 2 },
+      content: [text("\n \nH")],
+    },
+    "code fence with blank lines": {
+      type: "code_fence",
+      attrs: { language: "js" },
+      content: [text("\n \t\na\n\n \nb\n\n")],
+    },
+    "empty code fence": { type: "code_fence" },
+    "code block": { type: "code_block", content: [text("x = 1")] },
+    "math block with blank lines": {
+      type: "math_block",
+      content: [text("\na\n\n \nb\n")],
+    },
+    "empty math block": { type: "math_block" },
+    hr: { type: "hr" },
+    embed: { type: "embed", attrs: { href: "https://example.com/embed" } },
+    attachment: {
+      type: "attachment",
+      attrs: {
+        href: `/api/attachments.redirect?id=${documentId}`,
+        title: "report.pdf",
+        size: 1024,
+      },
+    },
+    video: {
+      type: "video",
+      attrs: {
+        src: `/api/attachments.redirect?id=${documentId}`,
+        title: "clip",
+        width: 640,
+        height: 480,
+      },
+    },
+    blockquote: { type: "blockquote", content: [paragraph("quote")] },
+    "empty blockquote": { type: "blockquote", content: [emptyParagraph] },
+    notice: { type: "container_notice", content: [paragraph("note")] },
+    "empty notice": { type: "container_notice", content: [emptyParagraph] },
+    toggle: {
+      type: "container_toggle",
+      content: [
+        { type: "heading", attrs: { level: 3 }, content: [text("Toggle")] },
+        paragraph("body"),
+      ],
+    },
+    "empty toggle": { type: "container_toggle", content: [emptyParagraph] },
+    "table with empty cells": table(
+      [[paragraph("a")], [emptyParagraph]],
+      [[emptyParagraph], [paragraph("b")]]
+    ),
+  };
+  for (const [kind, build] of Object.entries(lists)) {
+    leaves[`${kind} list`] = build([paragraph("one")], [paragraph("two")]);
+    leaves[`${kind} list with empty items`] = build(
+      [emptyParagraph],
+      [paragraph("two")],
+      [emptyParagraph]
+    );
+    leaves[`nested ${kind} list`] = build(
+      [paragraph("one"), build([paragraph("inner")])],
+      [paragraph("two")]
+    );
+    leaves[`${kind} items starting with a list`] = build(
+      [build([paragraph("inner")])],
+      [build([paragraph("inner")]), paragraph("after")]
+    );
+  }
+
+  const containers: Record<string, (blocks: Blocks) => Blocks> = {
+    doc: (blocks) => blocks,
+    blockquote: (blocks) => [{ type: "blockquote", content: blocks }],
+    "first bullet item": (blocks) => [
+      lists.bullet(blocks, [paragraph("after")]),
+    ],
+    "middle bullet item": (blocks) => [
+      lists.bullet([paragraph("before")], blocks, [paragraph("after")]),
+    ],
+    "ordered item": (blocks) => [list("ordered_list")(blocks)],
+    "padded ordered item": (blocks) => [
+      paragraph("before"),
+      lists.ordered(blocks, [paragraph("after")]),
+    ],
+    "alpha item": (blocks) => [lists.alpha(blocks)],
+    "checkbox item": (blocks) => [lists.checkbox(blocks)],
+    notice: (blocks) => [{ type: "container_notice", content: blocks }],
+    toggle: (blocks) => [
+      { type: "container_toggle", content: [paragraph("Toggle"), ...blocks] },
+    ],
+    "toggle title": (blocks) => [{ type: "container_toggle", content: blocks }],
+    "table cell": (blocks) => [
+      table(
+        [[paragraph("Head")], [paragraph("Other")]],
+        [blocks, [emptyParagraph]]
+      ),
+    ],
+  };
+
+  it("maps every serialized block to a line with content", async () => {
+    const fixtures: [string, Blocks][] = [];
+    for (const [outer, wrap] of Object.entries(containers)) {
+      for (const [first, leaf] of Object.entries(leaves)) {
+        fixtures.push([`${outer}(${first})`, wrap([leaf])]);
+        for (const [second, next] of Object.entries(leaves)) {
+          fixtures.push([`${outer}(${first}, ${second})`, wrap([leaf, next])]);
+        }
+        for (const [inner, wrapInner] of Object.entries(containers)) {
+          fixtures.push([
+            `${outer}(${inner}(${first}))`,
+            wrap(wrapInner([leaf])),
+          ]);
+          fixtures.push([
+            `${outer}(${inner}(${first}), after)`,
+            wrap([...wrapInner([leaf]), paragraph("after")]),
+          ]);
+        }
+      }
+    }
+
+    const seen = new Set<string>();
+    const failures: string[] = [];
+    for (const [name, content] of fixtures) {
+      const data: ProsemirrorData = { type: "doc", content };
+      let doc: Node;
+      try {
+        doc = Node.fromJSON(schema, data);
+        doc.check();
+      } catch {
+        // The sweep covers only content the current schema accepts.
+        continue;
+      }
+      seen.add(doc.type.name);
+      doc.descendants((node) => {
+        if (!node.isInline) {
+          seen.add(node.type.name);
+        }
+      });
+
+      let markdown = "";
+      try {
+        markdown = await toCanonicalMarkdown(data);
+        parseCanonicalMarkdown(markdown);
+      } catch (error) {
+        failures.push(`${name}: ${String(error)}\n${markdown}`);
+      }
+    }
+
+    expect(failures).toEqual([]);
+    expect([...seen].sort()).toEqual(
+      Object.values(schema.nodes)
+        .filter((type) => !type.isInline)
+        .map((type) => type.name)
+        .sort()
+    );
   });
 });
 
