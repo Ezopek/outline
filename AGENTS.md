@@ -28,6 +28,7 @@ This is an operator-maintained Outline fork for deterministic Wiki linting in th
 
 - Use the Yarn version declared by the checked-out baseline.
 - Prefer targeted Vitest files while iterating. Run broad suites only when their scope is justified.
+- DB-backed server tests need the PostgreSQL named in `.env.test`. Run `scripts/test-db.sh ensure` before them: it is idempotent, installs PostgreSQL 14 on first use where none is running, applies migrations, and leaves the server running. Without the database Vitest hangs instead of failing, so do not wait on a silent run.
 - Run the relevant formatting, lint, type-check, and targeted test commands declared in `package.json` before presenting implementation as complete.
 - Keep tests collocated with the code they cover; do not create new test directories.
 
