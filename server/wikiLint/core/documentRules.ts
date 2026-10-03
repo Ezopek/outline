@@ -1,6 +1,7 @@
 import type {
   CanonicalSyntax,
   Finding,
+  FindingDetail,
   IssueItem,
   IssueLocation,
   ResolvedLinks,
@@ -25,7 +26,8 @@ type DocumentRuleKind =
 
 type RuleOf<K extends RuleKind> = Extract<RuleConfig, { kind: K }>;
 
-type Emit = (location: IssueLocation) => void;
+/** Emits one Finding; a missing-item rule also names the item it lacks. */
+type Emit = (location: IssueLocation, detail?: FindingDetail) => void;
 
 interface RuleContext {
   documentId: string;
@@ -206,7 +208,10 @@ function requiredSections(
   );
   for (const heading of rule.headings) {
     if (!present.has(heading)) {
-      emit({ kind: "document", documentId });
+      emit(
+        { kind: "document", documentId },
+        { kind: "section", heading, headingLevel: rule.headingLevel }
+      );
     }
   }
 }
@@ -252,7 +257,10 @@ function requiredMetadataFields(
   );
   for (const name of rule.fields) {
     if (!present.has(name)) {
-      emit({ kind: "document", documentId });
+      emit(
+        { kind: "document", documentId },
+        { kind: "metadata_field", field: name }
+      );
     }
   }
 }
@@ -368,6 +376,9 @@ export function documentSurfaceRules(
  * @param input.rules - the enabled document rules, at most one per kind.
  * @param input.links - the resolved internal links; `internal_links` fails
  *   without them.
+ * @param input.detailVisible - whether missing-item Findings carry the
+ *   configured item they name. The shell passes `true` only for an actor who
+ *   can read the collection; omitted, nothing is named.
  * @returns Findings with zero-based per-kind ordinals, and the failed kinds.
  * @throws WikiLintContractError when a rule is not a document rule or a kind repeats.
  */
@@ -376,8 +387,10 @@ export function evaluateDocumentRules(input: {
   syntax: CanonicalSyntax;
   rules: readonly RuleConfig[];
   links?: ResolvedLinks;
+  detailVisible?: boolean;
 }): { findings: IssueItem<Finding>[]; failedKinds: RuleKind[] } {
   const { documentId, syntax, rules, links } = input;
+  const detailVisible = input.detailVisible === true;
   const kinds = rules.map((rule) => rule.kind);
   if (
     kinds.some((kind) => !documentRuleKinds.has(kind)) ||
@@ -391,8 +404,15 @@ export function evaluateDocumentRules(input: {
   for (const rule of rules) {
     const code = RULE_REGISTRY[rule.kind].code;
     let ordinal = 0;
-    const emit: Emit = (location) => {
-      findings.push({ issue: createFinding(code, location), ordinal });
+    const emit: Emit = (location, detail) => {
+      findings.push({
+        issue: createFinding(
+          code,
+          location,
+          detailVisible ? detail : undefined
+        ),
+        ordinal,
+      });
       ordinal++;
     };
     try {

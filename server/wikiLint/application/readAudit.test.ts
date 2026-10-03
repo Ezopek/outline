@@ -308,6 +308,62 @@ describe("readAuditData", () => {
     ]);
   });
 
+  it("is identical whether or not the Findings carry detail", () => {
+    const relationship = {
+      kind: "relationship" as const,
+      documentId: D,
+      relationshipKind: "global_index" as const,
+    };
+    const document = { kind: "document" as const, documentId: D };
+    const named = [
+      createFinding("REQUIRED_SECTION_MISSING", document, {
+        kind: "section",
+        heading: "Summary",
+        headingLevel: 2,
+      }),
+      createFinding("REQUIRED_METADATA_FIELD_MISSING", document, {
+        kind: "metadata_field",
+        field: "Owner",
+      }),
+      createFinding("GLOBAL_INDEX_LINK_MISSING", relationship, {
+        kind: "global_index",
+        documentId: C2,
+        urlId: "IndexUrlId",
+      }),
+    ];
+    const unnamed = [
+      missingSection,
+      createFinding("REQUIRED_METADATA_FIELD_MISSING", document),
+      createFinding("GLOBAL_INDEX_LINK_MISSING", relationship),
+    ];
+    const scope = collectionScope({ documents: 1, links: 0 });
+
+    const withDetail = dataOf(
+      outcomeOf({ errors: named, scope, policies: [VALID] }),
+      "lint_wiki"
+    );
+    const withoutDetail = dataOf(
+      outcomeOf({ errors: unnamed, scope, policies: [VALID] }),
+      "lint_wiki"
+    );
+
+    expect(withDetail).toStrictEqual(withoutDetail);
+    expect(withDetail.counts).toStrictEqual({
+      errors: 3,
+      warnings: 0,
+      systemFailures: 0,
+      byCode: {
+        GLOBAL_INDEX_LINK_MISSING: 1,
+        REQUIRED_METADATA_FIELD_MISSING: 1,
+        REQUIRED_SECTION_MISSING: 1,
+      },
+    });
+    expect(JSON.stringify(withDetail)).not.toMatch(
+      /detail|Summary|Owner|IndexUrlId/
+    );
+    expect(JSON.stringify(withDetail)).not.toContain(C2);
+  });
+
   it.each([
     ["oauth", "client-k", { authenticatedClientId: "client-k" }],
     ["oauth", "", {}],

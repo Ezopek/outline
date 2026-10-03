@@ -3,6 +3,7 @@ import type {
   CheckName,
   Finding,
   FindingCode,
+  FindingDetail,
   IssueCode,
   IssueLocation,
   LocationKind,
@@ -228,6 +229,18 @@ const trimmedString = z
   .min(1)
   .refine((value) => value.trim() === value);
 
+/**
+ * Caps a string at a number of UTF-16 code units. Zod's `.max()` counts code
+ * points, so it would accept a longer string holding astral characters.
+ *
+ * @param max - the largest allowed length.
+ * @returns the refinement.
+ */
+const atMostUnits = (max: number) => (value: string) => value.length <= max;
+
+/** Configured heading text: at most 200 UTF-16 code units. */
+const headingText = trimmedString.refine(atMostUnits(200));
+
 const headingLevel = z.number().int().min(1).max(6);
 
 /** A lowercase canonical 8-4-4-4-12 hexadecimal UUID. */
@@ -239,8 +252,8 @@ const uuid = z.string().regex(UUID_PATTERN);
 const hasUniqueItems = (items: readonly unknown[]) =>
   new Set(items).size === items.length;
 
-const stringList = (min: number) =>
-  z.array(trimmedString).min(min).refine(hasUniqueItems);
+const stringList = (min: number, item = trimmedString) =>
+  z.array(item).min(min).refine(hasUniqueItems);
 
 /** The closed set of block structures a structure rule may name. */
 export const markdownStructureSchema = z.enum([
@@ -260,11 +273,16 @@ const structureList = z
   .min(1)
   .refine(hasUniqueItems);
 
-/** A metadata field name: the source text before a field's first colon. */
-const fieldName = trimmedString.refine((value) => !value.includes(":"));
+/**
+ * A metadata field name: the source text before a field's first colon, at
+ * most 64 UTF-16 code units.
+ */
+const fieldName = trimmedString
+  .refine((value) => !value.includes(":"))
+  .refine(atMostUnits(64));
 
 const metadataSection = z.strictObject({
-  heading: trimmedString,
+  heading: headingText,
   headingLevel,
 });
 
@@ -280,13 +298,13 @@ const metadataFieldFormat = z.discriminatedUnion("format", [
 const requiredSections = z.strictObject({
   kind: z.literal("required_sections"),
   headingLevel,
-  headings: stringList(1),
+  headings: stringList(1, headingText),
 });
 
 const sectionOrder = z.strictObject({
   kind: z.literal("section_order"),
   headingLevel,
-  headings: stringList(2),
+  headings: stringList(2, headingText),
 });
 
 const allowedHeadingLevels = z.strictObject({
@@ -546,27 +564,98 @@ function normalizeLocation(
 }
 
 /**
+ * The closed detail shape of each code that may carry one. Values are bounded
+ * by the same schemas that bound the configuration they come from.
+ */
+const detailSchemas = new Map<string, z.ZodType<FindingDetail>>([
+  [
+    "REQUIRED_SECTION_MISSING",
+    z.strictObject({
+      kind: z.literal("section"),
+      heading: headingText,
+      headingLevel,
+    }),
+  ],
+  [
+    "REQUIRED_METADATA_FIELD_MISSING",
+    z.strictObject({ kind: z.literal("metadata_field"), field: fieldName }),
+  ],
+  [
+    "GLOBAL_INDEX_LINK_MISSING",
+    z.strictObject({
+      kind: z.literal("global_index"),
+      documentId: uuid,
+      urlId: identifier,
+    }),
+  ],
+]);
+
+/**
+ * Validates a Finding detail against its code and rebuilds it in the fixed
+ * key order.
+ *
+ * @param code - the registered Finding code.
+ * @param input - the detail supplied by the caller.
+ * @returns a new detail with a fixed key order.
+ * @throws WikiLintContractError when the code carries no detail or the detail
+ *   does not match its code's shape.
+ */
+function normalizeDetail(code: string, input: FindingDetail): FindingDetail {
+  const parsed = detailSchemas.get(code)?.safeParse(input);
+  if (!parsed?.success) {
+    throw new WikiLintContractError("Finding detail does not match its code");
+  }
+  const detail = parsed.data;
+  switch (detail.kind) {
+    case "section":
+      return {
+        kind: "section",
+        heading: detail.heading,
+        headingLevel: detail.headingLevel,
+      };
+    case "metadata_field":
+      return { kind: "metadata_field", field: detail.field };
+    default:
+      return {
+        kind: "global_index",
+        documentId: detail.documentId,
+        urlId: detail.urlId,
+      };
+  }
+}
+
+/**
  * Creates a Finding whose severity and message come from the registry.
  *
  * @param code - a registered Error or Warning code.
  * @param location - the location, which must match the code's location kind.
- * @returns the Finding with a fixed key order.
- * @throws WikiLintContractError when the code or location is not allowed.
+ * @param detail - the missing configured item, which only
+ *   `REQUIRED_SECTION_MISSING`, `REQUIRED_METADATA_FIELD_MISSING`, and
+ *   `GLOBAL_INDEX_LINK_MISSING` may carry. The caller decides whether the
+ *   actor may see it.
+ * @returns the Finding with a fixed key order, `detail` last when given.
+ * @throws WikiLintContractError when the code, location, or detail is not
+ *   allowed.
  */
 export function createFinding(
   code: FindingCode,
-  location: IssueLocation
+  location: IssueLocation,
+  detail?: FindingDetail
 ): Finding {
   const definition = getIssueDefinition(code);
   if (!definition || definition.class === "system_failure") {
     throw new WikiLintContractError("Not a registered Finding code");
   }
-  return {
+  const finding: Finding = {
     code: definition.code as FindingCode,
     severity: definition.class,
     message: definition.message,
     location: normalizeLocation(definition, location),
   };
+  if (detail !== undefined) {
+    finding.detail = normalizeDetail(definition.code, detail);
+  }
+  return finding;
 }
 
 /**

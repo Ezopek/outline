@@ -93,6 +93,116 @@ describe("required_sections", () => {
   });
 });
 
+describe("missing-item detail", () => {
+  const rules = [
+    rule({
+      kind: "required_sections",
+      headingLevel: 3,
+      headings: ["Zeta", "Alpha", "Mid"],
+    }),
+    rule({
+      kind: "required_metadata_fields",
+      metadataSection,
+      fields: ["Zulu", "Owner", "Alpha"],
+    }),
+  ];
+  const syntax = parseCanonicalMarkdown(
+    ["## Metadata", "", "* Owner: Alice", "", "### Mid"].join("\n")
+  );
+
+  /**
+   * Evaluates the missing-item rules.
+   *
+   * @param detailVisible - the shell's flag, or undefined to omit it.
+   * @returns the evaluation output.
+   */
+  const evaluate = (detailVisible?: boolean) =>
+    evaluateDocumentRules({
+      documentId,
+      syntax,
+      rules,
+      ...(detailVisible === undefined ? {} : { detailVisible }),
+    });
+
+  /**
+   * Removes `detail` from every Finding.
+   *
+   * @param result - the evaluation output.
+   * @returns the output without detail.
+   */
+  const stripped = (result: ReturnType<typeof evaluate>) => ({
+    ...result,
+    findings: result.findings.map(({ issue, ordinal }) => {
+      const { detail: _detail, ...rest } = issue;
+      return { issue: rest, ordinal };
+    }),
+  });
+
+  it("names each missing item in configured order when visible", () => {
+    const result = evaluate(true);
+
+    expect(result.failedKinds).toEqual([]);
+    expect(
+      result.findings.map(({ issue, ordinal }) => [
+        issue.code,
+        issue.detail,
+        ordinal,
+      ])
+    ).toEqual([
+      [
+        "REQUIRED_SECTION_MISSING",
+        { kind: "section", heading: "Zeta", headingLevel: 3 },
+        0,
+      ],
+      [
+        "REQUIRED_SECTION_MISSING",
+        { kind: "section", heading: "Alpha", headingLevel: 3 },
+        1,
+      ],
+      [
+        "REQUIRED_METADATA_FIELD_MISSING",
+        { kind: "metadata_field", field: "Zulu" },
+        0,
+      ],
+      [
+        "REQUIRED_METADATA_FIELD_MISSING",
+        { kind: "metadata_field", field: "Alpha" },
+        1,
+      ],
+    ]);
+    expect(Object.keys(result.findings[0].issue)).toEqual([
+      "code",
+      "severity",
+      "message",
+      "location",
+      "detail",
+    ]);
+    for (const { issue } of result.findings) {
+      expect(issue.message).not.toMatch(/Zeta|Alpha|Zulu|Metadata/);
+    }
+  });
+
+  it.each([false, undefined])(
+    "names nothing when detailVisible is %s, and is otherwise byte-identical",
+    (detailVisible) => {
+      const hidden = evaluate(detailVisible);
+
+      for (const { issue } of hidden.findings) {
+        expect(Object.keys(issue)).toEqual([
+          "code",
+          "severity",
+          "message",
+          "location",
+        ]);
+      }
+      expect(JSON.stringify(hidden)).toBe(
+        JSON.stringify(stripped(evaluate(true)))
+      );
+      expect(JSON.stringify(hidden)).not.toMatch(/Zeta|Alpha|Zulu/);
+    }
+  );
+});
+
 describe("section_order", () => {
   const order = rule({
     kind: "section_order",

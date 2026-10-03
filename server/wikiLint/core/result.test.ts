@@ -86,6 +86,13 @@ const warning: IssueItem<Finding> = {
   ordinal: 0,
 };
 
+const missingSection = createFinding("REQUIRED_SECTION_MISSING", {
+  kind: "document",
+  documentId,
+});
+
+const sectionDetail = { kind: "section", heading: "Summary", headingLevel: 2 };
+
 const runtimeFailure: IssueItem<SystemFailure> = {
   issue: createSystemFailure("VALIDATION_RUNTIME_FAILED", {
     kind: "scope",
@@ -435,6 +442,20 @@ describe("buildReadOnlyResult", () => {
       },
     ],
     ["an unknown code", { ...error.issue, code: "NOT_A_CODE" }],
+    ["a detail on another code", { ...error.issue, detail: sectionDetail }],
+    [
+      "a detail of another kind",
+      { ...missingSection, detail: { kind: "metadata_field", field: "Owner" } },
+    ],
+    [
+      "an extra detail key",
+      { ...missingSection, detail: { ...sectionDetail, pattern: ".*" } },
+    ],
+    ["an undefined detail key", { ...missingSection, detail: undefined }],
+    [
+      "a detail on a System Failure",
+      { ...runtimeFailure.issue, detail: sectionDetail },
+    ],
   ])("rejects %s in a document scope", (_name, issue) => {
     expect(() =>
       documentResult([{ issue: issue as Finding }, runtimeFailure], 0)
@@ -649,6 +670,39 @@ describe("buildReadOnlyResult", () => {
       "evaluatedDocumentCount",
       "evaluatedLinkCount",
       "completedChecks",
+    ]);
+  });
+
+  it("revalidates a Finding detail and rebuilds it last, in a fixed key order", () => {
+    const result = documentResult(
+      [
+        {
+          issue: {
+            detail: { headingLevel: 2, heading: "Summary", kind: "section" },
+            location: { documentId, kind: "document" },
+            message: missingSection.message,
+            severity: "error",
+            code: "REQUIRED_SECTION_MISSING",
+          } as Finding,
+          ordinal: 0,
+        },
+        { issue: missingSection, ordinal: 1 },
+      ],
+      1
+    );
+
+    expect(JSON.stringify(result.errors)).toBe(
+      JSON.stringify([
+        { ...missingSection, detail: sectionDetail },
+        missingSection,
+      ])
+    );
+    expect(Object.keys(result.errors[0])).toEqual([
+      "code",
+      "severity",
+      "message",
+      "location",
+      "detail",
     ]);
   });
 

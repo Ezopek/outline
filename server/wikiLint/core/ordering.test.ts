@@ -244,6 +244,30 @@ describe("sortIssues", () => {
     }
   });
 
+  it("never orders by detail", () => {
+    const named = (heading: string) =>
+      createFinding(
+        "REQUIRED_SECTION_MISSING",
+        { kind: "document", documentId: d1 },
+        { kind: "section", heading, headingLevel: 2 }
+      );
+    const zeta = named("Zeta");
+    const alpha = named("Alpha");
+
+    // The ordinal decides, although Alpha was emitted first.
+    expect(
+      sortIssues([
+        { issue: alpha, ordinal: 1 },
+        { issue: zeta, ordinal: 0 },
+      ])
+    ).toEqual([zeta, alpha]);
+    // Without ordinals, emission order decides: Zeta was emitted first.
+    expect(sortIssues([{ issue: zeta }, { issue: alpha }])).toEqual([
+      zeta,
+      alpha,
+    ]);
+  });
+
   it("breaks full ties by emission order", () => {
     const first = createSystemFailure("VALIDATION_RUNTIME_FAILED", {
       kind: "scope",

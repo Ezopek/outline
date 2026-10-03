@@ -83,11 +83,29 @@ export type IssueLocation =
   | RelationshipLocation
   | ScopeLocation;
 
+/**
+ * The configured item a missing-item Finding names. Each kind belongs to
+ * exactly one code: `section` to `REQUIRED_SECTION_MISSING`, `metadata_field`
+ * to `REQUIRED_METADATA_FIELD_MISSING`, and `global_index` to
+ * `GLOBAL_INDEX_LINK_MISSING`.
+ */
+export type FindingDetail =
+  | { kind: "section"; heading: string; headingLevel: number }
+  | { kind: "metadata_field"; field: string }
+  | { kind: "global_index"; documentId: string; urlId: string };
+
 export interface Finding {
   code: FindingCode;
   severity: Severity;
   message: string;
   location: IssueLocation;
+  /**
+   * The missing configured item. Only `REQUIRED_SECTION_MISSING`,
+   * `REQUIRED_METADATA_FIELD_MISSING`, and `GLOBAL_INDEX_LINK_MISSING` carry
+   * it, and it is present exactly when the shell passes `detailVisible: true`,
+   * meaning the actor can read the collection of the producing policy.
+   */
+  detail?: FindingDetail;
 }
 
 export interface SystemFailure {

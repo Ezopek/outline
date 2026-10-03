@@ -249,7 +249,11 @@ function revalidateIssue(
           (issue as SystemFailure).code,
           (issue as SystemFailure).location
         )
-      : createFinding((issue as Finding).code, issue.location);
+      : createFinding(
+          (issue as Finding).code,
+          issue.location,
+          (issue as Finding).detail
+        );
   const expectedKeys = Object.keys(rebuilt);
   const actualKeys = Object.keys(issue);
   if (

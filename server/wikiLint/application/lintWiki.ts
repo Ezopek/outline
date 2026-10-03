@@ -489,6 +489,10 @@ export async function lintWiki(input: {
               content.links === null
                 ? undefined
                 : { references: [...content.links], targets: snapshot.targets },
+            // Every evaluated collection is actor-readable: a collection scope
+            // passed its pre-admission read check, and the default scope keeps
+            // only collections the actor can read.
+            detailVisible: true,
           });
           for (const finding of findings) {
             buffer.push({ ...finding, sortCollectionId: collectionId });
@@ -515,6 +519,8 @@ export async function lintWiki(input: {
           documents: collection.documents,
           graph,
           rules: account.rules,
+          // Every evaluated collection is actor-readable, as for documents.
+          detailVisible: true,
         });
         for (const finding of result.findings) {
           buffer.push({ ...finding, sortCollectionId: collectionId });

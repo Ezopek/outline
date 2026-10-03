@@ -42,6 +42,7 @@ import { DeadlineFloorError } from "@server/wikiLint/application/deadline";
 import { defaultLintDocumentReader } from "@server/wikiLint/application/lintDocument";
 import { defaultLintWikiReader } from "@server/wikiLint/application/lintWiki";
 import type {
+  EvaluatedScope,
   Finding,
   ReadOnlyResult,
   TextLocation,
@@ -210,6 +211,65 @@ const VALID = `${METADATA}\n\n## Body\n\nText`;
 /** A link to a document that never existed. */
 const MISSING_LINK = "[gone](/doc/missing-abcdefghij)";
 
+/**
+ * Builds a policy whose missing-item Findings name their item: three required
+ * sections, three required metadata fields without formats, a discouraged
+ * blockquote, internal links, every hierarchy rule, and two global indexes.
+ *
+ * @param surfaceDocumentId - the surface.
+ * @param globalIndexDocumentIds - the global indexes, in configured order.
+ * @returns the policy entry.
+ */
+const detailPolicy = (
+  surfaceDocumentId: string,
+  globalIndexDocumentIds: string[]
+) => ({
+  activation: "read_only",
+  rules: [
+    {
+      kind: "required_sections",
+      headingLevel: 2,
+      headings: ["Body", "Summary", "References"],
+    },
+    {
+      kind: "required_metadata_fields",
+      metadataSection: METADATA_SECTION,
+      fields: ["Status", "Owner", "Reviewer"],
+    },
+    { kind: "discouraged_markdown_structures", structures: ["blockquote"] },
+    { kind: "internal_links" },
+    ...hierarchyRules,
+    { kind: "global_index_links", surfaceDocumentId, globalIndexDocumentIds },
+  ],
+});
+
+/** A document with every section and metadata field of `detailPolicy`. */
+const COMPLETE = [
+  "## Document metadata",
+  "",
+  "* Status: Active",
+  "* Owner: Team",
+  "* Reviewer: Lead",
+  "",
+  "## Body",
+  "",
+  "Text",
+  "",
+  "## Summary",
+  "",
+  "Short",
+  "",
+  "## References",
+  "",
+  "None",
+].join("\n");
+
+/**
+ * A document that keeps `Status` but lacks the `Owner` and `Reviewer` fields
+ * and the `Summary` and `References` sections of `detailPolicy`.
+ */
+const LACKING = "## Document metadata\n\n* Status: Active\n\n## Body\n\nText";
+
 interface ListedTool {
   name: string;
   title?: string;
@@ -357,6 +417,13 @@ function blockText(result: CallToolResult | undefined, index = 0): string {
   return block.text;
 }
 
+/** The detail kind of each code that may name its missing item. */
+const DETAIL_KINDS = new Map([
+  ["REQUIRED_SECTION_MISSING", "section"],
+  ["REQUIRED_METADATA_FIELD_MISSING", "metadata_field"],
+  ["GLOBAL_INDEX_LINK_MISSING", "global_index"],
+]);
+
 /**
  * Checks the result algebra and the registry severities of a lint result.
  *
@@ -379,12 +446,13 @@ function expectAlgebra(result: ReadOnlyResult) {
     [result.warnings, "warning"],
   ] as const) {
     for (const finding of findings) {
-      expect(Object.keys(finding).sort()).toEqual([
-        "code",
-        "location",
-        "message",
-        "severity",
-      ]);
+      // Only the three missing-item codes may name their item, last.
+      const keys = ["code", "severity", "message", "location"];
+      if ("detail" in finding) {
+        expect(finding.detail?.kind).toBe(DETAIL_KINDS.get(finding.code));
+        keys.push("detail");
+      }
+      expect(Object.keys(finding)).toEqual(keys);
       expect(finding.severity).toBe(severity);
       expect(getIssueDefinition(finding.code)?.class).toBe(severity);
     }
@@ -896,6 +964,7 @@ describe("results", () => {
         severity: "error",
         message: expect.any(String),
         location: { kind: "document", documentId: first.id },
+        detail: { kind: "metadata_field", field: "Last verified" },
       },
     ];
     const secondErrors = [
@@ -2041,6 +2110,219 @@ describe("repair loop", () => {
     expect(after.get(index.id)).toBe(before.get(index.id));
   });
 
+  /**
+   * Repairs one Error from the Finding alone, as an agent with a write token
+   * and no conventions would: its code, location, and `detail`, the result's
+   * scope, and the fetched Markdown. A missing metadata field is inserted by
+   * patching an existing `* Name: value` line to that line plus the new
+   * field; the multi-line patch adds the item to the same list, so no
+   * `replace` fallback is needed. An appended link joins the last paragraph
+   * inline.
+   *
+   * @param token - the agent's bearer credential.
+   * @param finding - the Error.
+   * @param scope - the evaluated scope of the result.
+   */
+  async function repairFromDetail(
+    token: string,
+    finding: Finding,
+    scope: EvaluatedScope
+  ) {
+    const { documentId } = finding.location as { documentId: string };
+    const { detail } = finding;
+    let response: JsonRpcResponse;
+    switch (finding.code) {
+      case "REQUIRED_SECTION_MISSING":
+        if (detail?.kind !== "section") {
+          throw new Error("A missing section names no heading");
+        }
+        response = await callTool(token, "update_document", {
+          id: documentId,
+          editMode: "append",
+          text: `${"#".repeat(detail.headingLevel)} ${detail.heading}`,
+        });
+        break;
+      case "REQUIRED_METADATA_FIELD_MISSING": {
+        if (detail?.kind !== "metadata_field") {
+          throw new Error("A missing field names no field");
+        }
+        const line = (await fetchMarkdown(token, documentId))
+          .split("\n")
+          .find((text) => /^\* [^:]+: /.test(text));
+        if (line === undefined) {
+          throw new Error("No metadata field line to anchor the patch");
+        }
+        response = await callTool(token, "update_document", {
+          id: documentId,
+          editMode: "patch",
+          findText: line,
+          text: `${line}\n* ${detail.field}: pending`,
+        });
+        break;
+      }
+      case "GLOBAL_INDEX_LINK_MISSING":
+        if (detail?.kind !== "global_index") {
+          throw new Error("A missing global-index link names no index");
+        }
+        response = await callTool(token, "update_document", {
+          id: documentId,
+          editMode: "append",
+          text: `[Global index](/doc/${detail.documentId})`,
+        });
+        break;
+      case "INTERNAL_LINK_TARGET_UNRESOLVED": {
+        const { line, column } = finding.location as TextLocation;
+        const rest = Array.from(
+          (await fetchMarkdown(token, documentId)).split("\n")[line - 1]
+        )
+          .slice(column - 1)
+          .join("");
+        const [link, label] = /^\[([^\]]*)\]\([^)]*\)/.exec(rest) ?? [];
+        response = await callTool(token, "update_document", {
+          id: documentId,
+          editMode: "patch",
+          findText: link,
+          text: label,
+        });
+        break;
+      }
+      case "PUBLISHED_DOCUMENT_MISSING_FROM_STRUCTURE":
+        if (scope.kind !== "collection") {
+          throw new Error("Expected a collection scope");
+        }
+        response = await callTool(token, "move_document", {
+          id: documentId,
+          collectionId: scope.collectionId,
+        });
+        break;
+      default:
+        throw new Error(`No repair for ${finding.code}`);
+    }
+    expect(response.error).toBeUndefined();
+    expect(response.result?.isError).toBeUndefined();
+  }
+
+  it("repairs every Error from its Findings alone within three rounds and keeps the Warning", async () => {
+    const agent = await buildUser();
+    const { collection, documents } = await buildCollectionOf(agent, [
+      COMPLETE,
+      COMPLETE,
+      COMPLETE,
+      "## Document metadata\n\n* Status: Active\n* Owner: Team\n* Reviewer: Lead\n\n## Body\n\nText",
+      "## Document metadata\n\n* Status: Active\n\n## Body\n\n> Quote\n\n## Summary\n\nShort\n\n## References\n\nNone",
+      COMPLETE.replace("\n\nText", `\n\nSee ${MISSING_LINK} here.`),
+      COMPLETE,
+    ]);
+    const [first, second, surface, sections, fields, linking, orphan] =
+      documents;
+    const structure = await Collection.findByPk(collection.id, {
+      includeDocumentStructure: true,
+      rejectOnEmpty: true,
+    });
+    await structure.removeDocumentInStructure(orphan);
+    const {
+      documents: [outside],
+    } = await buildCollectionOf(agent, [LACKING]);
+    // Configured in reverse sorted order, so configured order is observable.
+    const indexes = [first, second].sort((a, b) => (a.id < b.id ? 1 : -1));
+    restart({
+      [collection.id]: detailPolicy(
+        surface.id,
+        indexes.map(({ id }) => id)
+      ),
+    });
+    const token = await oauthToken(agent, ["write"]);
+    const before = await documentStates(agent.teamId);
+
+    const rounds: ReadOnlyResult[] = [];
+    for (let round = 0; round < 3; round++) {
+      const result = await lintResult(token, "lint_wiki", {
+        collectionId: collection.id,
+      });
+      rounds.push(result);
+      if (result.clean) {
+        break;
+      }
+      for (const finding of result.errors) {
+        await repairFromDetail(token, finding, result.scope);
+      }
+    }
+
+    expect(rounds).toHaveLength(2);
+    const named = (code: string) =>
+      rounds[0].errors
+        .filter((finding) => finding.code === code)
+        .map((finding) => [finding.location.documentId, finding.detail]);
+    expect(named("REQUIRED_SECTION_MISSING")).toEqual([
+      [sections.id, { kind: "section", heading: "Summary", headingLevel: 2 }],
+      [
+        sections.id,
+        { kind: "section", heading: "References", headingLevel: 2 },
+      ],
+    ]);
+    expect(named("REQUIRED_METADATA_FIELD_MISSING")).toEqual([
+      [fields.id, { kind: "metadata_field", field: "Owner" }],
+      [fields.id, { kind: "metadata_field", field: "Reviewer" }],
+    ]);
+    expect(named("GLOBAL_INDEX_LINK_MISSING")).toEqual(
+      indexes.map((index) => [
+        surface.id,
+        { kind: "global_index", documentId: index.id, urlId: index.urlId },
+      ])
+    );
+    expect(named("INTERNAL_LINK_TARGET_UNRESOLVED")).toEqual([
+      [linking.id, undefined],
+    ]);
+    expect(named("PUBLISHED_DOCUMENT_MISSING_FROM_STRUCTURE")).toEqual([
+      [orphan.id, undefined],
+    ]);
+    expect(rounds[0].errors).toHaveLength(8);
+    const warning = {
+      code: "DISCOURAGED_MARKDOWN_STRUCTURE",
+      severity: "warning",
+      message: expect.any(String),
+      location: expect.objectContaining({ documentId: fields.id }),
+    };
+    expect(rounds[0].warnings).toEqual([warning]);
+    expect(rounds[1]).toMatchObject({
+      state: "complete",
+      complete: true,
+      clean: true,
+      errors: [],
+      warnings: [warning],
+      systemFailures: [],
+      scope: {
+        completedChecks: ["documents", "hierarchy", "global_index"],
+      },
+    });
+
+    // Each repair inserted exactly the item its detail named, once.
+    const occurrences = (text: string, item: string) =>
+      text.split(item).length - 1;
+    const sectionsText = await fetchMarkdown(token, sections.id);
+    const fieldsText = await fetchMarkdown(token, fields.id);
+    const surfaceText = await fetchMarkdown(token, surface.id);
+    for (const [text, item] of [
+      [sectionsText, "## Summary"],
+      [sectionsText, "## References"],
+      [fieldsText, "* Owner: pending"],
+      [fieldsText, "* Reviewer: pending"],
+      ...indexes.map(({ id }) => [surfaceText, `(/doc/${id})`]),
+    ]) {
+      expect(occurrences(text, item)).toBe(1);
+    }
+    const after = await documentStates(agent.teamId);
+    const batch = [surface.id, sections.id, fields.id, linking.id, orphan.id];
+    for (const [id, stored] of before) {
+      if (!batch.includes(id)) {
+        expect(after.get(id)).toBe(stored);
+      }
+    }
+    for (const unchanged of [first, second, outside]) {
+      expect(after.get(unchanged.id)).toBe(before.get(unchanged.id));
+    }
+  });
+
   it("escalates a sentinel scope without an edit, and re-lints it clean after a corrected restart", async () => {
     const agent = await buildUser();
     const { collection } = await buildCollectionOf(agent, [VALID, VALID]);
@@ -2079,6 +2361,158 @@ describe("repair loop", () => {
       systemFailures: [],
     });
     expect(await documentStates(agent.teamId)).toEqual(before);
+  });
+});
+
+describe("Finding detail", () => {
+  /**
+   * Builds a private collection with an index and a document that lacks two
+   * sections and two metadata fields, its owner, who can read the
+   * collection, and a reader who can read only that document; and loads
+   * `detailPolicy` with the document as the surface.
+   *
+   * @returns the actors, collection, documents, and loaded set.
+   */
+  async function buildReaders() {
+    const owner = await buildUser();
+    const reader = await buildUser({ teamId: owner.teamId });
+    const {
+      collection,
+      documents: [index, document],
+    } = await buildCollectionOf(owner, [COMPLETE, LACKING], {
+      permission: null,
+    });
+    await UserMembership.create({
+      documentId: document.id,
+      userId: reader.id,
+      createdById: owner.id,
+      permission: DocumentPermission.Read,
+    });
+    restart({ [collection.id]: detailPolicy(document.id, [index.id]) });
+    return { owner, reader, collection, index, document };
+  }
+
+  /** The configured items `LACKING` misses, as a collection reader sees them. */
+  const NAMED = [
+    [
+      "REQUIRED_METADATA_FIELD_MISSING",
+      { kind: "metadata_field", field: "Owner" },
+    ],
+    [
+      "REQUIRED_METADATA_FIELD_MISSING",
+      { kind: "metadata_field", field: "Reviewer" },
+    ],
+    [
+      "REQUIRED_SECTION_MISSING",
+      { kind: "section", heading: "Summary", headingLevel: 2 },
+    ],
+    [
+      "REQUIRED_SECTION_MISSING",
+      { kind: "section", heading: "References", headingLevel: 2 },
+    ],
+  ];
+
+  it("gives a document-only and an unestablished reader the collection reader's errors without detail", async () => {
+    const m = await buildReaders();
+    const ownerToken = await oauthToken(m.owner, ["read"]);
+    const readerToken = await oauthToken(m.reader, ["read"]);
+
+    const collectionReader = await lintResult(ownerToken, "lint_document", {
+      id: m.document.id,
+    });
+    const documentOnly = await lintResult(readerToken, "lint_document", {
+      id: m.document.id,
+    });
+    const lookup = vi
+      .spyOn(Collection, "findByPk")
+      .mockRejectedValue(new Error("lookup"));
+    const unestablished = await lintResult(ownerToken, "lint_document", {
+      id: m.document.id,
+    });
+    lookup.mockRestore();
+
+    expect(collectionReader.state).toBe("complete");
+    expect(
+      collectionReader.errors.map(({ code, detail }) => [code, detail])
+    ).toEqual(NAMED);
+    const unnamed = JSON.stringify(
+      collectionReader.errors.map(({ detail: _detail, ...finding }) => finding)
+    );
+    for (const other of [documentOnly, unestablished]) {
+      expect(other.state).toBe("complete");
+      expect(other.scope).not.toHaveProperty("collectionId");
+      expect(other.policies).toEqual([]);
+      expect(JSON.stringify(other.errors)).toBe(unnamed);
+      expect(JSON.stringify(other.warnings)).toBe(
+        JSON.stringify(collectionReader.warnings)
+      );
+      const text = JSON.stringify(other);
+      for (const value of [
+        '"detail"',
+        "Owner",
+        "Reviewer",
+        "Summary",
+        "References",
+      ]) {
+        expect(text).not.toContain(value);
+      }
+    }
+    for (const tool of await listTools(ownerToken)) {
+      for (const value of ["Owner", "Reviewer", "Summary", "References"]) {
+        expect(`${tool.title} ${tool.description}`).not.toContain(value);
+      }
+    }
+  });
+
+  it("returns byte-equivalent responses across repeated runs for each actor", async () => {
+    const m = await buildReaders();
+
+    for (const [user, named] of [
+      [m.owner, true],
+      [m.reader, false],
+    ] as const) {
+      const token = await oauthToken(user, ["read"]);
+      /**
+       * Runs both tools in each scope, collecting each JSON-RPC result.
+       *
+       * @returns the serialized results.
+       */
+      const run = async () => {
+        const results: string[] = [];
+        for (const [name, args] of [
+          ["lint_document", { id: m.document.id }],
+          ["lint_wiki", { collectionId: m.collection.id }],
+          ["lint_wiki", {}],
+        ] as const) {
+          results.push(
+            JSON.stringify((await callTool(token, name, args)).result)
+          );
+        }
+        return results;
+      };
+
+      /**
+       * Returns the first text block of a serialized result.
+       *
+       * @param serialized - the serialized JSON-RPC result.
+       * @returns the text.
+       */
+      const textOf = (serialized: string) =>
+        blockText(JSON.parse(serialized) as CallToolResult);
+
+      const first = await run();
+
+      expect(await run()).toEqual(first);
+      expect(JSON.parse(first[0]).isError).toBeUndefined();
+      expect(textOf(first[0]).includes('"detail"')).toBe(named);
+      if (named) {
+        expect(first[1]).toContain(m.index.urlId);
+        expect(textOf(first[2])).toContain('"detail"');
+      } else {
+        expect(JSON.parse(first[1])).toEqual(AUTHORIZATION_ERROR);
+        expect(first.join("")).not.toContain(m.index.urlId);
+      }
+    }
   });
 });
 

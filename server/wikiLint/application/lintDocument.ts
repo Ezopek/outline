@@ -303,6 +303,8 @@ export async function lintDocument(input: {
     syntax: snapshot.syntax,
     rules,
     links: snapshot.links ?? undefined,
+    // Only a collection reader may see the configured items Findings name.
+    detailVisible: collectionReadability === "readable",
   });
 
   if (failedKinds.length > 0) {

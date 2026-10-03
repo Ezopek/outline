@@ -348,11 +348,13 @@ describe("global_index_links", () => {
    *
    * @param globalIndex - the global-index inputs.
    * @param configured - the configured index IDs, in configured order.
+   * @param detailVisible - the shell's flag, or undefined to omit it.
    * @returns the evaluation output.
    */
   const globalIndex = (
     globalIndex: WikiGlobalIndexInput | null,
-    configured = [I3, I1, I4, I2]
+    configured = [I3, I1, I4, I2],
+    detailVisible?: boolean
   ) =>
     evaluateGraphCheck({
       check: "global_index",
@@ -366,10 +368,36 @@ describe("global_index_links", () => {
           globalIndexDocumentIds: configured,
         }),
       ],
+      ...(detailVisible === undefined ? {} : { detailVisible }),
     });
 
   const missing = (ordinal: number) =>
     finding("GLOBAL_INDEX_LINK_MISSING", SURFACE, "global_index", ordinal);
+
+  /**
+   * Builds an expected missing-link Finding that names its index.
+   *
+   * @param ordinal - the per-kind ordinal.
+   * @param documentId - the missing index.
+   * @returns the expected issue item.
+   */
+  const missingNamed = (ordinal: number, documentId: string) => ({
+    issue: createFinding(
+      "GLOBAL_INDEX_LINK_MISSING",
+      {
+        kind: "relationship",
+        documentId: SURFACE,
+        relationshipKind: "global_index",
+      },
+      { kind: "global_index", documentId, urlId: urlIdOf(documentId) }
+    ),
+    ordinal,
+  });
+
+  const UNLINKED: WikiGlobalIndexInput = {
+    surface: { documentId: SURFACE, links: [] },
+    indexes: ALL_INDEXES,
+  };
 
   it("completes when the surface links each index by ID or URL identifier", () => {
     expect(
@@ -388,7 +416,7 @@ describe("global_index_links", () => {
     ).toEqual({ findings: [], complete: true });
   });
 
-  it("reports each unlinked index with ordinals in sorted-index order", () => {
+  it("reports each unlinked index with ordinals in configured order", () => {
     expect(
       globalIndex({
         surface: {
@@ -413,6 +441,54 @@ describe("global_index_links", () => {
 
     expect(result).toEqual({ findings: [0, 1].map(missing), complete: false });
     expect(JSON.stringify(result)).not.toContain(I3);
+  });
+
+  it("names each unlinked index in configured order when visible", () => {
+    expect(globalIndex(UNLINKED, [I2, I1], true)).toEqual({
+      findings: [missingNamed(0, I2), missingNamed(1, I1)],
+      complete: true,
+    });
+    expect(globalIndex(UNLINKED, [I1, I2], true)).toEqual({
+      findings: [missingNamed(0, I1), missingNamed(1, I2)],
+      complete: true,
+    });
+  });
+
+  it.each([false, undefined])(
+    "names no index when detailVisible is %s, and is otherwise byte-identical",
+    (detailVisible) => {
+      const hidden = globalIndex(UNLINKED, [I2, I1], detailVisible);
+      const shown = globalIndex(UNLINKED, [I2, I1], true);
+
+      expect(hidden).toEqual({ findings: [0, 1].map(missing), complete: true });
+      expect(JSON.stringify(hidden)).toBe(
+        JSON.stringify({
+          findings: shown.findings.map(({ issue, ordinal }) => {
+            const { detail: _detail, ...rest } = issue;
+            return { issue: rest, ordinal };
+          }),
+          complete: shown.complete,
+        })
+      );
+    }
+  );
+
+  it("names only the readable index when the other configured index is unreadable", () => {
+    const result = globalIndex(
+      {
+        surface: { documentId: SURFACE, links: [] },
+        indexes: ALL_INDEXES.filter(({ documentId }) => documentId !== I1),
+      },
+      [I2, I1],
+      true
+    );
+
+    expect(result).toEqual({
+      findings: [missingNamed(0, I2)],
+      complete: false,
+    });
+    expect(JSON.stringify(result)).not.toContain(I1);
+    expect(JSON.stringify(result)).not.toContain(urlIdOf(I1));
   });
 
   it("reports nothing when the surface is unprovable", () => {

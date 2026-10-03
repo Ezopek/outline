@@ -59,7 +59,7 @@ development_status:
   epic-1-retrospective: done
 
   epic-2: backlog
-  2-0-name-the-missing-configured-item-to-collection-readers: backlog
+  2-0-name-the-missing-configured-item-to-collection-readers: done
   2-1-classify-enforced-writes-and-decide-from-post-operation-poli: backlog
   2-2-project-the-complete-markdown-document-once: backlog
   2-3-enforce-markdown-creates-and-updates-atomically: backlog

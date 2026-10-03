@@ -53,7 +53,7 @@ import {
   defaultLintWikiReader,
 } from "@server/wikiLint/application/lintWiki";
 import { WikiResourceLimitError } from "@server/wikiLint/application/snapshotLimits";
-import type { ScopeLocation } from "@server/wikiLint/core/contracts";
+import type { Finding, ScopeLocation } from "@server/wikiLint/core/contracts";
 import type { PolicySet } from "@server/wikiLint/core/policySet";
 import {
   buildPolicySet,
@@ -490,6 +490,7 @@ describe("lint_document", () => {
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.policies).toEqual([]);
     expect(JSON.stringify(result)).not.toContain(collection.id);
+    expect(JSON.stringify(result)).not.toContain('"detail"');
   });
 
   it("reports only the policy class of a sentinel to a document-only reader", async () => {
@@ -583,6 +584,7 @@ describe("lint_document", () => {
       expect(result.scope).not.toHaveProperty("collectionId");
       expect(result.policies).toEqual([]);
       expect(JSON.stringify(result)).not.toContain(collection.id);
+      expect(JSON.stringify(result)).not.toContain('"detail"');
     });
 
     it("fails a sentinel generically at the document", async () => {
@@ -1081,6 +1083,7 @@ describe("lint_document internal links", () => {
         expect.objectContaining({
           code: "REQUIRED_SECTION_MISSING",
           location: { kind: "document", documentId: source.id },
+          detail: { kind: "section", heading: "Overview", headingLevel: 2 },
         }),
       ],
       warnings: [],
@@ -1164,8 +1167,14 @@ describe("lint_document internal links", () => {
           code: "INTERNAL_LINK_TARGET_UNRESOLVED",
           location: expect.objectContaining({ line: 3, column: 3 }),
         }),
-        expect.objectContaining({ code: "REQUIRED_SECTION_MISSING" }),
-        expect.objectContaining({ code: "REQUIRED_SECTION_MISSING" }),
+        expect.objectContaining({
+          code: "REQUIRED_SECTION_MISSING",
+          detail: { kind: "section", heading: "Overview", headingLevel: 2 },
+        }),
+        expect.objectContaining({
+          code: "REQUIRED_SECTION_MISSING",
+          detail: { kind: "section", heading: "Details", headingLevel: 2 },
+        }),
       ],
       warnings: [],
       systemFailures: [
@@ -2442,14 +2451,34 @@ describe("lint_wiki", () => {
         collection,
         privateCollection,
         surface,
+        indexes,
         indexIds: indexes.map(({ id }) => id),
         hiddenIndex,
         hiddenSurface,
       };
     }
 
+    /**
+     * Builds the expected missing-link Error that names its index.
+     *
+     * @param surfaceId - the surface.
+     * @returns a function from the missing index to its expected Finding.
+     */
+    const missingIndexOf = (surfaceId: string) => (index: Document) => ({
+      ...relationshipError(
+        "GLOBAL_INDEX_LINK_MISSING",
+        surfaceId,
+        "global_index"
+      ),
+      detail: {
+        kind: "global_index",
+        documentId: index.id,
+        urlId: index.urlId,
+      },
+    });
+
     it("reports each global index the surface does not link directly", async () => {
-      const { user, collection, surface, indexIds } =
+      const { user, collection, surface, indexes, indexIds } =
         await buildGlobalIndexFixture();
       const client = await connect(
         user,
@@ -2459,18 +2488,14 @@ describe("lint_wiki", () => {
         { instanceOrigin: ORIGIN }
       );
 
-      const missing = relationshipError(
-        "GLOBAL_INDEX_LINK_MISSING",
-        surface.id,
-        "global_index"
-      );
+      // The four unrecognized indexes, in configured order.
       await expect(
         wikiResult(client, { collectionId: collection.id })
       ).resolves.toEqual({
         state: "complete",
         complete: true,
         clean: false,
-        errors: [missing, missing, missing, missing],
+        errors: indexes.slice(4).map(missingIndexOf(surface.id)),
         warnings: [],
         systemFailures: [],
         scope: {
@@ -2501,6 +2526,7 @@ describe("lint_wiki", () => {
         collection,
         privateCollection,
         surface,
+        indexes,
         indexIds,
         hiddenIndex,
       } = await buildGlobalIndexFixture();
@@ -2519,16 +2545,11 @@ describe("lint_wiki", () => {
         await lintWikiCall(client, { collectionId: collection.id })
       );
 
-      const missing = relationshipError(
-        "GLOBAL_INDEX_LINK_MISSING",
-        surface.id,
-        "global_index"
-      );
       expect(JSON.parse(text)).toEqual({
         state: "failed",
         complete: false,
         clean: false,
-        errors: [missing, missing, missing, missing],
+        errors: indexes.slice(4).map(missingIndexOf(surface.id)),
         warnings: [],
         systemFailures: [collectionFailure(collection.id)],
         scope: {
@@ -2541,6 +2562,7 @@ describe("lint_wiki", () => {
         policies: [expect.objectContaining({ collectionId: collection.id })],
       });
       expect(text).not.toContain(hiddenIndex.id);
+      expect(text).not.toContain(hiddenIndex.urlId);
       expect(text).not.toContain(privateCollection.id);
     });
 
@@ -2810,10 +2832,11 @@ describe("lint_wiki", () => {
         complete: false,
         clean: false,
         errors: [
-          createFinding("REQUIRED_SECTION_MISSING", {
-            kind: "document",
-            documentId: d1,
-          }),
+          createFinding(
+            "REQUIRED_SECTION_MISSING",
+            { kind: "document", documentId: d1 },
+            { kind: "section", heading: "Details", headingLevel: 2 }
+          ),
         ],
         warnings: [],
         systemFailures: [
@@ -4009,6 +4032,186 @@ describe("audit summary", () => {
     await expect(Event.count({ where: { teamId: user.teamId } })).resolves.toBe(
       eventCount
     );
+  });
+
+  describe("with Finding detail", () => {
+    const HEADING = "Zebra heading marker";
+    const FIELD = "Quokka field marker";
+    const LOGGER_METHODS = [
+      "debug",
+      "info",
+      "silly",
+      "warn",
+      "error",
+      "fatal",
+    ] as const;
+
+    /**
+     * Serializes the arguments of one Logger call. An Error, at any depth, is
+     * serialized by its name and message, which `JSON.stringify` drops.
+     *
+     * @param args - the call arguments.
+     * @returns the serialized arguments.
+     */
+    const serializeCall = (args: unknown[]) =>
+      args
+        .map((arg) =>
+          typeof arg === "string"
+            ? arg
+            : (JSON.stringify(arg, (_key, value: unknown) =>
+                value instanceof Error
+                  ? { name: value.name, message: value.message }
+                  : value
+              ) ?? String(arg))
+        )
+        .join(" ");
+
+    it("records identical summaries with and without detail, and logs no detail value", async () => {
+      const { reader, owner, collection, document } =
+        await buildDocumentOnlyReader();
+      const index = await buildDocument({
+        teamId: owner.teamId,
+        userId: owner.id,
+        collectionId: collection.id,
+        text: "Index",
+      });
+      const policySet = policySetFor({
+        [collection.id]: {
+          activation: "read_only",
+          rules: [
+            { kind: "required_sections", headingLevel: 2, headings: [HEADING] },
+            {
+              kind: "required_metadata_fields",
+              metadataSection: { heading: "Metadata", headingLevel: 2 },
+              fields: [FIELD],
+            },
+            {
+              kind: "global_index_links",
+              surfaceDocumentId: document.id,
+              globalIndexDocumentIds: [index.id],
+            },
+          ],
+        },
+      });
+      const spies = LOGGER_METHODS.map((method) => vi.spyOn(Logger, method));
+
+      const byOwner = await auditedCall(async (dependencies) =>
+        lint(await connect(owner, policySet, dependencies), {
+          id: document.id,
+        })
+      );
+      const byReader = await auditedCall(async (dependencies) =>
+        lint(await connect(reader, policySet, dependencies), {
+          id: document.id,
+        })
+      );
+      const wiki = await auditedCall(async (dependencies) =>
+        lintWikiCall(await connect(owner, policySet, dependencies), {
+          collectionId: collection.id,
+        })
+      );
+      // A failed audit write is logged, without any detail value either.
+      await lintWikiCall(
+        await connect(owner, policySet, {
+          writeAudit: async () => {
+            throw new Error("audit write failed");
+          },
+        }),
+        { collectionId: collection.id }
+      );
+
+      const named = [
+        { kind: "metadata_field", field: FIELD },
+        { kind: "section", heading: HEADING, headingLevel: 2 },
+      ];
+      const ownerErrors = JSON.parse(firstText(byOwner.result)).errors;
+      expect(ownerErrors.map((finding: Finding) => finding.detail)).toEqual(
+        named
+      );
+      expect(
+        JSON.parse(firstText(byReader.result)).errors.map(
+          ({ detail: _detail, ...finding }: Finding) => finding
+        )
+      ).toEqual(
+        ownerErrors.map(({ detail: _detail, ...finding }: Finding) => finding)
+      );
+      expect(firstText(byReader.result)).not.toContain('"detail"');
+      expect(JSON.parse(firstText(wiki.result)).errors).toContainEqual(
+        expect.objectContaining({
+          code: "GLOBAL_INDEX_LINK_MISSING",
+          detail: {
+            kind: "global_index",
+            documentId: index.id,
+            urlId: index.urlId,
+          },
+        })
+      );
+
+      const rows = await auditRows(owner.teamId);
+      const ownerRow = rows.find((row) => row.id === byOwner.ids[0]);
+      const readerRow = rows.find((row) => row.id === byReader.ids[0]);
+      const counts = {
+        errors: 2,
+        warnings: 0,
+        systemFailures: 0,
+        byCode: {
+          REQUIRED_METADATA_FIELD_MISSING: 1,
+          REQUIRED_SECTION_MISSING: 1,
+        },
+      };
+      const data = {
+        outcome: "findings",
+        ...policyFieldsOf(policySet, collection.id),
+        evaluatedDocumentCount: 1,
+        counts,
+      };
+      expect(ownerRow).toStrictEqual(
+        expectedRow(
+          { id: byOwner.ids[0], user: owner, documentId: document.id },
+          data
+        )
+      );
+      expect(readerRow).toStrictEqual(
+        expectedRow(
+          { id: byReader.ids[0], user: reader, documentId: document.id },
+          data
+        )
+      );
+      /**
+       * Drops the per-invocation fields of a stored summary.
+       *
+       * @param row - the stored row.
+       * @returns the remaining summary data.
+       */
+      const payload = (row: typeof ownerRow) => {
+        const {
+          requestId: _request,
+          durationMs: _duration,
+          ...rest
+        } = (row?.data ?? {}) as Record<string, unknown>;
+        return rest;
+      };
+      expect(payload(readerRow)).toStrictEqual(payload(ownerRow));
+
+      const values = [HEADING, FIELD, index.id, index.urlId];
+      const stored = JSON.stringify(rows);
+      expect(stored).not.toContain('"detail"');
+      for (const value of values) {
+        expect(stored).not.toContain(value);
+      }
+      expect(spies[LOGGER_METHODS.indexOf("warn")]).toHaveBeenCalledWith(
+        "Wiki lint audit write failed",
+        expect.anything()
+      );
+      for (const spy of spies) {
+        for (const call of spy.mock.calls) {
+          const line = serializeCall(call);
+          for (const value of values) {
+            expect(line).not.toContain(value);
+          }
+        }
+      }
+    });
   });
 
   describe("when the audit write fails", () => {

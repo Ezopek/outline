@@ -1,4 +1,9 @@
-import type { FindingCode, IssueLocation, ScopeLocation } from "./contracts";
+import type {
+  FindingCode,
+  FindingDetail,
+  IssueLocation,
+  ScopeLocation,
+} from "./contracts";
 import { WikiLintContractError } from "./contracts";
 import {
   COLLECTION_CONFLICT,
@@ -506,6 +511,49 @@ describe("ruleConfigSchema", () => {
   ])("rejects %s", (_name, entry) => {
     expect(ruleConfigSchema.safeParse(entry).success).toBe(false);
   });
+
+  describe("length caps in UTF-16 code units", () => {
+    const astral = "\u{1F600}";
+    const sections = (heading: string) => ({
+      kind: "required_sections",
+      headingLevel: 2,
+      headings: [heading],
+    });
+    const fields = (field: string) => ({
+      kind: "required_metadata_fields",
+      metadataSection,
+      fields: [field],
+    });
+
+    it.each([
+      ["a 200-unit heading", true, sections("h".repeat(200))],
+      [
+        "a 198-unit heading plus an astral character",
+        true,
+        sections(`${"h".repeat(198)}${astral}`),
+      ],
+      ["a 201-unit heading", false, sections("h".repeat(201))],
+      [
+        "a 199-unit heading plus an astral character",
+        false,
+        sections(`${"h".repeat(199)}${astral}`),
+      ],
+      ["a 64-unit field", true, fields("f".repeat(64))],
+      [
+        "a 62-unit field plus an astral character",
+        true,
+        fields(`${"f".repeat(62)}${astral}`),
+      ],
+      ["a 65-unit field", false, fields("f".repeat(65))],
+      [
+        "a 63-unit field plus an astral character",
+        false,
+        fields(`${"f".repeat(63)}${astral}`),
+      ],
+    ])("accepts %s: %s", (_name, valid, entry) => {
+      expect(ruleConfigSchema.safeParse(entry).success).toBe(valid);
+    });
+  });
 });
 
 describe("createFinding", () => {
@@ -584,6 +632,258 @@ describe("createFinding", () => {
     expect(() =>
       createFinding(code as FindingCode, location as IssueLocation)
     ).toThrow(WikiLintContractError);
+  });
+
+  describe("detail", () => {
+    const missingAt = { kind: "document" as const, documentId };
+    const surfaceAt = {
+      kind: "relationship" as const,
+      documentId,
+      relationshipKind: "global_index" as const,
+    };
+
+    it("omits the key without a detail", () => {
+      expect(
+        Object.keys(createFinding("REQUIRED_SECTION_MISSING", missingAt))
+      ).toEqual(["code", "severity", "message", "location"]);
+    });
+
+    it.each([
+      [
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { headingLevel: 2, heading: "Summary", kind: "section" },
+        { kind: "section", heading: "Summary", headingLevel: 2 },
+      ],
+      [
+        "REQUIRED_METADATA_FIELD_MISSING",
+        missingAt,
+        { field: "Owner", kind: "metadata_field" },
+        { kind: "metadata_field", field: "Owner" },
+      ],
+      [
+        "GLOBAL_INDEX_LINK_MISSING",
+        surfaceAt,
+        { urlId: "AbCdEfGhIj", documentId: collectionId, kind: "global_index" },
+        { kind: "global_index", documentId: collectionId, urlId: "AbCdEfGhIj" },
+      ],
+    ] as const)(
+      "rebuilds the %s detail last, in a fixed key order",
+      (code, location, input, detail) => {
+        const finding = createFinding(code, location, input);
+
+        expect(JSON.stringify(finding)).toBe(
+          JSON.stringify({
+            code,
+            severity: "error",
+            message: getIssueDefinition(code)?.message,
+            location,
+            detail,
+          })
+        );
+        expect(finding.detail).not.toBe(input);
+      }
+    );
+
+    it.each([
+      ["a 200-unit heading", "h".repeat(200)],
+      [
+        "a 198-unit heading plus an astral character",
+        `${"h".repeat(198)}\u{1F600}`,
+      ],
+    ])("accepts %s", (_name, heading) => {
+      expect(
+        createFinding("REQUIRED_SECTION_MISSING", missingAt, {
+          kind: "section",
+          heading,
+          headingLevel: 6,
+        }).detail
+      ).toEqual({ kind: "section", heading, headingLevel: 6 });
+    });
+
+    it.each([
+      ["a 64-unit field", "f".repeat(64)],
+      [
+        "a 62-unit field plus an astral character",
+        `${"f".repeat(62)}\u{1F600}`,
+      ],
+    ])("accepts %s", (_name, field) => {
+      expect(
+        createFinding("REQUIRED_METADATA_FIELD_MISSING", missingAt, {
+          kind: "metadata_field",
+          field,
+        }).detail
+      ).toEqual({ kind: "metadata_field", field });
+    });
+
+    it.each([
+      [
+        "a detail on another code",
+        "SECTION_ORDER_INVALID",
+        { kind: "text", documentId, line: 1, column: 1 },
+        { kind: "section", heading: "Summary", headingLevel: 2 },
+      ],
+      [
+        "a detail on a code without its kind",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { kind: "metadata_field", field: "Owner" },
+      ],
+      [
+        "a global-index kind on a metadata code",
+        "REQUIRED_METADATA_FIELD_MISSING",
+        missingAt,
+        { kind: "global_index", documentId, urlId: "AbCdEfGhIj" },
+      ],
+      [
+        "an extra key",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { kind: "section", heading: "Summary", headingLevel: 2, pattern: ".*" },
+      ],
+      [
+        "allowed values",
+        "REQUIRED_METADATA_FIELD_MISSING",
+        missingAt,
+        { kind: "metadata_field", field: "Status", values: ["Active"] },
+      ],
+      [
+        "a missing key",
+        "GLOBAL_INDEX_LINK_MISSING",
+        surfaceAt,
+        { kind: "global_index", documentId },
+      ],
+      [
+        "a 201-unit heading",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { kind: "section", heading: "h".repeat(201), headingLevel: 2 },
+      ],
+      [
+        "a 199-unit heading plus an astral character",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        {
+          kind: "section",
+          heading: `${"h".repeat(199)}\u{1F600}`,
+          headingLevel: 2,
+        },
+      ],
+      [
+        "an untrimmed heading",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { kind: "section", heading: " Summary", headingLevel: 2 },
+      ],
+      [
+        "heading level 7",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { kind: "section", heading: "Summary", headingLevel: 7 },
+      ],
+      [
+        "a 65-unit field",
+        "REQUIRED_METADATA_FIELD_MISSING",
+        missingAt,
+        { kind: "metadata_field", field: "f".repeat(65) },
+      ],
+      [
+        "a 63-unit field plus an astral character",
+        "REQUIRED_METADATA_FIELD_MISSING",
+        missingAt,
+        { kind: "metadata_field", field: `${"f".repeat(63)}\u{1F600}` },
+      ],
+      [
+        "a field with a colon",
+        "REQUIRED_METADATA_FIELD_MISSING",
+        missingAt,
+        { kind: "metadata_field", field: "A:B" },
+      ],
+      [
+        "an uppercase index UUID",
+        "GLOBAL_INDEX_LINK_MISSING",
+        surfaceAt,
+        {
+          kind: "global_index",
+          documentId: "00000000-0000-4000-8000-00000000000A",
+          urlId: "AbCdEfGhIj",
+        },
+      ],
+      [
+        "an empty URL identifier",
+        "GLOBAL_INDEX_LINK_MISSING",
+        surfaceAt,
+        { kind: "global_index", documentId, urlId: "" },
+      ],
+      [
+        "an empty heading",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { kind: "section", heading: "", headingLevel: 2 },
+      ],
+      [
+        "heading level 0",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { kind: "section", heading: "Summary", headingLevel: 0 },
+      ],
+      [
+        "a fractional heading level",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { kind: "section", heading: "Summary", headingLevel: 1.5 },
+      ],
+      [
+        "a string heading level",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        { kind: "section", heading: "Summary", headingLevel: "2" },
+      ],
+      [
+        "an empty field",
+        "REQUIRED_METADATA_FIELD_MISSING",
+        missingAt,
+        { kind: "metadata_field", field: "" },
+      ],
+      [
+        "an untrimmed field",
+        "REQUIRED_METADATA_FIELD_MISSING",
+        missingAt,
+        { kind: "metadata_field", field: "Owner " },
+      ],
+      [
+        "a lowercase index ID that is not a UUID",
+        "GLOBAL_INDEX_LINK_MISSING",
+        surfaceAt,
+        {
+          kind: "global_index",
+          documentId: "index-abcdefghij",
+          urlId: "AbCdEfGhIj",
+        },
+      ],
+      [
+        "a non-string URL identifier",
+        "GLOBAL_INDEX_LINK_MISSING",
+        surfaceAt,
+        { kind: "global_index", documentId, urlId: 42 },
+      ],
+      ["a string detail", "REQUIRED_SECTION_MISSING", missingAt, "Summary"],
+      [
+        "an array detail",
+        "REQUIRED_SECTION_MISSING",
+        missingAt,
+        ["section", "Summary", 2],
+      ],
+      ["a null detail", "REQUIRED_SECTION_MISSING", missingAt, null],
+    ])("rejects %s", (_name, code, location, detail) => {
+      expect(() =>
+        createFinding(
+          code as FindingCode,
+          location as IssueLocation,
+          detail as FindingDetail
+        )
+      ).toThrow(WikiLintContractError);
+    });
   });
 });
 

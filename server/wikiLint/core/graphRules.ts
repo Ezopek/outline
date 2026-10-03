@@ -1,5 +1,6 @@
 import type {
   Finding,
+  FindingDetail,
   IssueItem,
   RelationshipLocation,
   WikiCollectionGraph,
@@ -7,14 +8,14 @@ import type {
   WikiSnapshotDocument,
 } from "./contracts";
 import { WikiLintContractError } from "./contracts";
-import { compareUtf8 } from "./ordering";
 import type { RuleConfig } from "./registry";
 import { RULE_REGISTRY, createFinding, getIssueDefinition } from "./registry";
 
 /** The graph inputs of a collection where the actor holds `readDocument`. */
 type AuthorizedGraph = Extract<WikiCollectionGraph, { authorized: true }>;
 
-type Emit = (location: RelationshipLocation) => void;
+/** Emits one Finding; a missing-item rule also names the item it lacks. */
+type Emit = (location: RelationshipLocation, detail?: FindingDetail) => void;
 
 /** One enabled graph rule kind's view of the evaluated collection. */
 interface GraphContext {
@@ -142,10 +143,11 @@ function hierarchyAcyclic({ documents, emit }: GraphContext): void {
 }
 
 /**
- * Reports each configured global index, in bytewise-sorted order, that the
- * surface provably does not link to directly. A pair is provable only when
- * the surface is present and the index is readable; an unprovable pair makes
- * the check incomplete without naming the missing fact.
+ * Reports each configured global index, in configured order, that the surface
+ * provably does not link to directly, naming the readable index it lacks. A
+ * pair is provable only when the surface is present and the index is
+ * readable; an unprovable pair makes the check incomplete without naming the
+ * missing fact.
  *
  * @param rule - the configured rule.
  * @param context - the authorized graph and the callbacks.
@@ -168,7 +170,7 @@ function globalIndexLinks(
   const indexes = new Map(
     globalIndex.indexes.map((index) => [index.documentId, index])
   );
-  for (const documentId of [...rule.globalIndexDocumentIds].sort(compareUtf8)) {
+  for (const documentId of rule.globalIndexDocumentIds) {
     const index = indexes.get(documentId);
     if (!surface || !index) {
       unprovable();
@@ -180,11 +182,18 @@ function globalIndexLinks(
         : link.key === index.urlId
     );
     if (!linked) {
-      emit({
-        kind: "relationship",
-        documentId: surface.documentId,
-        relationshipKind: "global_index",
-      });
+      emit(
+        {
+          kind: "relationship",
+          documentId: surface.documentId,
+          relationshipKind: "global_index",
+        },
+        {
+          kind: "global_index",
+          documentId: index.documentId,
+          urlId: index.urlId,
+        }
+      );
     }
   }
 }
@@ -223,6 +232,9 @@ function evaluateRule(rule: RuleConfig, context: GraphContext): void {
  * @param input.documents - the collection's evaluated documents, sorted.
  * @param input.graph - the collection's authorized graph inputs.
  * @param input.rules - the collection's full policy rule list.
+ * @param input.detailVisible - whether missing-item Findings carry the
+ *   configured item they name. The shell passes `true` only for an actor who
+ *   can read the collection; omitted, nothing is named.
  * @returns Findings with zero-based per-kind, per-document ordinals, and
  *   whether the check completed.
  */
@@ -231,8 +243,10 @@ export function evaluateGraphCheck(input: {
   documents: readonly WikiSnapshotDocument[];
   graph: AuthorizedGraph;
   rules: readonly RuleConfig[];
+  detailVisible?: boolean;
 }): { findings: IssueItem<Finding>[]; complete: boolean } {
   const { check, documents, graph, rules } = input;
+  const detailVisible = input.detailVisible === true;
   const findings: IssueItem<Finding>[] = [];
   let complete = true;
   for (const rule of rules) {
@@ -241,9 +255,16 @@ export function evaluateGraphCheck(input: {
       continue;
     }
     const ordinals = new Map<string, number>();
-    const emit: Emit = (location) => {
+    const emit: Emit = (location, detail) => {
       const ordinal = ordinals.get(location.documentId) ?? 0;
-      findings.push({ issue: createFinding(code, location), ordinal });
+      findings.push({
+        issue: createFinding(
+          code,
+          location,
+          detailVisible ? detail : undefined
+        ),
+        ordinal,
+      });
       ordinals.set(location.documentId, ordinal + 1);
     };
     try {

@@ -480,6 +480,161 @@ describe("buildPolicySet", () => {
     });
   });
 
+  describe("heading and field name caps", () => {
+    const astral = "\u{1F600}";
+    const metadataSection = { heading: "Metadata", headingLevel: 2 };
+    const siblingFingerprint = fingerprintOf(
+      '{"activation":"read_only","rules":[{"kind":"internal_links"}],"runtimeFailureMode":"closed","schemaVersion":1}'
+    );
+
+    /**
+     * Serializes a plain value with object keys sorted, which is the AD-6
+     * canonical form for these ASCII-keyed fixtures.
+     *
+     * @param value - the value.
+     * @returns the JSON text.
+     */
+    const sortedJson = (value: unknown): string =>
+      Array.isArray(value)
+        ? `[${value.map(sortedJson).join(",")}]`
+        : typeof value === "object" && value !== null
+          ? `{${Object.keys(value)
+              .sort()
+              .map(
+                (key) =>
+                  `${JSON.stringify(key)}:${sortedJson((value as Record<string, unknown>)[key])}`
+              )
+              .join(",")}}`
+          : JSON.stringify(value);
+
+    /** Each schema site: its cap, a rule placing a value there, and its pointer. */
+    const sites: [string, number, (value: string) => object, string][] = [
+      [
+        "required_sections.headings",
+        200,
+        (value) => ({
+          kind: "required_sections",
+          headingLevel: 2,
+          headings: [value],
+        }),
+        "/rules/0/headings/0",
+      ],
+      [
+        "section_order.headings",
+        200,
+        (value) => ({
+          kind: "section_order",
+          headingLevel: 2,
+          headings: ["Intro", value],
+        }),
+        "/rules/0/headings/1",
+      ],
+      [
+        "metadataSection.heading",
+        200,
+        (value) => ({
+          kind: "required_metadata_fields",
+          metadataSection: { heading: value, headingLevel: 2 },
+          fields: ["Owner"],
+        }),
+        "/rules/0/metadataSection/heading",
+      ],
+      [
+        "required_metadata_fields.fields",
+        64,
+        (value) => ({
+          kind: "required_metadata_fields",
+          metadataSection,
+          fields: [value],
+        }),
+        "/rules/0/fields/0",
+      ],
+      [
+        "metadata_field_formats name",
+        64,
+        (value) => ({
+          kind: "metadata_field_formats",
+          metadataSection,
+          fields: [{ name: value, format: "iso_date" }],
+        }),
+        "/rules/0/fields/0/name",
+      ],
+    ];
+
+    /**
+     * Loads a policy with one rule for collection A beside a valid sibling B.
+     *
+     * @param rule - the rule.
+     * @returns the entry text of A and the accepted result.
+     */
+    const loadBesideSibling = (rule: object) => {
+      const value = JSON.stringify({ activation: "read_only", rules: [rule] });
+      const result = loadOk(
+        envelope(`"${A}":${value},"${B}":${minimalPolicy}`)
+      );
+      expect(result.policySet.entries[1]).toMatchObject({
+        collectionId: B,
+        status: "valid",
+        policyFingerprint: siblingFingerprint,
+      });
+      return { value, result };
+    };
+
+    describe.each(sites)("%s", (_site, cap, ruleWith, pointer) => {
+      it.each([
+        ["exactly at the cap", "x".repeat(cap)],
+        [
+          "at the cap with an astral character",
+          `${"x".repeat(cap - 2)}${astral}`,
+        ],
+      ])("is valid %s with the canonical fingerprint", (_name, text) => {
+        const rule = ruleWith(text);
+        const { result } = loadBesideSibling(rule);
+
+        expect(result.sentinels).toEqual([]);
+        expect(result.policySet.entries[0]).toEqual({
+          collectionId: A,
+          status: "valid",
+          policySchemaVersion: 1,
+          policyFingerprint: fingerprintOf(
+            sortedJson({
+              schemaVersion: 1,
+              activation: "read_only",
+              runtimeFailureMode: "closed",
+              rules: [rule],
+            })
+          ),
+          policy: {
+            activation: "read_only",
+            runtimeFailureMode: "closed",
+            rules: [rule],
+          },
+        });
+      });
+
+      it.each([
+        ["one unit over the cap", "x".repeat(cap + 1)],
+        ["crossed by an astral character", `${"x".repeat(cap - 1)}${astral}`],
+      ])("is a sentinel %s", (_name, text) => {
+        const { value, result } = loadBesideSibling(ruleWith(text));
+
+        expect(result.policySet.entries[0]).toEqual({
+          collectionId: A,
+          status: "invalid",
+          invalidFingerprint: fingerprintOf(value),
+        });
+        expect(result.sentinels).toEqual([
+          {
+            collectionId: A,
+            code: "POLICY_CONFIGURATION_INVALID",
+            path: `/collections/${A}${pointer}`,
+            invalidFingerprint: fingerprintOf(value),
+          },
+        ]);
+      });
+    });
+  });
+
   describe("policy set identity", () => {
     const valid = minimalPolicy;
     const invalid = '{"activation":"read_only","rules":[],"severity":"x"}';

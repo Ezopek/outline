@@ -168,6 +168,13 @@ const CLEAN = "## Overview\n\nSummary\n\n## Details\n\nBody";
 /** Markdown missing `Details`, with a level-1 heading on line 3. */
 const DEFECTIVE = "## Overview\n\n# Title\n\nBody";
 
+/** The detail of the `Details` section that `DEFECTIVE` lacks. */
+const DETAILS_SECTION = {
+  kind: "section",
+  heading: "Details",
+  headingLevel: 2,
+} as const;
+
 /** Markdown missing `Details`, linking A twice and B once on line 3. */
 const LINKING = [
   "## Overview",
@@ -618,11 +625,15 @@ describe("collection scope", () => {
       complete: false,
       clean: false,
       errors: [
-        createFinding("GLOBAL_INDEX_LINK_MISSING", {
-          kind: "relationship",
-          documentId: DOC_1,
-          relationshipKind: "global_index",
-        }),
+        createFinding(
+          "GLOBAL_INDEX_LINK_MISSING",
+          {
+            kind: "relationship",
+            documentId: DOC_1,
+            relationshipKind: "global_index",
+          },
+          { kind: "global_index", documentId: DOC_2, urlId: "UrlIdOfDoc2" }
+        ),
       ],
       warnings: [],
       systemFailures: [failure("VALIDATION_RUNTIME_FAILED", cs(ALL_CHECKS))],
@@ -791,10 +802,11 @@ describe("collection scope", () => {
   });
 
   it("keeps the Findings of a unit whose rule kind failed", async () => {
-    const finding = createFinding("REQUIRED_SECTION_MISSING", {
-      kind: "document",
-      documentId: DOC_1,
-    });
+    const finding = createFinding(
+      "REQUIRED_SECTION_MISSING",
+      { kind: "document", documentId: DOC_1 },
+      DETAILS_SECTION
+    );
     vi.mocked(evaluateDocumentRules).mockReturnValueOnce({
       findings: [{ issue: finding, ordinal: 0 }],
       failedKinds: ["allowed_heading_levels"],
@@ -1141,10 +1153,11 @@ describe("default scope", () => {
         documentId: DOC_3,
         relationshipKind: "parent",
       }),
-      createFinding("REQUIRED_SECTION_MISSING", {
-        kind: "document",
-        documentId: DOC_1,
-      }),
+      createFinding(
+        "REQUIRED_SECTION_MISSING",
+        { kind: "document", documentId: DOC_1 },
+        DETAILS_SECTION
+      ),
     ]);
   });
 
@@ -1156,6 +1169,53 @@ describe("default scope", () => {
 
     await expect(run(reader)).rejects.toThrow("Unexpected snapshot collection");
   });
+});
+
+describe("Finding detail", () => {
+  it.each([
+    ["a collection scope", ALL_CHECKS],
+    ["the default scope", undefined],
+  ])(
+    "names each missing item in configured order in %s",
+    async (_name, collectionId) => {
+      const reader = fakeReader(
+        collectionId ?? null,
+        snapshotRead([
+          collectionOf(
+            ALL_CHECKS,
+            [withParent(documentOf(DOC_1, DEFECTIVE))],
+            graphOf([DOC_1], {
+              surface: { documentId: DOC_1, links: [] },
+              indexes: LINKED_INDEXES.indexes,
+            })
+          ),
+        ])
+      );
+
+      const result = await resultOf(reader, collectionId);
+
+      expect(result.state).toBe("complete");
+      // The policy configures DOC_3 before DOC_2, the reverse of sorted order.
+      expect(result.errors.map(({ code, detail }) => [code, detail])).toEqual([
+        ["REQUIRED_SECTION_MISSING", DETAILS_SECTION],
+        [
+          "GLOBAL_INDEX_LINK_MISSING",
+          { kind: "global_index", documentId: DOC_3, urlId: "UrlIdOfDoc3" },
+        ],
+        [
+          "GLOBAL_INDEX_LINK_MISSING",
+          { kind: "global_index", documentId: DOC_2, urlId: "UrlIdOfDoc2" },
+        ],
+      ]);
+      for (const spied of [evaluateDocumentRules, evaluateGraphCheck]) {
+        const { calls } = vi.mocked(spied).mock;
+        expect(calls.length).toBeGreaterThan(0);
+        for (const [input] of calls) {
+          expect(input.detailVisible).toBe(true);
+        }
+      }
+    }
+  );
 });
 
 describe("snapshot failure", () => {
@@ -1395,7 +1455,11 @@ describe("stop margin", () => {
     );
 
   const missingDetails = (documentId: string) =>
-    createFinding("REQUIRED_SECTION_MISSING", { kind: "document", documentId });
+    createFinding(
+      "REQUIRED_SECTION_MISSING",
+      { kind: "document", documentId },
+      DETAILS_SECTION
+    );
 
   const configuredTimeout = failure("VALIDATION_TIMEOUT", {
     kind: "scope",
@@ -1822,10 +1886,11 @@ describe("determinism", () => {
         vi.mocked(evaluateDocumentRules).mockReturnValueOnce({
           findings: [
             {
-              issue: createFinding("REQUIRED_SECTION_MISSING", {
-                kind: "document",
-                documentId: DOC_1,
-              }),
+              issue: createFinding(
+                "REQUIRED_SECTION_MISSING",
+                { kind: "document", documentId: DOC_1 },
+                DETAILS_SECTION
+              ),
               ordinal: 0,
             },
           ],

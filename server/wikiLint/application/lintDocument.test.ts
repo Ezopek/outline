@@ -266,11 +266,18 @@ const systemFailure = (code: string, location: object) => ({
   location,
 });
 
-const missingDetails = {
+/** The missing `Details` section, as a reader without collection access sees it. */
+const missingDetailsUnnamed = {
   code: "REQUIRED_SECTION_MISSING",
   severity: "error",
   message: expect.any(String),
   location: { kind: "document", documentId: DOCUMENT },
+};
+
+/** The missing `Details` section, as a collection reader sees it. */
+const missingDetails = {
+  ...missingDetailsUnnamed,
+  detail: { kind: "section", heading: "Details", headingLevel: 2 },
 };
 
 const levelOneHeading = {
@@ -482,7 +489,10 @@ describe("lintDocument", () => {
         const result = await lintResult(reader);
 
         expect(result.state).toBe("complete");
-        expect(result.errors).toEqual([levelOneHeading, missingDetails]);
+        expect(result.errors).toStrictEqual([
+          levelOneHeading,
+          missingDetailsUnnamed,
+        ]);
         expect(result.scope).toStrictEqual({
           kind: "document",
           documentId: DOCUMENT,
@@ -501,10 +511,11 @@ describe("lintDocument", () => {
       vi.mocked(evaluateDocumentRules).mockReturnValueOnce({
         findings: [
           {
-            issue: createFinding("REQUIRED_SECTION_MISSING", {
-              kind: "document",
-              documentId: DOCUMENT,
-            }),
+            issue: createFinding(
+              "REQUIRED_SECTION_MISSING",
+              { kind: "document", documentId: DOCUMENT },
+              { kind: "section", heading: "Details", headingLevel: 2 }
+            ),
             ordinal: 0,
           },
         ],
@@ -537,6 +548,44 @@ describe("lintDocument", () => {
         systemFailure("VALIDATION_RUNTIME_FAILED", documentScopeLocation()),
       ]);
       expect(JSON.stringify(result)).not.toContain(LINKS);
+    });
+  });
+
+  describe("Finding detail", () => {
+    it.each([
+      ["readable", true],
+      ["unreadable", false],
+      ["unestablished", false],
+    ] as const)(
+      "derives detailVisible from a %s collection",
+      async (readability, visible) => {
+        const result = await lintResult(
+          fakeReader(targetIn(STRUCTURE, readability))
+        );
+
+        expect(vi.mocked(evaluateDocumentRules)).toHaveBeenLastCalledWith(
+          expect.objectContaining({ detailVisible: visible })
+        );
+        expect(result.errors).toStrictEqual([
+          levelOneHeading,
+          visible ? missingDetails : missingDetailsUnnamed,
+        ]);
+      }
+    );
+
+    it("gives other readers the collection reader's errors without detail", async () => {
+      const readable = await lintResult(fakeReader(targetIn(STRUCTURE)));
+      const unnamed = JSON.stringify(
+        readable.errors.map(({ detail: _detail, ...finding }) => finding)
+      );
+
+      expect(JSON.stringify(readable.errors)).not.toBe(unnamed);
+      for (const readability of ["unreadable", "unestablished"] as const) {
+        const hidden = await lintResult(
+          fakeReader(targetIn(STRUCTURE, readability))
+        );
+        expect(JSON.stringify(hidden.errors)).toBe(unnamed);
+      }
     });
   });
 
