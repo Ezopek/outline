@@ -148,6 +148,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
 status: open
+decision: 2026-10-04 Backfill Story 1.10 Spec Change Log — Append dated entries to the Spec Change Log of _bmad-output/implementation-artifacts/spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md recording the AC5 bullet-marker interpretation and the stale Code Map statements (buildDocument/structure, rule-kind list), citing the Auto Run Result. Do not edit sprint-status.yaml; the operator sets epic-1 done with the sprint tooling.
 
 ### DW-19: Log unmodellable lint failures with invocationId and error class only (F-6); defer to Epic 3 hardening.
 origin: retro action item epic-1-retro-item-9-log-unmodellable-lint-failures-with-invo
