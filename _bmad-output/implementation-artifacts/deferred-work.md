@@ -54,6 +54,7 @@ severity: low
 reason: server/tools/README.md presents "- Status: Active" / "- Last verified: 2026-09-20" as the shape that survives the Markdown/ProseMirror round trip. Story 1.10's HTTP suite (server/routes/mcp/wikiLint.test.ts, "round trip") shows MCP create_document + fetch return "* Status: Active"; the fields stay valid and lint clean, but agents copying the example as patch findText would miss. The README is a companion of the binding SPEC, so the edit needs a deliberate contract update rather than an unattended story change.
 status: open
 decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* Status: Active` / `* Last verified: 2026-09-20`, and record in the binding SPEC that canonical `* ` bullets round-trip byte-identically while `- ` input lints clean (Story 1.10 AC5 interpretation). No code change.
+decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* Status: Active` / `* Last verified: 2026-09-20`, and record in the binding SPEC that canonical `* ` bullets round-trip byte-identically while `- ` input lints clean (Story 1.10 AC5 interpretation). No code change.
 
 ### DW-8: The lint-repair-relint loop needs repair knowledge that Findings do not carry: a missing metadata field value or a missing configured global index is not identified by the AD-12 Finding.
 origin: spec-deferred 656e36dfb1ba
@@ -96,6 +97,7 @@ severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
 status: open
 decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* ` bullets and add the Story 1.10 AC5 interpretation (canonical `* ` round-trips byte-identically; `- ` input lints clean) to the binding SPEC. Close DW-7 with the same change.
+decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* ` bullets and add the Story 1.10 AC5 interpretation (canonical `* ` round-trips byte-identically; `- ` input lints clean) to the binding SPEC. Close DW-7 with the same change.
 
 ### DW-13: In readWikiSnapshot, re-check collection read inside the snapshot for a collection scope and fail generically when it no longer holds; add a documents-only regression test (F-5).
 origin: retro action item epic-1-retro-item-3-in-readwikisnapshot-re-check-collection
@@ -113,6 +115,7 @@ severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
 status: open
 decision: 2026-10-04 Amend Story 3.4 ACs now — Add an acceptance criterion to Story 3.4 in _bmad-output/planning-artifacts/epics.md: the Gate 1 decision record states that no read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5 and DW-6 (event-loop blocking, CPU between deadline checks, pool-wait acquisition). Planning-artifact edit only.
+decision: 2026-10-04 Amend Story 3.4 ACs now — Add an acceptance criterion to Story 3.4 in _bmad-output/planning-artifacts/epics.md: the Gate 1 decision record states that no read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5 and DW-6 (event-loop blocking, CPU between deadline checks, pool-wait acquisition). Planning-artifact edit only.
 
 ### DW-15: Encode deferrals of the form needs-a-decision-before-Story-X as blockers on Story X in sprint-status or story preconditions.
 origin: retro action item epic-1-retro-item-5-encode-deferrals-of-the-form-needs-a-dec
@@ -121,6 +124,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
 status: open
+decision: 2026-10-04 Add a preconditions convention to epics.md — Add a short 'Story preconditions' convention to the header of _bmad-output/planning-artifacts/epics.md stating that a deferral requiring a decision before Story X is recorded as a named precondition on Story X, and record the currently known preconditions (e.g. Story 3.4 on DW-4..DW-6). Planning-artifact edit only; no sprint-status or tooling change.
 decision: 2026-10-04 Add a preconditions convention to epics.md — Add a short 'Story preconditions' convention to the header of _bmad-output/planning-artifacts/epics.md stating that a deferral requiring a decision before Story X is recorded as a named precondition on Story X, and record the currently known preconditions (e.g. Story 3.4 on DW-4..DW-6). Planning-artifact edit only; no sprint-status or tooling change.
 
 ### DW-16: Split Epic 2 stories flagged oversized, or raise the per-story token cap deliberately; all ten Epic 1 stories exceeded it.
@@ -149,6 +153,7 @@ severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
 status: open
 decision: 2026-10-04 Backfill Story 1.10 Spec Change Log — Append dated entries to the Spec Change Log of _bmad-output/implementation-artifacts/spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md recording the AC5 bullet-marker interpretation and the stale Code Map statements (buildDocument/structure, rule-kind list), citing the Auto Run Result. Do not edit sprint-status.yaml; the operator sets epic-1 done with the sprint tooling.
+decision: 2026-10-04 Backfill Story 1.10 Spec Change Log — Append dated entries to the Spec Change Log of _bmad-output/implementation-artifacts/spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md recording the AC5 bullet-marker interpretation and the stale Code Map statements (buildDocument/structure, rule-kind list), citing the Auto Run Result. Do not edit sprint-status.yaml; the operator sets epic-1 done with the sprint tooling.
 
 ### DW-19: Log unmodellable lint failures with invocationId and error class only (F-6); defer to Epic 3 hardening.
 origin: retro action item epic-1-retro-item-9-log-unmodellable-lint-failures-with-invo
@@ -157,6 +162,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Dev agent; sprint-status status open)
 status: open
+decision: 2026-10-04 Build read-surface logging now — In the lint_document and lint_wiki shells (server/wikiLint/application/lintDocument.ts, lintWiki.ts, server/tools/wikiLint.ts), log each unmodellable failure that maps to the fixed message or a tool-execution error with only invocationId/requestId and the error class name, never message, stack, content or identifiers; add collocated tests asserting the exact log fields. Write-path rows are left to DW-9 after Story 2.7.
 decision: 2026-10-04 Build read-surface logging now — In the lint_document and lint_wiki shells (server/wikiLint/application/lintDocument.ts, lintWiki.ts, server/tools/wikiLint.ts), log each unmodellable failure that maps to the fixed message or a tool-execution error with only invocationId/requestId and the error class name, never message, stack, content or identifiers; add collocated tests asserting the exact log fields. Write-path rows are left to DW-9 after Story 2.7.
 
 ### DW-20: Meter documentStructure before materializing it, or bound the column read (F-7); fold into Story 3.3.
