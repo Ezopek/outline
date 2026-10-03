@@ -8,6 +8,15 @@
     "label": "Apply README and SPEC reconciliation",
     "resolution": ""
   },
+  "DW-14": {
+    "answered_at": "2026-10-04",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Add an acceptance criterion to Story 3.4 in _bmad-output/planning-artifacts/epics.md: the Gate 1 decision record states that no read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5 and DW-6 (event-loop blocking, CPU between deadline checks, pool-wait acquisition). Planning-artifact edit only.",
+    "key": "1",
+    "label": "Amend Story 3.4 ACs now",
+    "resolution": ""
+  },
   "DW-7": {
     "answered_at": "2026-10-04",
     "bundle_name": "",
