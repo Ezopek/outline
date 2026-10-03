@@ -1,6 +1,6 @@
 ---
 title: "Proposed Contract Amendment: Readability-Gated Finding Detail"
-status: proposed
+status: applied
 created: 2026-10-03
 updated: 2026-10-03
 source_prd: prd.md
