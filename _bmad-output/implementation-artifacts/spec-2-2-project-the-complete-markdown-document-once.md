@@ -2,8 +2,8 @@
 title: 'Story 2.2: Project the Complete Markdown Document Once'
 type: 'feature'
 created: '2026-10-03'
-status: 'done'
-baseline_revision: 'e46831d3402894bdd14630ff95fb809a74390286'
+status: done
+baseline_revision: 3b5332438bff2902590795b7d7ca821848f4b9db
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -135,6 +135,13 @@ deferred: []
 
 ## Spec Change Log
 
+### 2026-10-03 — Escalation resolution: DB verification gate
+
+- Trigger: the follow-up review could not run the DB-backed suite. Its first Verification step pointed at an agent-private memory that the reviewer could not read, `pg_isready` was not on `PATH`, the database was not running, and Vitest hung.
+- Amended: only the first Verification command. It now runs the repository's `scripts/test-db.sh ensure` (documented in `AGENTS.md`), so the session starts the test database itself.
+- Known-bad state avoided: treating a hung or interrupted Vitest run as a result, or finalizing from static checks alone.
+- KEEP: the intent contract and the follow-up review's patches (template title-before-body order and the added parity fixtures) are restored for review unchanged.
+
 ## Review Triage Log
 
 ### 2026-10-03 — Review pass
@@ -170,6 +177,67 @@ deferred: []
   - `[false]` `[reject]` intent: AC8 does not cover the handler path, including the `revisionCount` no-changes check — The unchanged-update check is P7 (AD-8, Story 2.3 AC8). AC8's comparison target, "the actual baseline writer", is exercised directly.
   - `[false]` `[reject]` intent: behavior beyond the ACs (`UnstagedMediaError`, the state guard, `abortMessage` placement) — Descriptive only. The media refusal is the fail-closed interim until Story 2.6 AC1/AC2, and `abortMessage` implements the AD-20 rule that AC7 names.
 
+### 2026-10-03 — Follow-up review pass
+
+- verdicts: 18 findings — high 0, medium 2, low 11, false 5, maybe-false 0
+- findings:
+  - `[low]` `[patch]` blind: template title and body substitutions ran in the reverse order from `documentCreator` — Moved title substitution before content substitution in `documentProjection.ts`; this matches the baseline order at a clock boundary.
+  - `[medium]` `[patch]` blind: a default-scope load can alias omitted Y.js state to null — Carried from the prior pass. The documented `includeState: true` precondition and residual risk remain; Story 2.3 must satisfy them.
+  - `[low]` `[reject]` blind: a caller can mutate the projection's copied Buffer — The contract explicitly exempts TypedArrays from freezing and requires a private copy from the input, which the implementation supplies. A getter that copies on each read adds complexity without an existing mutating caller.
+  - `[false]` `[reject]` blind: an empty update on null stored content would be persisted with a backfilled body — The baseline MCP handler rejects unchanged `revisionCount` as a no-change operation; no successful write of an empty update is compared with the projection. Story 2.3 owns that P7 check.
+  - `[low]` `[patch]` blind: create parity lacked explicit false and null values against a populated template — Added a fixture with `fullWidth: false`, `icon: null`, and `color: null`; the null values inherit template fields under the writer's `??` precedence.
+  - `[low]` `[patch]` blind: create parity lacked an empty explicit title against a titled template — The same fixture asserts the empty title is retained.
+  - `[low]` `[reject]` blind: no multi-block rich-content patch fixture — The adapter calls the same baseline `applyMarkdownToDocument` helper for every patch. Existing paragraph and table fixtures exercise that branch; another content shape does not exercise new projection logic.
+  - `[low]` `[patch]` blind: unpublish parity lacked a published child and an already-draft document — Added both fixtures through `updateWithParity`, including collection-structure comparison.
+  - `[false]` `[reject]` blind: separately comparing content and decoded state could miss a projection mismatch — Both values are compared with the actual writer result, whose state is the required parity target. This is the same claim refuted in the prior pass.
+  - `[false]` `[reject]` blind: the sprint board says done while this spec is in review — The orchestrator owns `sprint-status.yaml`, and its row is bookkeeping rather than verification. This run has not written or reverted it.
+  - `[low]` `[reject]` blind: the spec lacked observed verification results — The workflow explicitly rejects findings whose fix is to edit this build's spec; the Auto Run Result below records this pass's actual outcomes and blocker.
+  - `[medium]` `[patch]` edge: a default-scope load can drop Y.js state — Carried from the prior pass; same location, claim, precondition, and residual risk as the blind state-load row.
+  - `[low]` `[reject]` edge: the returned Buffer is writable — The caller receives a copy and the explicit TypedArray exception applies. No current consumer mutates it; a getter would add complexity for a future caller.
+  - `[low]` `[patch]` verification-gap: empty update text had no parity case — Added `empty replace` to the update parity modes.
+  - `[low]` `[patch]` verification-gap: clearing existing display fields had no parity case — Added a mode that clears populated icon and color and changes `fullWidth: true` to false.
+  - `[low]` `[patch]` verification-gap: explicit false did not override a true template fullWidth in a parity case — Added it to the populated-template fixture.
+  - `[false]` `[reject]` intent-alignment: the diff tests the adapter rather than a complete enforced MCP write — The intent contract explicitly assigns handler wiring, transaction, validation, and persistence to Story 2.3; this pass preserves that boundary.
+  - `[false]` `[reject]` intent-alignment: the diff contains a sprint-status change — That local change belongs to the orchestrator and was already present before this run; it is not a Story 2.2 edit.
+
+### 2026-10-03 — Review pass
+
+- verdicts: 17 findings — high 0, medium 0, low 6, false 11, maybe-false 0
+- findings:
+  - `[low]` `[patch]` blind: the shared update fixture's new `fullWidth: true` turns the `display fields` mode into a `fullWidth` no-op, so no update parity case changes `fullWidth` from false to true — Fixed: the base fixture now starts opposite to the mode's value (`fullWidth: input.fullWidth !== true`). `display fields` now covers false→true, `clear display fields` covers true→false, and the other modes keep a non-default true. A mutation that ignores an explicit `true` now fails 2 tests; before the fix it passed.
+  - `[false]` `[reject]` blind: "keeps an already-draft document unpublished" proves parity for a path the MCP handler refuses (`authorize(user, "unpublish")` denies drafts, `server/policies/document.ts:253-262`) — For this input the projection's output equals the writer's (`unpublishWithCtx` on a draft only saves), so nothing is wrong at the cited location. The projection contract takes writer-facing arguments (first pass). The refusal happens in the handler before P4, and the intent forbids wiring the projection into `server/tools/documents.ts`.
+  - `[false]` `[reject]` blind: the new create fixture sends `title: ""` and `icon`/`color: null`, which `optionalString()` (`server/tools/util.ts:63-68`) never produces. It also skips the reachable empty-title case, and `MarkdownCreateInput` is wider than the handler — Parity proves the projection equals `documentCreator` for these writer-facing arguments. The reachable MCP case (`""` becomes `undefined`, so the template title wins) is pinned by "projects the complete substituted template body…" (`input: { publish: true }` → `"Note by Ada Lovelace"`). A `null` from any caller gets `documentCreator`'s own `??` inheritance, so projection and writer cannot diverge.
+  - `[low]` `[reject]` blind: the title-before-body reorder is unverified, and clock-dependent template variables could make the linted title or body differ from the persisted one — The reorder makes the projection substitute in the same order as `documentCreator` (:202, then :206), so a clock tick can only produce a combination the writer could also produce. Telling the two orders apart needs a clock that advances between two substitutions inside one call, and `vi.setSystemTime` freezes it instead. Such a test is more than a direct correction for a cosmetic path. The cross-call skew claim is carried from the first pass's `[false]` edge row: Story 2.3 P7 stores `projection.title`/`content` as given (AC6).
+  - `[false]` `[reject]` blind: the unpublish-child test checks its structure claim only implicitly, never checks the parent node, and runs only without `state` — `expectParity` asserts that the child is absent from the stored structure after the writer ran. The `Document` `AfterCreate` hook (`server/models/Document.ts:519-538`) had inserted it under the parent beforehand. `ProjectedDocument` has no structure field, so removing the wrong node would be a regression in the baseline writer, and `git diff 4a5a616a… -- server/models` is empty. Prior `state` does not touch the structure, and the existing unpublish case covers both `state` variants.
+  - `[false]` `[reject]` edge: `publish: false` on a published document with active children projects `published: false`, while `unpublishWithCtx` throws — carried: AD-20 places the unpublish precondition in P7 (row 5), after the decision. The projection's unpublish branch still reads as the first pass described.
+  - `[false]` `[reject]` edge: the already-draft unpublish fixture covers a path that MCP authorization denies — Same refutation as the blind row: the output matches the writer, and the handler's refusal comes before P4, which this story does not wire.
+  - `[false]` `[reject]` edge: the create fixture's `title: ""`/`null` inputs cannot arrive through MCP, and the empty-title assertion contradicts MCP behavior — Same refutation as the blind row: parity with the writer-facing arguments holds, and the template-body fixture pins the reachable `undefined` title.
+  - `[false]` `[reject]` edge: `clear display fields` on a document whose display fields are already cleared projects success, while `update_document` returns a no-changes error — The no-change rejection is the handler's `revisionCount` check, which AD-8 places in P7 (Story 2.3 AC8). The projection is a pure function of the re-fetched state and the arguments, and an identical projection is the right input for that check.
+  - `[low]` `[patch]` edge: the `fullWidth: true` fixture turns `display fields` into a `fullWidth` no-op — Grouped with the first blind row; same fix.
+  - `[false]` `[reject]` edge: nothing asserts the child's place in the structure before the unpublish, so the absence check would pass even if the child had never been inserted — The `AfterCreate` hook `addDocumentToCollectionStructure` (`server/models/Document.ts:519-538`) inserts every published document that has a collection under its parent at creation. If that hook regressed, every published-update parity case that expects presence would also fail.
+  - `[low]` `[patch]` verification-gap (other): the update parity modes no longer change `fullWidth` from false to true — Grouped with the first blind row; same fix, confirmed by the mutation run.
+  - `[false]` `[reject]` intent: the new create fixture uses inputs MCP cannot send (R1/R2 divergence) — Descriptive. Same refutation as the blind row: the projection contract is writer-facing, and the reachable case is pinned.
+  - `[false]` `[reject]` intent: the already-draft unpublish fixture cannot be reached through MCP — Descriptive. Same refutation as the blind row.
+  - `[low]` `[reject]` intent: no test can tell the two substitution orders apart — Same as the blind reorder row: it needs a clock that advances inside one call, which is a test beyond a direct correction for a cosmetic path.
+  - `[low]` `[patch]` intent: the update coverage direction for `fullWidth` shifted — Grouped with the first blind row; same fix.
+  - `[false]` `[reject]` intent: the working tree carries a `sprint-status.yaml` change that the "Never" list names — carried: the change belongs to the orchestrator and was present before this run. This run neither wrote nor reverted it.
+
+### 2026-10-03 — Follow-up review pass
+
+- verdicts: 11 findings — high 0, medium 0, low 3, false 8, maybe-false 0
+- findings:
+  - `[low]` `[reject]` blind: `## Auto Run Result` is absent although earlier review rows refer to it — The section is written during this pass's required finalization below; a finding whose fix edits this spec is rejected.
+  - `[false]` `[reject]` blind: the sprint row says `done` while this spec was temporarily `in-review` — Carried: the row is orchestrator bookkeeping, not verification or a defect; this run did not change it.
+  - `[low]` `[reject]` blind: the template title-before-body change lacks a clock-boundary order test — Carried: testing a tick between helper calls needs a controlled internal clock transition; the implementation now follows `documentCreator`'s order, and a test is more than a direct correction for this edge case.
+  - `[false]` `[reject]` blind: the create fixture's empty title and null display fields cannot be sent through MCP — Carried: this tests writer-facing parity; the reachable undefined-title template case is also covered.
+  - `[false]` `[reject]` blind: the already-draft unpublish fixture bypasses MCP authorization — Carried: it tests parity with `unpublishWithCtx`; handler authorization is outside this adapter's contract.
+  - `[false]` `[reject]` blind: the Y.js default-scope state risk was incorrectly presented as fixed — The earlier log explicitly says the patch documents the `includeState: true` precondition and carries the runtime integration risk to Story 2.3; it does not claim the loader was changed.
+  - `[low]` `[reject]` verification-gap: a clock-boundary title/body order assertion is missing — Carried: same location and claim as the blind order row and the preceding review's order-test row; the helper call order matches the baseline writer.
+  - `[false]` `[reject]` intent: the tests do not exercise a complete enforced MCP write — Carried: the intent assigns handler wiring, transaction, validation, and persistence to Story 2.3; this story proves adapter parity with the baseline writers.
+  - `[false]` `[reject]` intent: the new create fixture includes MCP-unreachable values — Carried: the writer-facing parity contract permits them, and a separate template fixture covers the reachable case.
+  - `[false]` `[reject]` intent: the already-draft unpublish fixture is MCP-unreachable — Carried: the handler rejects it before P4, while the fixture tests the underlying writer's behavior.
+  - `[false]` `[reject]` intent: the diff includes a sprint-status change despite this story's boundary — Carried: the change was staged before this run and belongs to the orchestrator; this run neither wrote nor reverted it.
+
 ## Design Notes
 
 **Why P2 is thin for updates.** Baseline `applyMarkdownToDocument` fuses the Markdown parse with the content-dependent merge. Splitting it would mean copying baseline code and losing parity-by-construction. So the update parse runs in P4, which AD-8 permits, since it restricts only what may run outside. P2 for Markdown makes no stored-state assumption, so there is nothing to revalidate inside until Story 2.6 adds staging.
@@ -189,7 +257,7 @@ DocumentHelper.applyMarkdownToDocument(scratch, input.text, input.editMode, inpu
 ## Verification
 
 **Commands:**
-- Resume the scratch PostgreSQL per memory `local-test-postgres` -- expected: `pg_isready -h 127.0.0.1 -p 5432` accepts connections.
+- `scripts/test-db.sh ensure` -- expected: exit 0, with the test PostgreSQL from `.env.test` reachable and migrated. A non-zero exit blocks the story before any DB-backed suite runs, because Vitest hangs rather than fails without the database.
 - `TZ=UTC node_modules/.bin/vitest run --project server server/wikiLint server/tools/documents.enforcement.test.ts` -- expected: all pass.
 - `corepack yarn tsc` -- expected: exit 0.
 - `node_modules/.bin/oxlint --type-aware` and `node_modules/.bin/oxfmt --check` on the changed files -- expected: clean.
@@ -202,43 +270,14 @@ DocumentHelper.applyMarkdownToDocument(scratch, input.text, input.editMode, inpu
 
 ## Auto Run Result
 
-Status: done
+Status: done.
 
-**Summary.** Story 2.2 adds one side-effect-free, deep-frozen `ProjectedDocument` for enforced MCP Markdown writes. P2 preparation (`prepareMarkdownCreate`/`prepareMarkdownUpdate`) is input-only: it parses create text and refuses update media the baseline would import, until Story 2.6. P4 projection (`projectMarkdownCreate`/`projectMarkdownUpdate`) reproduces the exact `v1.10.1` writer semantics: templates, explicit field precedence, `replace`/`append`/`prepend`/`patch` through the baseline helper on a scratch copy, publish/unpublish, collection, and parent. It issues no query and mutates no input instance. The AD-20 row 3/5 message rule is `abortMessage`. The MCP handlers are unchanged: wiring, the transaction, persistence, and the summary belong to Stories 2.3 and 2.7, and valid enforced writes still fail closed.
+The adapter projects the complete Markdown create/update result from prepared input and the current document state, matching the v1.10.1 writers without side effects. The create projection substitutes the template title before its body. The parity tests cover the added publication, display-field, empty-input, and state cases. `abortMessage` applies the stable-id error rule. MCP transaction and persistence integration remains assigned to Story 2.3.
 
-**Files changed.**
-- `server/wikiLint/adapters/documentProjection.ts` (new) -- the projection types, P2/P4 functions, `UnstagedMediaError`, and the deep freeze.
-- `server/wikiLint/adapters/documentProjection.test.ts` (new, DB-backed, 43 tests). These are parity tests against `documentCreator`, `documentUpdater`, and `unpublishWithCtx`. They cover every I/O-matrix row, including the `v1.10.1` container patch that drops later table rows. They also hold the no-effect proof (no SQL, transaction, Event, Attachment, or storage write), the immutability and re-fetched-state cases, and the failure and contract-misuse cases.
-- `server/wikiLint/application/writeDecision.ts` -- `abortMessage(error)`: the message of an `http-errors` error with a non-empty string `id`, else `OPERATION_FAILED`.
-- `server/wikiLint/application/writeDecision.test.ts` -- `abortMessage` cases.
-- This spec.
+Files in the reviewed change: `server/wikiLint/adapters/documentProjection.ts` (projection and writer-order parity), `server/wikiLint/adapters/documentProjection.test.ts` (writer parity and no-effect coverage), and this spec (review record). The staged `sprint-status.yaml` change predates this run and is orchestrator-owned.
 
-**Review.** 28 findings: high 0, medium 3 (one grouped entry), low 13, false 12, maybe-false 0.
-- Patched (all test-only, except a JSDoc and comment correction):
-  - the state-guard precondition text (medium; three findings grouped);
-  - storage spies in `withoutEffect`;
-  - null-`content` parity fixtures;
-  - contract-misuse tests under `withoutEffect`;
-  - the missing update and create parity fixtures (draft without publish, nested template draft publish, republish, unpublish with state, display fields, empty text with a template);
-  - the no-text clone assertion;
-  - extra `abortMessage` cases.
-- Rejected:
-  - shallow `Readonly` typing (low; runtime freeze fails loudly, fix beyond a direct correction);
-  - clock-dependent template variables (low; same helpers as `{author}`, fake clocks add flakiness);
-  - `UnstagedMediaError` without a stable id (low; the fix edits this spec's matrix, and it is an interim);
-  - every `false` row, with its refutation in the triage log.
-- Deferred: none.
-- Patched entries by verdict: high 0, medium 1, low 10. Follow-up review recommendation: `false`. Only one medium entry was patched, and it changed documentation only.
+Review: 11 findings; 0 patches applied, 0 deferred items, 3 low findings rejected for the recorded scope or test-cost reasons, and 8 false findings rejected with the refutations above. Follow-up review recommended: false (0 high and 0 medium patches).
 
-**Verification.**
-- The scratch PostgreSQL 14 was resumed (`pg_isready` accepting).
-- `TZ=UTC node_modules/.bin/vitest run --project server server/wikiLint server/tools/documents.enforcement.test.ts` passed: 25 files and 1055/1055 tests before the review patches, then 1068/1068 after.
-- `corepack yarn tsc`, `oxlint --type-aware`, and `oxfmt --check` on the four changed files exited 0.
-- `git diff 4a5a616a21be800257dc11cef4263d0dd0412156 -- server/models server/commands shared/utils server/editor` is empty, so the baseline writers and helpers are unchanged and the post-`v1.10.1` fix `c17d2c52b` is not imported.
-- Four temporary mutations, each restored and checked with `cmp`, failed `documentProjection.test.ts`: skip the template clone (2 failed), drop the update title `.trim()` (3), project from the prepare-time document (1), and let unpublish apply `text` (1).
-- After the review patches, removing the no-text `structuredClone` failed 10 tests (implementer run).
+Verification on 2026-10-03: `scripts/test-db.sh ensure` exited 0; `TZ=UTC node_modules/.bin/vitest run --project server server/wikiLint server/tools/documents.enforcement.test.ts` passed 25 files and 1075 tests; `corepack yarn tsc`, type-aware `oxlint`, and `oxfmt --check` exited 0. `git diff 4a5a616a21be800257dc11cef4263d0dd0412156 -- server/models server/commands shared/utils server/editor` was empty. The listed temporary mutation checks were established in the earlier review pass and were not repeated because this pass made no implementation patch.
 
-**Residual risks.**
-- **`includeState` load in Story 2.3.** Story 2.3's P3 re-fetch must load the document with `includeState: true`. A default-scope load aliases `state` to `null` whenever `content` is set. The projection cannot detect that, and would silently omit the collaborative-state update. The JSDoc now states this precondition.
-- **Interim media refusal.** Update text carrying `data:` images is refused (row 3, fixed message) until Story 2.6 stages media.
-- **Wiring left to later stories.** The AC1 call-site clause, AC3, AC5, AC6, and AC7's rollback and summary are proven only once Stories 2.3 and 2.7 wire the projection in. Under the project's cross-story convention, those stories own the integrated fixtures.
+Residual risk: a default-scope load can alias omitted Y.js state to `null`, so Story 2.3 must load with `includeState: true` and verify that call path. The projected `state` is a private copy, but TypedArrays remain writable by callers under the explicit contract exception. The adapter is not yet wired into MCP writes; Story 2.3 owns that integration.

@@ -181,6 +181,11 @@ export async function projectMarkdownCreate(args: {
 }): Promise<ProjectedDocument> {
   const { prepared, documentId, collectionId, actor, template } = args;
   const { input } = prepared;
+  const title =
+    input.title ??
+    (template
+      ? TextHelper.replaceTemplateVariables(template.title, actor)
+      : "");
   const content =
     prepared.content ??
     (template
@@ -189,11 +194,6 @@ export async function projectMarkdownCreate(args: {
           actor
         )
       : ProsemirrorHelper.toProsemirror("").toJSON());
-  const title =
-    input.title ??
-    (template
-      ? TextHelper.replaceTemplateVariables(template.title, actor)
-      : "");
 
   return deepFreeze({
     documentId,

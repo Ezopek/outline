@@ -500,6 +500,37 @@ describe("projectMarkdownCreate", () => {
     });
   });
 
+  it("matches empty and false create values against a populated template", async () => {
+    const { team, actor, collection } = await fixture();
+    const template = await buildTemplate({
+      teamId: team.id,
+      userId: actor.id,
+      collectionId: collection.id,
+      title: "Template title",
+      icon: "📝",
+      color: "#00FF00",
+      fullWidth: true,
+    });
+    const projection = await createWithParity({
+      actor,
+      collectionId: collection.id,
+      input: {
+        title: "",
+        icon: null,
+        color: null,
+        fullWidth: false,
+        publish: true,
+      },
+      template,
+    });
+    expect(projection).toMatchObject({
+      title: "",
+      icon: "📝",
+      color: "#00FF00",
+      fullWidth: false,
+    });
+  });
+
   it("places a published child under its parent", async () => {
     const { team, actor, collection } = await fixture();
     const parent = await buildDocument({
@@ -524,6 +555,7 @@ describe("projectMarkdownCreate", () => {
 describe("projectMarkdownUpdate", () => {
   const modes: [string, MarkdownUpdateInput][] = [
     ["replace", { text: "Replaced body\n\n- item" }],
+    ["empty replace", { text: "" }],
     [
       "append",
       { text: " and more\n\n## Added", editMode: TextEditMode.Append },
@@ -540,6 +572,7 @@ describe("projectMarkdownUpdate", () => {
     ["title-only", { title: "  Spaced title  " }],
     ["icon-only", { icon: "🎉" }],
     ["display fields", { icon: "🎉", color: "#123456", fullWidth: true }],
+    ["clear display fields", { icon: null, color: null, fullWidth: false }],
   ];
 
   describe.each([false, true])("with prior state: %s", (withState) => {
@@ -552,6 +585,8 @@ describe("projectMarkdownUpdate", () => {
         text: BASE_BODY,
         icon: "📌",
         color: "#0000FF",
+        // Opposite to a mode's fullWidth, so each mode sending it changes it.
+        fullWidth: input.fullWidth !== true,
       });
       if (withState) {
         await giveState(document);
@@ -691,6 +726,49 @@ describe("projectMarkdownUpdate", () => {
       expect(projection.state === null).toBe(!withState);
     }
   );
+
+  it("removes a published child from its parent's structure on unpublish", async () => {
+    const { team, actor, collection } = await fixture();
+    const parent = await buildDocument({
+      teamId: team.id,
+      userId: actor.id,
+      collectionId: collection.id,
+    });
+    const child = await buildDocument({
+      teamId: team.id,
+      userId: actor.id,
+      collectionId: collection.id,
+      parentDocumentId: parent.id,
+      text: BASE_BODY,
+    });
+    const projection = await updateWithParity({
+      actor,
+      documentId: child.id,
+      collectionId: collection.id,
+      input: { publish: false },
+    });
+    expect(projection).toMatchObject({
+      published: false,
+      parentDocumentId: parent.id,
+    });
+  });
+
+  it("keeps an already-draft document unpublished", async () => {
+    const { team, actor, collection } = await fixture();
+    const document = await buildDraftDocument({
+      teamId: team.id,
+      userId: actor.id,
+      collectionId: collection.id,
+      text: BASE_BODY,
+    });
+    const projection = await updateWithParity({
+      actor,
+      documentId: document.id,
+      collectionId: collection.id,
+      input: { publish: false, title: "Ignored" },
+    });
+    expect(projection.published).toBe(false);
+  });
 
   it.each<[string, MarkdownUpdateInput]>([
     ["title-only", { title: "Backfilled" }],
