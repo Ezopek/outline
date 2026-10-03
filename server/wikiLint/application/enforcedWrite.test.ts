@@ -910,6 +910,35 @@ describe("valid writes", () => {
     }
   });
 
+  it("starts the post-commit assembly deadline once the commit is established", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const queries = interceptQueries();
+    let enforcement: unknown;
+    let committedAt = Number.NaN;
+    queries.use(async (sql, args, next) => {
+      const { transaction } = (args[1] ?? {}) as { transaction?: unknown };
+      if (sql.startsWith("SET LOCAL lock_timeout")) {
+        enforcement = transaction;
+      }
+      const result = await next();
+      if (sql === "COMMIT;" && transaction === enforcement) {
+        committedAt = performance.now();
+      }
+      return result;
+    });
+
+    const { outcome } = await committed(
+      await update(ctx, classification, { id: document.id, title: "Renamed" })
+    );
+
+    expect(outcome.assembly.startedAt).toBeGreaterThanOrEqual(committedAt);
+    expect(outcome.assembly.remainingMs()).toBeLessThanOrEqual(
+      POST_COMMIT_ASSEMBLY_BOUND_MS
+    );
+  });
+
   it("commits without any document rule as validated with empty arrays", async () => {
     const { user, collection, ctx } = await fixture();
     const document = await documentOf(user, collection.id, INVALID_BODY);

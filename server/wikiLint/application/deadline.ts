@@ -40,10 +40,37 @@ export const WRITE_PERSISTENCE_BUDGET_MS = 9000;
 export const COMMIT_PROBE_BOUND_MS = 2000;
 
 /**
- * The AD-11 bound, in milliseconds, of the post-commit callbacks of an
- * enforced write.
+ * The AD-11 bound, in milliseconds, of the whole post-commit assembly of an
+ * enforced write, measured from the established commit: the wait for its
+ * buffered callbacks plus its response enrichments, in total.
  */
 export const POST_COMMIT_ASSEMBLY_BOUND_MS = 2000;
+
+/**
+ * Settles a promise or a timer, whichever is first.
+ *
+ * @param promise - the promise.
+ * @param timeoutMs - the timer, in milliseconds.
+ * @param onTimeout - the value on expiry.
+ * @returns the promise's value, or `onTimeout` on expiry.
+ */
+export async function within<T, U>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  onTimeout: U
+): Promise<T | U> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<U>((resolve) => {
+        timer = setTimeout(() => resolve(onTimeout), Math.max(0, timeoutMs));
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Thrown when the remaining time is below the floor, so a database batch is

@@ -47,7 +47,7 @@ import type { APIContext } from "@server/types";
 import { TextEditMode } from "@shared/types";
 import type { Filter } from "@shared/helpers/FilterHelper";
 import SearchProviderManager from "@server/utils/SearchProviderManager";
-import { monotonicClock } from "@server/wikiLint/application/deadline";
+import { monotonicClock, within } from "@server/wikiLint/application/deadline";
 import type { EnforcedWriteOutcome } from "@server/wikiLint/application/enforcedWrite";
 import {
   enforceMarkdownCreate,
@@ -137,9 +137,13 @@ async function guarded<T>(step: () => Promise<T> | T): Promise<T | undefined> {
 /**
  * Maps the AD-20 row of an enforced Markdown write to its tool result. A
  * committed write returns the baseline success object for its mode with
- * `validation` appended as the last key of the first block; each enrichment
- * is guarded, and an identity that cannot be assembled falls back to
- * `{ success: true, id, validation }`.
+ * `validation` appended as the last key of the first block. Its optional
+ * enrichments, the breadcrumb, the patch's share URL, and the patch's
+ * presented document, start together, each guarded and bounded by what
+ * remains of the post-commit assembly deadline; one that fails or expires
+ * is omitted. An identity that cannot be assembled falls back to
+ * `{ success: true, id, validation }`, keeping a presented patch echo, and
+ * any other failure returns that fallback alone, never an `isError` result.
  *
  * @param outcome - the row.
  * @param user - the acting user.
@@ -177,60 +181,74 @@ async function enforcedWriteResult(
     }
   }
 
-  const { document, validation } = outcome;
-  const fallback = () =>
-    success({ success: true, id: document.id, validation });
-  const breadcrumb = await guarded(() => getDocumentBreadcrumb(document, user));
+  const { document, validation, assembly } = outcome;
+  const fallback = { success: true, id: document.id, validation };
+  try {
+    const optional = async <T>(step: () => Promise<T> | T) => {
+      if (assembly.expired()) {
+        return undefined;
+      }
+      const result = await within(
+        guarded(step),
+        assembly.remainingMs(),
+        undefined
+      );
+      return assembly.expired() ? undefined : result;
+    };
+    const [breadcrumb, shareUrl, presented] = await Promise.all([
+      optional(() => getDocumentBreadcrumb(document, user)),
+      patch
+        ? optional(() => getPublicShareUrlForDocument(user.team, document.id))
+        : undefined,
+      patch
+        ? optional(() =>
+            presentDocument(document, {
+              includeData: false,
+              includeText: true,
+              includeUpdatedAt: true,
+            })
+          )
+        : undefined,
+    ]);
 
-  if (!patch) {
-    const identity = await guarded(() =>
-      pathToUrl(user.team, {
+    if (!patch) {
+      const identity = pathToUrl(user.team, {
         id: document.id,
         title: document.title,
         url: document.url,
-      })
-    );
-    return identity
-      ? success({
-          success: true,
-          ...identity,
-          ...(breadcrumb !== undefined && { breadcrumb }),
-          validation,
-        })
-      : fallback();
-  }
-
-  const [presented, shareUrl] = await Promise.all([
-    guarded(async () => {
-      const { text, ...attributes } = await presentDocument(document, {
-        includeData: false,
-        includeText: true,
-        includeUpdatedAt: true,
       });
-      return { text, document: pathToUrl(user.team, attributes) };
-    }),
-    guarded(() => getPublicShareUrlForDocument(user.team, document.id)),
-  ]);
-  if (!presented) {
-    return fallback();
+      return success({
+        success: true,
+        ...identity,
+        ...(breadcrumb !== undefined && { breadcrumb }),
+        validation,
+      });
+    }
+
+    if (presented === undefined) {
+      return success(fallback);
+    }
+    const { text, ...attributes } = presented;
+    let first: Record<string, unknown> = fallback;
+    try {
+      first = {
+        document: pathToUrl(user.team, attributes),
+        ...(breadcrumb !== undefined && { breadcrumb }),
+        ...(shareUrl !== undefined && { shareUrl }),
+        validation,
+      };
+    } catch {
+      // The identity cannot be assembled; the presented echo is still kept.
+    }
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify(first) },
+        { type: "text" as const, text: typeof text === "string" ? text : "" },
+      ],
+    } satisfies CallToolResult;
+  } catch {
+    return success(fallback);
   }
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({
-          document: presented.document,
-          ...(breadcrumb !== undefined && { breadcrumb }),
-          ...(shareUrl !== undefined && { shareUrl }),
-          validation,
-        }),
-      },
-      {
-        type: "text" as const,
-        text: typeof presented.text === "string" ? presented.text : "",
-      },
-    ],
-  } satisfies CallToolResult;
 }
 
 /** The `create_document` arguments P0 reads. */

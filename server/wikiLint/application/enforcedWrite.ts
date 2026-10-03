@@ -84,13 +84,21 @@ export type EnforcedClassification = Extract<
 /**
  * The AD-20 row an enforced Markdown write ends in: 2 conflict, 3 aborted
  * before the decision, 4 rejected, 5 aborted after the decision, 6
- * committed, or 7 unestablished.
+ * committed, or 7 unestablished. A committed write carries its AD-11
+ * post-commit assembly deadline, started once the commit was established;
+ * the callback wait has already used part of it, and the response
+ * enrichments get only what remains.
  */
 export type EnforcedWriteOutcome =
   | { row: 2 }
   | { row: 3 | 5; message: string }
   | { row: 4; validation: WriteValidation }
-  | { row: 6; document: Document; validation: WriteValidation }
+  | {
+      row: 6;
+      document: Document;
+      validation: WriteValidation;
+      assembly: Deadline;
+    }
   | { row: 7 };
 
 /** The measures of a projected document that the decision reads. */
@@ -498,14 +506,19 @@ async function runAttempt(
           : { row: 7 };
       }
     }
-    await enforcement.runCallbacks(POST_COMMIT_ASSEMBLY_BOUND_MS, (reason) =>
+    // The callback wait and the response enrichments share one deadline.
+    const assembly = new Deadline(
+      POST_COMMIT_ASSEMBLY_BOUND_MS,
+      monotonicClock
+    );
+    await enforcement.runCallbacks(assembly.remainingMs(), (reason) =>
       Logger.warn("Enforced write post-commit callback failed", {
         requestId,
         invocationId,
         reason,
       })
     );
-    return { row: 6, document, validation };
+    return { row: 6, document, validation, assembly };
   } finally {
     ctx.state.transaction = unbound.state;
     ctx.context.transaction = unbound.context;

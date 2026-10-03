@@ -7,6 +7,7 @@ import {
   DeadlineFloorError,
   SET_LOCAL_FLOOR_MS,
   monotonicClock,
+  within,
 } from "../application/deadline";
 
 /** A Sequelize transaction with the internals the buffering relies on. */
@@ -136,32 +137,6 @@ export function installCorrelationHook(): void {
     }
   );
   correlationHookInstalled = true;
-}
-
-/**
- * Settles a promise or a timer, whichever is first.
- *
- * @param promise - the promise.
- * @param timeoutMs - the timer, in milliseconds.
- * @param onTimeout - the value on expiry.
- * @returns the promise's value, or `onTimeout` on expiry.
- */
-async function within<T, U>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  onTimeout: U
-): Promise<T | U> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<U>((resolve) => {
-        timer = setTimeout(() => resolve(onTimeout), Math.max(0, timeoutMs));
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 /**
