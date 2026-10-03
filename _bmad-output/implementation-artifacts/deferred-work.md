@@ -121,6 +121,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
 status: open
+decision: 2026-10-04 Add a preconditions convention to epics.md — Add a short 'Story preconditions' convention to the header of _bmad-output/planning-artifacts/epics.md stating that a deferral requiring a decision before Story X is recorded as a named precondition on Story X, and record the currently known preconditions (e.g. Story 3.4 on DW-4..DW-6). Planning-artifact edit only; no sprint-status or tooling change.
 
 ### DW-16: Split Epic 2 stories flagged oversized, or raise the per-story token cap deliberately; all ten Epic 1 stories exceeded it.
 origin: retro action item epic-1-retro-item-6-split-epic-2-stories-flagged-oversized-o
