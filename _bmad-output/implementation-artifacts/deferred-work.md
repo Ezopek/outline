@@ -74,3 +74,83 @@ location: server/wikiLint/adapters/documentProjection.ts (prepareHtmlCreate)
 source_spec: `spec-2-5-carry-enforced-html-projection-through-a-distinct-trusted-wo.md`
 reason: The baseline DocumentImportTask persists the same text/state split, and the projection parity tests prove the enforced path matches it (documentProjection.test.ts "HTML creates"). Unverified: whether any DocumentConverter output loses lint-relevant structure (headings, metadata lines, links, discouraged structures) in serializer.serialize -> toProsemirror. Settle it with a fixture sweep across the converter's node and mark coverage that compares yDocToProsemirrorJSON(state) with the validated content. If lint-relevant divergence exists, an architecture decision is needed between failing closed and deriving state from the validated content (the latter departs from exact baseline semantics).
 status: open
+
+### DW-11: Decide how a Finding identifies the missing configured item (e.g. readability-gated detail) and amend AD-12 before Story 2.1 starts; then re-run the Story 1.10 repair loop without supplied conventions (DW-2, DW-3, DW-8).
+origin: retro action item epic-1-retro-item-1-decide-how-a-finding-identifies-the-miss
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator with the architect; sprint-status status open)
+status: open
+
+### DW-12: Change the README visible-metadata example to `* ` bullets and record the AC5 interpretation in the binding SPEC (DW-7).
+origin: retro action item epic-1-retro-item-2-change-the-readme-visible-metadata-examp
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
+status: open
+
+### DW-13: In readWikiSnapshot, re-check collection read inside the snapshot for a collection scope and fail generically when it no longer holds; add a documents-only regression test (F-5).
+origin: retro action item epic-1-retro-item-3-in-readwikisnapshot-re-check-collection
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Dev agent; sprint-status status open)
+status: open
+
+### DW-14: Record in the Gate 1 plan (Story 3.4) that no read-only production rollout happens before Story 3.3 closes DW-4, DW-5 and DW-6.
+origin: retro action item epic-1-retro-item-4-record-in-the-gate-1-plan-story-3-4-that
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
+status: open
+
+### DW-15: Encode deferrals of the form needs-a-decision-before-Story-X as blockers on Story X in sprint-status or story preconditions.
+origin: retro action item epic-1-retro-item-5-encode-deferrals-of-the-form-needs-a-dec
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
+status: open
+
+### DW-16: Split Epic 2 stories flagged oversized, or raise the per-story token cap deliberately; all ten Epic 1 stories exceeded it.
+origin: retro action item epic-1-retro-item-6-split-epic-2-stories-flagged-oversized-o
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
+status: open
+
+### DW-17: Choose an independent review model for the atomicity-critical Epic 2 stories (2.3, 2.5, 2.6).
+origin: retro action item epic-1-retro-item-7-choose-an-independent-review-model-for-t
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
+status: open
+
+### DW-18: Sync tracking: set epic-1 to done (script has no flag for it) and write the AC5 and Code Map deviations into Story 1.10 Spec Change Log.
+origin: retro action item epic-1-retro-item-8-sync-tracking-set-epic-1-to-done-script
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
+status: open
+
+### DW-19: Log unmodellable lint failures with invocationId and error class only (F-6); defer to Epic 3 hardening.
+origin: retro action item epic-1-retro-item-9-log-unmodellable-lint-failures-with-invo
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Dev agent; sprint-status status open)
+status: open
+
+### DW-20: Meter documentStructure before materializing it, or bound the column read (F-7); fold into Story 3.3.
+origin: retro action item epic-1-retro-item-10-meter-documentstructure-before-materiali
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 1; owner Dev agent; sprint-status status open)
+status: open
