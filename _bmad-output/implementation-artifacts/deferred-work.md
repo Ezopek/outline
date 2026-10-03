@@ -157,6 +157,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Dev agent; sprint-status status open)
 status: open
+decision: 2026-10-04 Build read-surface logging now — In the lint_document and lint_wiki shells (server/wikiLint/application/lintDocument.ts, lintWiki.ts, server/tools/wikiLint.ts), log each unmodellable failure that maps to the fixed message or a tool-execution error with only invocationId/requestId and the error class name, never message, stack, content or identifiers; add collocated tests asserting the exact log fields. Write-path rows are left to DW-9 after Story 2.7.
 
 ### DW-20: Meter documentStructure before materializing it, or bound the column read (F-7); fold into Story 3.3.
 origin: retro action item epic-1-retro-item-10-meter-documentstructure-before-materiali
