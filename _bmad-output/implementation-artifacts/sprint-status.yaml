@@ -39,7 +39,7 @@
 #   2.4 AC3 -> 2.5.
 # - This file tracks planning state only; it does not authorize implementation.
 generated: 10-02-2026 01:33
-last_updated: 10-02-2026 01:34
+last_updated: 10-03-2026 03:26
 project: outline
 project_key: NOKEY
 tracking_system: file-system
@@ -56,7 +56,7 @@ development_status:
   1-8-record-minimized-and-failure-isolated-read-only-audit-eviden: done
   1-9-sanitize-user-controlled-editor-urls: done
   1-10-accept-the-complete-read-only-lint-and-repair-loop: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
   epic-2: backlog
   2-1-classify-enforced-writes-and-decide-from-post-operation-poli: backlog
@@ -74,3 +74,76 @@ development_status:
   3-3-produce-reproducible-performance-growth-and-constant-derivat: backlog
   3-4-assemble-the-gate-1-evidence-index-and-decision-record: backlog
   epic-3-retrospective: optional
+action_items:
+  - id: "epic-1-retro-item-1-decide-how-a-finding-identifies-the-miss"
+    epic: 1
+    action: "Decide how a Finding identifies the missing configured item (e.g. readability-gated
+      detail) and amend AD-12 before Story 2.1 starts; then re-run the Story 1.10
+      repair loop without supplied conventions (DW-2, DW-3, DW-8)."
+    owner: "Operator with the architect"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-1-retro-item-2-change-the-readme-visible-metadata-examp"
+    epic: 1
+    action: "Change the README visible-metadata example to `* ` bullets and record
+      the AC5 interpretation in the binding SPEC (DW-7)."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-1-retro-item-3-in-readwikisnapshot-re-check-collection"
+    epic: 1
+    action: "In readWikiSnapshot, re-check collection read inside the snapshot for
+      a collection scope and fail generically when it no longer holds; add a documents-only
+      regression test (F-5)."
+    owner: "Dev agent"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-1-retro-item-4-record-in-the-gate-1-plan-story-3-4-that"
+    epic: 1
+    action: "Record in the Gate 1 plan (Story 3.4) that no read-only production rollout
+      happens before Story 3.3 closes DW-4, DW-5 and DW-6."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-1-retro-item-5-encode-deferrals-of-the-form-needs-a-dec"
+    epic: 1
+    action: "Encode deferrals of the form needs-a-decision-before-Story-X as blockers
+      on Story X in sprint-status or story preconditions."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-1-retro-item-6-split-epic-2-stories-flagged-oversized-o"
+    epic: 1
+    action: "Split Epic 2 stories flagged oversized, or raise the per-story token
+      cap deliberately; all ten Epic 1 stories exceeded it."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-1-retro-item-7-choose-an-independent-review-model-for-t"
+    epic: 1
+    action: "Choose an independent review model for the atomicity-critical Epic 2
+      stories (2.3, 2.5, 2.6)."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-1-retro-item-8-sync-tracking-set-epic-1-to-done-script"
+    epic: 1
+    action: "Sync tracking: set epic-1 to done (script has no flag for it) and write
+      the AC5 and Code Map deviations into Story 1.10 Spec Change Log."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-1-retro-item-9-log-unmodellable-lint-failures-with-invo"
+    epic: 1
+    action: "Log unmodellable lint failures with invocationId and error class only
+      (F-6); defer to Epic 3 hardening."
+    owner: "Dev agent"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-1-retro-item-10-meter-documentstructure-before-materiali"
+    epic: 1
+    action: "Meter documentStructure before materializing it, or bound the column
+      read (F-7); fold into Story 3.3."
+    owner: "Dev agent"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
