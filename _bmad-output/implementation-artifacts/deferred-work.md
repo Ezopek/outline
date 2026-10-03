@@ -11,7 +11,8 @@ location: server/wikiLint/core/registry.ts (issue messages); Architecture Spine 
 source_spec: `spec-1-1-establish-the-deterministic-result-contract-and-closed-rule.md`
 severity: medium
 reason: AD-12 fixes Finding to { code, severity, message, location } with a document location; the registry message is fixed and generic for non-disclosure (NFR-11, policy class only for document-only readers); the rule-local ordinal is not part of the output. Identifying the missing item needs an architecture decision (for example readability-gated detail) before the Story 1.10 lint-repair-relint acceptance.
-status: open
+status: done 2026-10-04
+resolution: already resolved: Story 2.0 (commit 1cac931a9, AD-12 amendment 2e50ee933): readability-gated FindingDetail {kind:"section",heading,headingLevel} / {kind:"metadata_field",field} in server/wikiLint/core/contracts.ts:92 and registry.ts:573-646, emitted per configured item in core/documentRules.ts:30,393-412 and gated by detailVisible in application/lintDocument.ts:307
 
 ### DW-3: Repeated GLOBAL_INDEX_LINK_MISSING Findings are byte-identical, so an agent cannot tell which configured global index to link, or which collection policy required it when several collections in the
 origin: spec-deferred 17d969ca65d2
@@ -19,7 +20,8 @@ location: server/wikiLint/core/graphRules.ts:182 (globalIndexLinks emit); Archit
 source_spec: `spec-1-6-detect-authorized-hierarchy-and-global-index-defects.md`
 severity: medium
 reason: The AD-12 Finding is fixed to { code, severity, message, location }. The registry message is generic, and the relationship location names only the surface document. Every missing index of one surface, and every collection policy that shares that surface and index, therefore yields an identical Error that differs only in sort position. The configured index IDs are server-side configuration, which the agent never sees. This is the same root cause as DW-2: identifying the missing item needs an architecture decision before the Story 1.10 lint-repair-relint acceptance. Raised by the Blind Hunter and the Edge Case Hunter in the 2026-10-02 review pass.
-status: open
+status: done 2026-10-04
+resolution: already resolved: Story 2.0 (commit 1cac931a9): GLOBAL_INDEX_LINK_MISSING carries {kind:"global_index",documentId,urlId} via server/wikiLint/core/graphRules.ts:18,246-264 with detailVisible:true from application/lintWiki.ts:495,523
 
 ### DW-4: lint_wiki's unit-evaluation loop runs every unit synchronously with no await, so the whole evaluation phase blocks the worker's event loop.
 origin: spec-deferred a09e04b78f1a
@@ -58,7 +60,8 @@ location: server/wikiLint/core/registry.ts (issue messages); server/wikiLint/cor
 source_spec: `spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md`
 severity: medium
 reason: Story 1.10's acceptance loop (server/routes/mcp/wikiLint.test.ts, "repair loop") reaches a Clean Result only because the test agent is given the collection's documented conventions (field values, global index id); the Finding is fixed to {code, severity, message, location} with a generic registry message. This is the pre-existing DW-2/DW-3 gap (deferred-work ledger), now observed at the accepted MCP surface; settling it needs an architecture decision on readability-gated detail.
-status: open
+status: done 2026-10-04
+resolution: already resolved: Story 2.0 (commit 1cac931a9): server/routes/mcp/wikiLint.test.ts:2113-2170 repairFromDetail repairs sections, metadata fields and global-index links from Finding.detail alone, without supplied conventions; field values stay undisclosed by the approved AD-12 amendment (2e50ee933)
 
 ### DW-9: Enforced writes that end in AD-20 rows 3, 5, or 7 leave no operator log; only post-commit callback failures are logged.
 origin: spec-deferred 74f952c7d695
@@ -81,7 +84,8 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator with the architect; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: already resolved: Decided and applied before Story 2.1: AD-12 readability-gated detail amendment commit 2e50ee933, Story 2.0 commit 8446bbe4d/1cac931a9, and the conventions-free repair loop at server/routes/mcp/wikiLint.test.ts:2113 (repairFromDetail)
 
 ### DW-12: Change the README visible-metadata example to `* ` bullets and record the AC5 interpretation in the binding SPEC (DW-7).
 origin: retro action item epic-1-retro-item-2-change-the-readme-visible-metadata-examp
@@ -121,7 +125,8 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: already resolved: Commit c132ab9a7: .bmad-loop/policy.template.toml:58 max_tokens_per_story = 10000000 raises the per-story cap deliberately with the Epic 1 rationale (header lines 32-34); live .bmad-loop/policy.toml:20 matches
 
 ### DW-17: Choose an independent review model for the atomicity-critical Epic 2 stories (2.3, 2.5, 2.6).
 origin: retro action item epic-1-retro-item-7-choose-an-independent-review-model-for-t
@@ -129,7 +134,8 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: already resolved: Commit c132ab9a7: .bmad-loop/policy.template.toml:95 review trigger = "always" and :143-147 [adapter.review] name = "codex" (a different model family reviews every story, including 2.6)
 
 ### DW-18: Sync tracking: set epic-1 to done (script has no flag for it) and write the AC5 and Code Map deviations into Story 1.10 Spec Change Log.
 origin: retro action item epic-1-retro-item-8-sync-tracking-set-epic-1-to-done-script
