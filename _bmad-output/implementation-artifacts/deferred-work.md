@@ -95,6 +95,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
 status: open
+decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* ` bullets and add the Story 1.10 AC5 interpretation (canonical `* ` round-trips byte-identically; `- ` input lints clean) to the binding SPEC. Close DW-7 with the same change.
 
 ### DW-13: In readWikiSnapshot, re-check collection read inside the snapshot for a collection scope and fail generically when it no longer holds; add a documents-only regression test (F-5).
 origin: retro action item epic-1-retro-item-3-in-readwikisnapshot-re-check-collection
