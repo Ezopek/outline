@@ -20,6 +20,9 @@ export const POLICY_NOT_CONFIGURED = "POLICY_NOT_CONFIGURED";
 /** The stable tool-execution error identifier for a concurrent collection change. */
 export const COLLECTION_CONFLICT = "collection_conflict";
 
+/** The fixed AD-20 message of a failure that has no modeled result. */
+export const OPERATION_FAILED = "The operation could not be completed";
+
 export type IssueClass = "error" | "warning" | "system_failure";
 
 /** The surfaces an issue may appear on. */

@@ -192,6 +192,29 @@ export interface ReadOnlyResult {
   reason?: "POLICY_NOT_CONFIGURED";
 }
 
+/** The AD-13 decision of an enforced write. */
+export type ValidationStatus =
+  | "validated"
+  | "validated_with_warnings"
+  | "degraded_validation"
+  | "rejected";
+
+/**
+ * The AD-12 `validation` object of an enforced write. It carries at most one
+ * policy identity, and only for a reader of the classified collection:
+ * `policySchemaVersion` and `policyFingerprint` for a valid policy, or
+ * `invalidFingerprint` for an invalid-policy sentinel.
+ */
+export interface WriteValidation {
+  status: ValidationStatus;
+  policySchemaVersion?: 1;
+  policyFingerprint?: string;
+  invalidFingerprint?: string;
+  errors: Finding[];
+  warnings: Finding[];
+  systemFailures: SystemFailure[];
+}
+
 /** A source position produced by the canonical syntax adapter. */
 export interface SyntaxPosition {
   /** One-based line over the canonical Markdown string. */

@@ -38,6 +38,13 @@ import { ValidationError } from "@server/errors";
 import { TextEditMode } from "@shared/types";
 import type { Filter } from "@shared/helpers/FilterHelper";
 import SearchProviderManager from "@server/utils/SearchProviderManager";
+import { monotonicClock } from "@server/wikiLint/application/deadline";
+import type { WriteClassification } from "@server/wikiLint/application/writeClassification";
+import {
+  classifyWrite,
+  rejectInvalidPolicyWrite,
+} from "@server/wikiLint/application/writeClassification";
+import { OPERATION_FAILED } from "@server/wikiLint/core/registry";
 
 /**
  * Presents a document for a tool response. Adds MCP-specific fields
@@ -57,6 +64,32 @@ export function presentDocument(
   } = {}
 ) {
   return presentDocumentBase(undefined, document, options);
+}
+
+/**
+ * Ends an MCP create or update that is not a baseline write, without any
+ * effect.
+ *
+ * @param classification - the write's classification.
+ * @returns the modeled invalid-policy rejection, or an `isError` result with
+ *   the fixed message.
+ */
+function nonBaselineWriteResult(
+  classification: Exclude<WriteClassification, { kind: "baseline" }>
+): CallToolResult {
+  if (classification.kind === "sentinel") {
+    try {
+      return success(rejectInvalidPolicyWrite(classification));
+    } catch {
+      return error(OPERATION_FAILED);
+    }
+  }
+  if (classification.kind === "failed") {
+    return error(OPERATION_FAILED);
+  }
+  // Interim fail-closed for a valid enforced policy: projection, the AD-8
+  // transaction and validation, and the HTML worker land in Stories 2.2/2.3/2.5.
+  return error(OPERATION_FAILED);
 }
 
 /**
@@ -422,6 +455,7 @@ export function documentTools(server: McpServer, scopes: string[]) {
         },
       },
       withTracing("create_document", async (input, context) => {
+        const enteredAt = monotonicClock();
         try {
           const { collectionId, parentDocumentId, templateId } = input;
           const ctx = buildAPIContext(context);
@@ -438,6 +472,16 @@ export function documentTools(server: McpServer, scopes: string[]) {
               userId: user.id,
             });
             authorize(user, "read", template);
+          }
+
+          const classification = await classifyWrite({
+            collectionId: collection?.id,
+            actor: user,
+            create: true,
+            enteredAt,
+          });
+          if (classification.kind !== "baseline") {
+            return nonBaselineWriteResult(classification);
           }
 
           // Parsing HTML loads a full DOM, which would block the event loop for
@@ -674,6 +718,7 @@ export function documentTools(server: McpServer, scopes: string[]) {
         },
       },
       withTracing("update_document", async (input, context) => {
+        const enteredAt = monotonicClock();
         try {
           const ctx = buildAPIContext(context);
           const { user } = ctx.state.auth;
@@ -684,21 +729,42 @@ export function documentTools(server: McpServer, scopes: string[]) {
             rejectOnEmpty: true,
           });
 
-          let updated;
-
+          // The post-operation collection: publication resolves it, and any
+          // other update or unpublish keeps the document's own.
+          let postOperationCollectionId: string | null | undefined =
+            document.collectionId;
           if (input.publish === false) {
             authorize(user, "unpublish", document);
-
-            updated = await document.unpublishWithCtx(ctx, {
-              detach: false,
-            });
           } else {
             authorize(user, "update", document);
 
             if (input.publish) {
-              await authorizeDocumentPublish(ctx, document, input.collectionId);
+              const collection = await authorizeDocumentPublish(
+                ctx,
+                document,
+                input.collectionId
+              );
+              postOperationCollectionId = collection?.id;
             }
+          }
 
+          const classification = await classifyWrite({
+            collectionId: postOperationCollectionId,
+            actor: user,
+            create: false,
+            enteredAt,
+          });
+          if (classification.kind !== "baseline") {
+            return nonBaselineWriteResult(classification);
+          }
+
+          let updated;
+
+          if (input.publish === false) {
+            updated = await document.unpublishWithCtx(ctx, {
+              detach: false,
+            });
+          } else {
             const { revisionCount } = document;
 
             updated = await documentUpdater(ctx, {

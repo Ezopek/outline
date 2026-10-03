@@ -135,6 +135,26 @@ async function readCollectionReadability(
 }
 
 /**
+ * Whether the actor can read a collection, as enforced-write classification
+ * computes its `readable` flag. Unlike the read-side check, it is neither
+ * transaction-bound nor tri-state: a failed lookup propagates.
+ *
+ * @param actor - the acting user.
+ * @param collectionId - the classified collection.
+ * @returns whether `can(actor, "read", collection)` holds.
+ */
+export async function canReadCollection(
+  actor: User,
+  collectionId: string
+): Promise<boolean> {
+  return !!can(
+    actor,
+    "read",
+    await Collection.findByPk(collectionId, { userId: actor.id })
+  );
+}
+
+/**
  * Authorizes the lint target in a short read-only transaction: the document
  * must resolve and the actor must be able to read it. Collection readability
  * is established separately and never affects the document outcome.

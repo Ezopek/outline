@@ -28,6 +28,7 @@ import {
   lintWiki,
 } from "@server/wikiLint/application/lintWiki";
 import { recordReadAudit } from "@server/wikiLint/application/readAudit";
+import { OPERATION_FAILED } from "@server/wikiLint/core/registry";
 import {
   error,
   getActorFromContext,
@@ -35,9 +36,6 @@ import {
   success,
   withTracing,
 } from "./util";
-
-/** The fixed message of an unmodellable failure. */
-const OPERATION_FAILED = "The operation could not be completed";
 
 /** The `lint_document` input schema. */
 export const lintDocumentInputSchema = {

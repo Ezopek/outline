@@ -2839,7 +2839,7 @@ describe("without configuration and without enforcement", () => {
     }
   });
 
-  it("keeps baseline create_document and update_document responses in unconfigured, read-only, sentinel, and enforced collections", async () => {
+  it("keeps baseline create_document and update_document responses in unconfigured and read-only collections", async () => {
     const user = await buildUser();
     const withoutConfiguration = await buildCollection({
       teamId: user.teamId,
@@ -2849,15 +2849,7 @@ describe("without configuration and without enforcement", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const enforced = await buildCollection({
-      teamId: user.teamId,
-      userId: user.id,
-    });
     const readOnly = await buildCollection({
-      teamId: user.teamId,
-      userId: user.id,
-    });
-    const sentinel = await buildCollection({
       teamId: user.teamId,
       userId: user.id,
     });
@@ -2904,10 +2896,8 @@ describe("without configuration and without enforcement", () => {
     restart(null);
     const { outcome: baseline } = await write(withoutConfiguration.id);
     const set = restart({
-      [readOnly.id]: documentPolicy,
-      [sentinel.id]: sentinelPolicy,
-      [enforced.id]: {
-        activation: "enforced",
+      [readOnly.id]: {
+        activation: "read_only",
         rules: [
           ...metadataRules,
           {
@@ -2917,12 +2907,7 @@ describe("without configuration and without enforcement", () => {
         ],
       },
     });
-    const writes = [
-      await write(unconfigured.id),
-      await write(readOnly.id),
-      await write(sentinel.id),
-      await write(enforced.id),
-    ];
+    const writes = [await write(unconfigured.id), await write(readOnly.id)];
 
     expect(baseline).toEqual({
       createKeys: ["success", "id", "title", "url", "breadcrumb"],
@@ -2933,10 +2918,9 @@ describe("without configuration and without enforcement", () => {
     for (const { outcome } of writes) {
       expect(outcome).toEqual(baseline);
     }
-    expect(identityOf(set, sentinel.id).status).toBe("invalid");
-    expect(identityOf(set, enforced.id).status).toBe("valid");
+    expect(identityOf(set, readOnly.id).status).toBe("valid");
     const violations = await lintResult(token, "lint_document", {
-      id: writes[3].id,
+      id: writes[1].id,
     });
     expect(violations).toMatchObject({ state: "complete", clean: false });
     expect(violations.errors.length).toBeGreaterThan(0);
