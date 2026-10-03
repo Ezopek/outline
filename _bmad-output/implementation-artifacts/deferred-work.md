@@ -112,6 +112,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
 status: open
+decision: 2026-10-04 Amend Story 3.4 ACs now — Add an acceptance criterion to Story 3.4 in _bmad-output/planning-artifacts/epics.md: the Gate 1 decision record states that no read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5 and DW-6 (event-loop blocking, CPU between deadline checks, pool-wait acquisition). Planning-artifact edit only.
 
 ### DW-15: Encode deferrals of the form needs-a-decision-before-Story-X as blockers on Story X in sprint-status or story preconditions.
 origin: retro action item epic-1-retro-item-5-encode-deferrals-of-the-form-needs-a-dec
