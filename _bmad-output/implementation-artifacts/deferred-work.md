@@ -204,7 +204,9 @@ location: server/tools/README.md:119-140
 source_spec: `spec-dw-7-readme-metadata-canonical-bullet-marker.md`
 severity: low
 reason: Patch findText is an indexOf over serializeWithPositions output (DocumentHelper.tsx:668-683), and BulletList.toMarkdown always writes `* `. DW-7 fixes only the copied example; metadata an agent writes itself with `- ` behaves as before. Pre-existing, not caused by this change, and outside the 2026-10-04 decision, which covers the example and the SPEC record.
-status: open
+status: done 2026-10-04
+resolution: closed by human decision: update_document's findText description (server/tools/documents.ts:1049) already requires copying from existing Markdown, and the README example shows canonical `* ` bullets
+decision: 2026-10-04 Close: the tool description already covers it — update_document's findText description (server/tools/documents.ts:1049) already requires copying from existing Markdown, and the README example shows canonical `* ` bullets
 
 ### DW-24: Decide the unavailable-probe rule for the HTML worker finish/first lookup and requester (spine analogue: row 7, source retained), record it in the Story 2.5 contract and spine, then implement with tests that fail finish probe (F-1).
 origin: retro action item epic-2-retro-item-11-decide-the-unavailable-probe-rule-for-th
