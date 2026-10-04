@@ -50,6 +50,8 @@ import {
   runEnforcedImport,
   stagedSourceKey,
 } from "./enforcedImport";
+import type * as EnforcedWriteModule from "./enforcedWrite";
+import { runAttempt } from "./enforcedWrite";
 
 /** What the replaced seams serve; reset after each test. */
 const state = vi.hoisted(() => ({
@@ -84,6 +86,14 @@ vi.mock("@server/commands/attachmentCreator", async (importOriginal) => {
   const actual = await importOriginal<typeof AttachmentCreator>();
   return { ...actual, default: vi.fn(actual.default) };
 });
+
+vi.mock(
+  "@server/wikiLint/application/enforcedWrite",
+  async (importOriginal) => {
+    const actual = await importOriginal<typeof EnforcedWriteModule>();
+    return { ...actual, runAttempt: vi.fn(actual.runAttempt) };
+  }
+);
 
 const sha256Hex = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -1399,6 +1409,86 @@ describe("found rows", () => {
     await expect(FileStorage.getFileExists(intent.key)).resolves.toBe(false);
   });
 
+  it.each([
+    { row: 2, html: VALID_HTML, moveParent: true },
+    { row: 4, html: INVALID_HTML },
+    { row: 5, html: VALID_HTML, refusePersist: true },
+  ])(
+    "converts a row $row to the committed summary when the row appears after the after-lock lookup",
+    async ({ row, html, moveParent, refusePersist }) => {
+      const { user, collection, fingerprint } = await fixture();
+      const other = await buildCollection({
+        teamId: user.teamId,
+        userId: user.id,
+      });
+      const parent = moveParent
+        ? await buildDocument({
+            teamId: user.teamId,
+            userId: user.id,
+            collectionId: collection.id,
+          })
+        : undefined;
+      const intent = await stagedIntent({
+        user,
+        collectionId: collection.id,
+        fingerprint,
+        html,
+        overrides: {
+          ...(parent && { parentDocumentId: parent.id }),
+          // The persist gate refuses this remainder.
+          ...(refusePersist && { deadlineAt: Date.now() + 11000 }),
+        },
+      });
+      interceptQueries().use(async (sql, _options, next) => {
+        const result = await next();
+        if (sql === AFTER_LOCK_LOOKUP) {
+          if (parent) {
+            await sequelize.query(
+              `UPDATE documents SET "collectionId" = :other WHERE id = :id`,
+              { replacements: { other: other.id, id: parent.id } }
+            );
+          }
+          await buildDocument({
+            id: intent.documentId,
+            teamId: user.teamId,
+            userId: user.id,
+            collectionId: other.id,
+          });
+          await storeSummary(intent, user, { outcome: "validated" });
+        }
+        return result;
+      });
+      vi.mocked(runAttempt).mockClear();
+      const write = vi.fn(insertAuditEvent);
+
+      const result = await runEnforcedImport(intent, { write });
+
+      expect(vi.mocked(runAttempt).mock.settledResults).toMatchObject([
+        { type: "fulfilled", value: { row } },
+      ]);
+      expect(result).toEqual({
+        kind: "committed",
+        documentId: intent.documentId,
+        validation: {
+          status: "validated",
+          policySchemaVersion: 1,
+          policyFingerprint: fingerprint,
+          errors: [],
+          warnings: [],
+          systemFailures: [],
+        },
+      });
+      // The converted attempt wrote no summary of its own.
+      expect(write).not.toHaveBeenCalled();
+      const [summary, ...rest] = await summaries(intent.invocationId);
+      expect(rest).toEqual([]);
+      expect(summary.data).toEqual(
+        summaryData(intent, { outcome: "validated" })
+      );
+      await expect(FileStorage.getFileExists(intent.key)).resolves.toBe(false);
+    }
+  );
+
   it("returns its own validation as committed on a unique violation after its persist decision", async () => {
     const { user, collection, fingerprint } = await fixture();
     const intent = await stagedIntent({
@@ -2033,7 +2123,7 @@ describe("staged media", () => {
   it.each([
     {
       name: "a parent moved inside P3",
-      kind: "conflict",
+      expected: { kind: "conflict" },
       setup: async (user: User, collectionId: string) => {
         const other = await buildCollection({
           teamId: user.teamId,
@@ -2058,12 +2148,20 @@ describe("staged media", () => {
     },
     {
       name: "a body without the required section",
-      kind: "rejected",
+      expected: {
+        kind: "rejected",
+        validation: {
+          status: "rejected",
+          errors: [{ code: "REQUIRED_SECTION_MISSING" }],
+        },
+      },
+      summary: "rejected",
       html: `<p>No overview</p><p><img src="data:image/png;base64,${PNG_BASE64}"></p><p><a href="data:application/pdf;base64,${PNG_BASE64}">report</a></p><p><img src="${EXTERNAL_IMAGE}"></p>`,
     },
     {
       name: "a failed Attachment insert",
-      kind: "aborted",
+      expected: { kind: "aborted", row: 5, message: OPERATION_FAILED },
+      summary: "aborted_after_decision",
       setup: () => {
         interceptQueries().use((sql, _options, next) =>
           sql.startsWith('INSERT INTO "attachments"')
@@ -2075,36 +2173,49 @@ describe("staged media", () => {
     },
     {
       name: "a refused persist gate",
-      kind: "aborted",
+      expected: { kind: "aborted", row: 5, message: OPERATION_FAILED },
+      summary: "aborted_after_decision",
       setup: () => ({ deadlineAt: Date.now() + 11000 }),
     },
-  ])("deletes every staged blob on $name", async ({ kind, setup, html }) => {
-    serveExternalImage();
-    const { user, collection, fingerprint } = await fixture();
-    const overrides =
-      (await Promise.resolve(setup?.(user, collection.id))) ?? {};
-    const intent = await stagedIntent({
-      user,
-      collectionId: collection.id,
-      fingerprint,
-      html: html ?? MEDIA_HTML,
-      overrides,
-    });
-    const keys = recordStagedKeys();
+  ])(
+    "deletes every staged blob on $name",
+    async ({ expected, summary, setup, html }) => {
+      serveExternalImage();
+      const { user, collection, fingerprint } = await fixture();
+      const overrides =
+        (await Promise.resolve(setup?.(user, collection.id))) ?? {};
+      const intent = await stagedIntent({
+        user,
+        collectionId: collection.id,
+        fingerprint,
+        html: html ?? MEDIA_HTML,
+        overrides,
+      });
+      const keys = recordStagedKeys();
 
-    const result = await runEnforcedImport(intent);
+      const result = await runEnforcedImport(intent);
 
-    expect(result.kind).toBe(kind);
-    expect(keys).toHaveLength(3);
-    expect(await blobsExist(keys)).toEqual([false, false, false]);
-    expect(await attachmentsOf(user.teamId)).toEqual([]);
-    expect(await storedDocument(intent.documentId)).toBeNull();
-    expect(
-      await Event.count({
-        where: { name: "attachments.create", teamId: user.teamId },
-      })
-    ).toBe(0);
-  });
+      expect(result).toMatchObject(expected);
+      if (expected.kind === "conflict") {
+        expect(result).not.toHaveProperty("validation");
+      }
+      expect(keys).toHaveLength(3);
+      expect(await blobsExist(keys)).toEqual([false, false, false]);
+      expect(await attachmentsOf(user.teamId)).toEqual([]);
+      expect(await storedDocument(intent.documentId)).toBeNull();
+      expect(
+        await Event.count({
+          where: { name: "attachments.create", teamId: user.teamId },
+        })
+      ).toBe(0);
+      expect(
+        (await summaries(intent.invocationId)).map((row) => ({
+          outcome: row.data.outcome,
+          documentId: row.documentId,
+        }))
+      ).toEqual(summary ? [{ outcome: summary, documentId: null }] : []);
+    }
+  );
 
   it.each([
     ["a committed", MEDIA_HTML, "committed"],

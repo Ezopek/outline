@@ -252,7 +252,9 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Dev agent; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-html-worker-conversion-tests
+resolution-undo: 9cc8545294b60bea6ee5b0ef9ca0dbb8a504187490b866eab5d5ea96bef5289f 2026-10-04 7374617475733a206f70656e
 
 ### DW-29: Pin one reproducible broad verification command (--maxWorkers=2 or raised test PostgreSQL connection limit) for Epic 3 conformance evidence (F-13).
 origin: retro action item epic-2-retro-item-16-pin-one-reproducible-broad-verification
@@ -313,4 +315,12 @@ location: server/wikiLint/application/enforcedImport.ts:805
 source_spec: `spec-dw-24-dw-31-html-worker-commit-detection-rules.md`
 severity: medium
 reason: This path predates DW-24/DW-31: enforcedImport.ts captures ownConflict on isPreallocatedIdConflict during persist and case 5 returns this attempt's validation and writes its summary. If another delivery inserted a different row after the in-transaction absence check, the conflict branch does not compare title and text. D2 applies only to probe-established row 6, so this is separate work.
+status: open
+
+### DW-36: The worker's found-row conversion is still untested on the finish() routes outside runAttempt's own row arms: the pre-attempt conflict and worker-time fingerprint mismatch (`finish(...pending)`) and
+origin: spec-deferred cf0257a3ba09
+location: server/wikiLint/application/enforcedImport.ts:656, server/wikiLint/application/enforcedImport.ts:832
+source_spec: `spec-dw-28-html-worker-conversion-tests.md`
+severity: medium
+reason: `server/wikiLint/application/enforcedImport.ts:656` (`finish(...pending)` for the reauthorization conflict at :623-624 and the mismatch rejection at :633-638) and `:832` (`finish(...failure)`, `aborted(decided ? 5 : 3, ...)`). No test makes the pre-allocated row appear before either call: the row 3 test and the DW-28 row 2/4/5 tests reach `finish` only through `switch (outcome.row)` at :789-825. Replacing those calls with a direct `return` of the non-committed outcome keeps every test green. Spine :120 requires the lookup before every non-committed outcome (rows 2, 3, 4, 5). DW-28's intent counts coverage per row (it called row 3 covered by one route), so this is the pre-existing remainder of the same gap class, raised by the Blind Hunter, Edge Case Hunter and Intent Alignment layers.
 status: open

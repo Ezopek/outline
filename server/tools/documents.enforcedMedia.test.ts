@@ -910,31 +910,46 @@ describe("an enforced HTML create with media", () => {
       name: "a rejection",
       html: mediaHtml(false),
       expectResult: expectRejected,
+      job: {
+        kind: "rejected",
+        validation: {
+          status: "rejected",
+          errors: [{ code: "REQUIRED_SECTION_MISSING" }],
+        },
+      },
+      summary: "rejected",
     },
     {
       name: "a failed materialization",
       html: mediaHtml(),
       expectResult: (response: McpResponse) => expectToolError(response),
       failInsertAt: 1,
+      job: { kind: "aborted", row: 5, message: OPERATION_FAILED },
+      summary: "aborted_after_decision",
     },
     {
       name: "a failed later materialization",
       html: mediaHtml(),
       expectResult: (response: McpResponse) => expectToolError(response),
       failInsertAt: 2,
+      job: { kind: "aborted", row: 5, message: OPERATION_FAILED },
+      summary: "aborted_after_decision",
     },
     {
       name: "a server-reported COMMIT error",
       html: mediaHtml(),
       expectResult: (response: McpResponse) => expectToolError(response),
       failCommit: true,
+      job: { kind: "aborted", row: 5, message: OPERATION_FAILED },
+      summary: "aborted_after_decision",
     },
   ])(
     "leaves no effect and deletes every staged blob on $name",
-    async ({ html, expectResult, failInsertAt, failCommit }) => {
+    async ({ html, expectResult, failInsertAt, failCommit, job, summary }) => {
       serveExternal();
       const { user, accessToken, viewers, collection } = await fixture();
       const intents = recordIntents();
+      const perform = vi.spyOn(EnforcedDocumentImportTask.prototype, "perform");
       const keys = recordKeys();
       if (failInsertAt) {
         let inserts = 0;
@@ -961,6 +976,12 @@ describe("an enforced HTML create with media", () => {
       );
 
       const [intent] = intents;
+      expect(perform.mock.settledResults).toMatchObject([
+        { type: "fulfilled", value: job },
+      ]);
+      expect(await summariesOf(user.teamId)).toEqual([
+        { outcome: summary, documentId: null },
+      ]);
       expect(keys).toHaveLength(3);
       expect(await blobsExist(keys)).toEqual([false, false, false]);
       expect(await access(viewers, keys)).toEqual(inaccessible(3));
