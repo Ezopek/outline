@@ -289,5 +289,5 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator; sprint-status status open)
-status: open
-decision: 2026-10-04 Build: bundle edits sprint-status.yaml — Set epic-1 and epic-2 to done in _bmad-output/implementation-artifacts/sprint-status.yaml, and mark the corresponding sync action items done, with no other change.
+status: done 2026-10-04
+resolution: closed by the operator coordinator: epic-1 and epic-2 set to done in sprint-status.yaml by hand (the sprint tooling has no flag for it), as the DW-18 decision requires; a sweep bundle must not edit that file. Action item epic-2-retro-item-20 set done

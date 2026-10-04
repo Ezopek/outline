@@ -39,13 +39,13 @@
 #   2.4 AC3 -> 2.5.
 # - This file tracks planning state only; it does not authorize implementation.
 generated: 10-02-2026 01:33
-last_updated: 10-04-2026 12:59
+last_updated: 10-04-2026 13:18
 project: outline
 project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 development_status:
-  epic-1: backlog
+  epic-1: done
   1-1-establish-the-deterministic-result-contract-and-closed-rule: done
   1-2-load-and-identify-collection-policy-safely-at-startup: done
   1-3-lint-one-authorized-document-for-structural-integrity: done
@@ -58,7 +58,7 @@ development_status:
   1-10-accept-the-complete-read-only-lint-and-repair-loop: done
   epic-1-retrospective: done
 
-  epic-2: backlog
+  epic-2: done
   2-0-name-the-missing-configured-item-to-collection-readers: done
   2-1-classify-enforced-writes-and-decide-from-post-operation-poli: done
   2-2-project-the-complete-markdown-document-once: done
@@ -216,5 +216,5 @@ action_items:
     epic: 2
     action: "Sync tracking: set epic-2 (and epic-1) to done in sprint-status.yaml."
     owner: "Operator"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
