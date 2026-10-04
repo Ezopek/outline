@@ -31,6 +31,8 @@ This document provides the complete epic and story breakdown for deterministic W
 
 **Amendment (2026-10-02).** Stories 1.3, 1.5, 1.6, 1.7, 1.10, 3.2, and 3.4, the AD-9, AD-10, AD-11, and AD-16 summaries, and the Epic 1 implementation note follow the spine amendment of 2026-10-02, which decided the three architect items of `sprint-change-proposal-2026-10-01.md` §4.6: a snapshot batch refused below the `SET LOCAL` floor is `VALIDATION_TIMEOUT` on every read surface; collection-graph checks require `can(actor, "readDocument", collection)`; and the `lint_wiki` admission order is fixed. The change record is `sprint-change-proposal-2026-10-02.md`.
 
+**Story preconditions (2026-10-04).** When a `deferred-work.md` entry needs a decision before Story X, Story X records it as a named precondition in a **Preconditions:** block between its **Traceability:** and **Acceptance Criteria:** blocks. Each item names the ledger entry that holds the decision and the decision it needs, because ledger prose alone does not block a story (Epic 1 retrospective action item 5). A precondition is met when its entry carries a `decision:` line that settles the named decision, or reads `status: done` (an archived entry keeps its full lines in `deferred-work-archive.md`), and any change the settled decision makes to Story X is applied here; a `decision:` line that only keeps the entry open does not settle it. Story X does not start until each precondition is met: an implementation run that finds an unmet precondition halts as `blocked`, naming the entry, instead of building the story. On 2026-10-04, Stories 3.3 and 3.4 carry the known preconditions.
+
 ## Requirements Inventory
 
 ### Functional Requirements
@@ -1586,6 +1588,9 @@ SM: SM-I5, SM-C1, SM-C2, SM-C5
 Gates: Gate 1 performance evidence only
 AD: AD-11, AD-13, AD-16–AD-18
 
+**Preconditions:** Do not start this story until each item's entry carries a `decision:` line that settles it or reads `status: done`, and any change that decision makes to this story is applied here; otherwise halt as `blocked`, naming the entry (Overview, Story preconditions).
+- DW-39 — the decision on how DW-4, DW-5, and DW-6 get the closing evidence that Story 3.4 criterion 8 asks of this story: amend this story to add the DW-4 and DW-5 measurements and a held-pool fixture re-run under the AD-17-fixed floor, or revisit which evidence may close DW-6.
+
 **Acceptance Criteria:**
 
 1. **Given** the deterministic seeded fixture generator
@@ -1646,6 +1651,9 @@ NFR: NFR-1–NFR-27
 SM: SM-I1–SM-I7, SM-C1–SM-C7; SM-P1–SM-P7 explicitly deferred to Gate 4 without claiming pilot evidence
 Gates: Gate 1 decision and explicit separation from Gate 2–Gate 4
 AD: AD-1–AD-20 evidence index, with AD-17–AD-20 governing readiness, failure boundaries, and gate separation
+
+**Preconditions:** Do not start this story until each item's entry carries a `decision:` line that settles it or reads `status: done`, and any change that decision makes to this story is applied here; otherwise halt as `blocked`, naming the entry (Overview, Story preconditions).
+- DW-39 (closing evidence for DW-4, DW-5, DW-6) — decide whether to amend Story 3.3 to add the DW-4 and DW-5 measurements and a held-pool fixture re-run under the AD-17-fixed floor, or revisit which evidence may close DW-6 (the same decision as Story 3.3's precondition); revisiting DW-6 evidence may amend criterion 8.
 
 **Acceptance Criteria:**
 

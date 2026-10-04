@@ -136,7 +136,9 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-decision-dw-15
+resolution-undo: 0905d362f1081134af4d3a19897bbf8926877a30bba884b801d65ea4a147790d 2026-10-04 7374617475733a206f70656e
 decision: 2026-10-04 Add a preconditions convention to epics.md — Add a short 'Story preconditions' convention to the header of _bmad-output/planning-artifacts/epics.md stating that a deferral requiring a decision before Story X is recorded as a named precondition on Story X, and record the currently known preconditions (e.g. Story 3.4 on DW-4..DW-6). Planning-artifact edit only; no sprint-status or tooling change.
 decision: 2026-10-04 Add a preconditions convention to epics.md — Add a short 'Story preconditions' convention to the header of _bmad-output/planning-artifacts/epics.md stating that a deferral requiring a decision before Story X is recorded as a named precondition on Story X, and record the currently known preconditions (e.g. Story 3.4 on DW-4..DW-6). Planning-artifact edit only; no sprint-status or tooling change.
 
@@ -353,4 +355,36 @@ location: _bmad-output/planning-artifacts/epics.md:1575-1634 (Story 3.3)
 source_spec: `spec-dw-14-gate-1-read-only-rollout-precondition.md`
 severity: medium
 reason: Story 3.3 criteria 3, 5 and 7 measure lint_wiki call latency, atomic-unit time, result-assembly time and single SET LOCAL statement durations. None measures how long synchronous evaluation blocks the event loop (DW-4), or the serialize/parse CPU time of a keyset batch between deadline checks (DW-5). Criterion 2 forbids competing traffic, and criterion 7's re-run list has no held-pool case, so no Story 3.3 evidence exercises pool-wait acquisition (DW-6). DW-6 was resolved in code by b732efe0f2c58494558327776719fcaa122f2350 after the DW-14 decision was recorded in 495d11015982b164311f1f97072d7a7cdd526c7b. So the Gate 1 record will list DW-6 as not closed by Story 3.3 evidence while the ledger marks it done. Two ways to settle this, and the operator has to choose: amend Story 3.3 to add the DW-4 and DW-5 measurements and a held-pool fixture re-run under the AD-17-fixed floor, or revisit which evidence may close DW-6. The gap predates this change. This change follows the "Amend Story 3.4
+status: open
+
+### DW-40: The Story preconditions convention is prose only: nothing adds a Story X precondition when a decision-before-Story-X deferral is recorded, and nothing mechanically stops a run at an unmet
+origin: spec-deferred 22d16b897b35
+location: _bmad-output/planning-artifacts/epics.md (Overview, Story preconditions)
+source_spec: `spec-dw-15-story-preconditions-convention.md`
+severity: medium
+reason: The human decision for DW-15 excludes sprint-status and tooling changes. bmad-loop dispatches from sprint-status.yaml, where Stories 3.3 and 3.4 are plain backlog. Ledger entries are written by the orchestrator, and no step adds the matching Preconditions item to epics.md, so F-1 (epic-1-retro-2026-10-03.md) can recur for a future deferral unless the operator, owner of Epic 1 retrospective action item 5, adds it. A run obeys a block only if it reads the story text; the compiled epic context has "No story-level details" (compile-epic-context.md). This change's verification proves the text only, not that any consumer obeys it.
+status: open
+
+### DW-41: Ledger work folded into Stories 3.3 and 3.4 (DW-20, DW-30) and their Gate 1 dispositions (DW-21, DW-25) do not appear in those stories' text.
+origin: spec-deferred 7ec70511a749
+location: _bmad-output/planning-artifacts/epics.md (Stories 3.3 and 3.4)
+source_spec: `spec-dw-15-story-preconditions-convention.md`
+severity: medium
+reason: DW-20 ("Meter documentStructure before materializing it ...; fold into Story 3.3") and DW-30 (worker post-commit tail and cross-host clock-skew budget into Story 3.3 constant-derivation evidence) are open, and Story 3.3's criteria mention neither. DW-21 carries the decision "Keep open as a Gate 1 residual" but is missing from Story 3.4 criterion 5's residual list, and DW-25 ("Keep open for the Gate 1 review") appears nowhere in Story 3.4. These are not decision-before-Story-X deferrals, so the DW-15 convention does not record them. A run that builds Story 3.3 or 3.4 from the story text would still miss them, the same ledger-prose-only cause as F-1. Pre-existing.
+status: open
+
+### DW-42: DW-29's decided work, a pinned broad verification command for Epic 3 conformance evidence, does not reach Story 3.2's text, so Story 3.2 can run before the command exists.
+origin: spec-deferred 08c97a006686
+location: _bmad-output/planning-artifacts/epics.md (Story 3.2)
+source_spec: `spec-dw-15-story-preconditions-convention.md`
+severity: medium
+reason: DW-29 is open and carries "decision: 2026-10-04 Pin --maxWorkers=2 — Add a package.json script ... and name it in CLAUDE.md and AGENTS.md 'Running and verifying' as the broad verification command for Epic 3 conformance evidence". Story 3.2 produces that conformance evidence, and `grep maxWorkers _bmad-output/planning-artifacts/epics.md` finds nothing. The decision is already recorded, so this is decided work, not a decision-before-Story-X deferral, and the DW-15 convention does not record it. It is the same ledger-prose-only cause as the Stories 3.3/3.4 item above. Pre-existing.
+status: open
+
+### DW-43: bmad-loop's ledger `gate:` field would pause dispatch of Stories 3-3 and 3-4 until DW-39 closes, but DW-39 has no `gate:` line, and this bundle may not edit the ledger.
+origin: spec-deferred fb756e40b655
+location: _bmad-output/implementation-artifacts/deferred-work.md (DW-39)
+source_spec: `spec-dw-15-story-preconditions-convention.md`
+severity: medium
+reason: The installed bmad-loop engine.py `_refuse_gated_story` raises the PAUSE_STORY_GATE pause instead of dispatching a story that an unlanded ledger entry gates. It re-reads the ledger on every pick, and `bmad-loop validate` refuses the same story at preflight. No entry in deferred-work.md has a `gate:` line today. The DW-15 intent forbids ledger edits in this session. Adding a gate on DW-39 for Stories 3.3 and 3.4 through the orchestrator's sanctioned path would give the Story preconditions convention a mechanical stop. The gate releases only on `status: done`, which is stricter than the convention's settled-decision test.
 status: open
