@@ -3,6 +3,7 @@ import { Collection, Document, type User } from "@server/models";
 import { can } from "@server/policies";
 import { isQueryCanceledError, sequelize } from "@server/storage/database";
 import type { Deadline } from "../application/deadline";
+import { DeadlineFloorError, within } from "../application/deadline";
 import type {
   CanonicalSyntax,
   LinkTargetState,
@@ -67,22 +68,51 @@ export function isDatabaseTimeout(error: unknown): boolean {
 }
 
 /**
- * Runs a managed transaction on the primary database that is made read-only
- * by its first statement. Sequelize's `readOnly` option is never used, because
- * it selects the replica pool.
+ * Runs a transaction on the primary database that is made read-only by its
+ * first statement. Sequelize's `readOnly` option is never used, because it
+ * selects the replica pool. Opening it, connection acquisition and `BEGIN`
+ * included, is charged to the request deadline: it is bounded by the floored
+ * remainder, and a transaction that opens after the bound expired is rolled
+ * back when it resolves. When the work fails, the transaction is rolled back
+ * and the work's error is rethrown; otherwise it commits before returning.
  *
- * @param options - the isolation level, if any.
+ * @param options.isolationLevel - the isolation level, if any.
+ * @param options.deadline - the request deadline.
  * @param run - the work to run inside the transaction.
  * @returns the work's result, after commit.
+ * @throws DeadlineFloorError when the remainder is below the floor, so no
+ *   connection is requested, or when the transaction does not open within it.
+ * @throws the error of a failed acquisition, `BEGIN`, work, or commit.
  */
-export function readOnlyTransaction<T>(
-  options: { isolationLevel?: Transaction.ISOLATION_LEVELS },
+export async function readOnlyTransaction<T>(
+  options: {
+    isolationLevel?: Transaction.ISOLATION_LEVELS;
+    deadline: Deadline;
+  },
   run: (transaction: Transaction) => Promise<T>
 ): Promise<T> {
-  return sequelize.transaction(options, async (transaction) => {
+  const { deadline, ...transactionOptions } = options;
+  const boundMs = deadline.batchTimeoutMs();
+  const opening = sequelize.transaction(transactionOptions);
+  const transaction = await within(opening, boundMs, null);
+  if (transaction === null) {
+    opening.then(
+      (late) => late.rollback().catch(() => undefined),
+      () => undefined
+    );
+    throw new DeadlineFloorError();
+  }
+
+  let result: T;
+  try {
     await sequelize.query("SET TRANSACTION READ ONLY", { transaction });
-    return run(transaction);
-  });
+    result = await run(transaction);
+  } catch (error) {
+    await transaction.rollback().catch(() => undefined);
+    throw error;
+  }
+  await transaction.commit();
+  return result;
 }
 
 /**
@@ -171,7 +201,7 @@ export function authorizeLintTarget(input: {
   deadline: Deadline;
 }): Promise<LintTarget | null> {
   const { id, actor, deadline } = input;
-  return readOnlyTransaction({}, async (transaction) => {
+  return readOnlyTransaction({ deadline }, async (transaction) => {
     await boundBatch(transaction, deadline);
     const document = await Document.findByPk(id, {
       userId: actor.id,
@@ -315,7 +345,7 @@ export function readDocumentSnapshot(input: {
 }): Promise<DocumentSnapshot> {
   const { documentId, collectionId, deadline, actor, instanceOrigin } = input;
   return readOnlyTransaction(
-    { isolationLevel: Transaction.ISOLATION_LEVELS.REPEATABLE_READ },
+    { isolationLevel: Transaction.ISOLATION_LEVELS.REPEATABLE_READ, deadline },
     async (transaction) => {
       await boundBatch(transaction, deadline);
       const document = await Document.unscoped().findOne({

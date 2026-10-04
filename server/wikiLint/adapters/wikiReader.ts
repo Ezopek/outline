@@ -83,7 +83,7 @@ export function authorizeLintCollection(input: {
   deadline: Deadline;
 }): Promise<string | null> {
   const { id, actor, deadline } = input;
-  return readOnlyTransaction({}, async (transaction) => {
+  return readOnlyTransaction({ deadline }, async (transaction) => {
     await boundBatch(transaction, deadline);
     const collection = await Collection.findByPk(id, {
       userId: actor.id,
@@ -266,7 +266,10 @@ export async function readWikiSnapshot(input: {
   const meter = new SnapshotMeter(WIKI_SNAPSHOT_LIMITS);
   try {
     const snapshot = await readOnlyTransaction(
-      { isolationLevel: Transaction.ISOLATION_LEVELS.REPEATABLE_READ },
+      {
+        isolationLevel: Transaction.ISOLATION_LEVELS.REPEATABLE_READ,
+        deadline,
+      },
       async (transaction): Promise<WikiSnapshot> => {
         // The scope's collections: the default-scope enumeration, the
         // sentinel readability check, and the source of graph authorization.

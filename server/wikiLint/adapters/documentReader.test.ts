@@ -26,6 +26,7 @@ import {
   authorizeLintTarget,
   isDatabaseTimeout,
   readDocumentSnapshot,
+  readOnlyTransaction,
   resolveLinkTargets,
 } from "./documentReader";
 
@@ -822,10 +823,10 @@ describe("readDocumentSnapshot with internal links", () => {
     const { user, collection, document } = await buildFixture({
       text: linking([missingUuid(1)]),
     });
-    // The deadline starts and bounds the re-read at 0 ms; 950 ms have passed
-    // when the link batch is bounded.
+    // The deadline starts and bounds the opening and the re-read at 0 ms;
+    // 950 ms have passed when the link batch is bounded.
     let readings = 0;
-    const clock = () => (readings++ < 2 ? 0 : 950);
+    const clock = () => (readings++ < 3 ? 0 : 950);
     const statements = recordStatements();
 
     await expect(
@@ -961,5 +962,83 @@ describe("database timeouts", () => {
   it("does not treat other errors as timeouts", () => {
     expect(isDatabaseTimeout(new Error("canceling statement"))).toBe(false);
     expect(isDatabaseTimeout(new DocumentSnapshotError())).toBe(false);
+  });
+});
+
+describe("readOnlyTransaction", () => {
+  it("propagates a failed commit", async () => {
+    const failure = new Error("commit");
+    const commit = vi.fn().mockRejectedValue(failure);
+    const rollback = vi.fn();
+    const transaction = { commit, rollback } as unknown as Transaction;
+    vi.spyOn(sequelize, "transaction").mockResolvedValue(transaction);
+    vi.spyOn(sequelize, "query").mockResolvedValue(undefined as never);
+
+    await expect(
+      readOnlyTransaction({ deadline: fixedDeadline() }, async () => "read")
+    ).rejects.toBe(failure);
+    expect(commit).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+  });
+
+  it("preserves the work error when rollback fails", async () => {
+    const failure = new Error("work");
+    const rollback = vi.fn().mockRejectedValue(new Error("rollback"));
+    const commit = vi.fn();
+    const transaction = { commit, rollback } as unknown as Transaction;
+    vi.spyOn(sequelize, "transaction").mockResolvedValue(transaction);
+    vi.spyOn(sequelize, "query").mockResolvedValue(undefined as never);
+
+    await expect(
+      readOnlyTransaction({ deadline: fixedDeadline() }, async () => {
+        throw failure;
+      })
+    ).rejects.toBe(failure);
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the error of an opening that fails before its bound", async () => {
+    const failure = new Error("acquisition");
+    vi.spyOn(sequelize, "transaction").mockRejectedValue(failure);
+    const run = vi.fn();
+
+    await expect(
+      readOnlyTransaction({ deadline: fixedDeadline() }, run)
+    ).rejects.toBe(failure);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("absorbs the rejection and the failed rollback of a late opening", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    const openings: {
+      resolve: (transaction: Transaction) => void;
+      reject: (error: Error) => void;
+    }[] = [];
+    vi.spyOn(sequelize, "transaction").mockImplementation(
+      (() =>
+        new Promise<Transaction>((resolve, reject) => {
+          openings.push({ resolve, reject });
+        })) as typeof sequelize.transaction
+    );
+    const rollback = vi.fn().mockRejectedValue(new Error("rollback"));
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(
+          readOnlyTransaction({ deadline: new Deadline(150) }, async () => 0)
+        ).rejects.toThrow(DeadlineFloorError);
+      }
+
+      openings[0].reject(new Error("late"));
+      openings[1].resolve({ rollback } as unknown as Transaction);
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(rollback).toHaveBeenCalledTimes(1);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });

@@ -46,7 +46,9 @@ location: server/wikiLint/adapters/documentReader.ts:78 (readOnlyTransaction)
 source_spec: `spec-1-7-preserve-safe-work-under-timeouts-limits-and-isolated-failur.md`
 severity: medium
 reason: `readOnlyTransaction` calls `sequelize.transaction`, which waits for a pool connection up to `pool.acquire = 30000` (`server/storage/database.ts:169`) before the first `boundBatch` checks the remainder. AD-11 requires connection acquisition to be charged to the phase it serves. This has been pre-existing since Story 1.5, which introduced `readOnlyTransaction`. Settle it by bounding acquisition by `deadline.remainingMs()`, or by checking the floor before opening the transaction, with a fixture that holds the pool. Raised by the Edge Case Hunter in the 2026-10-02 review pass.
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-lint-snapshot-pool-acquire-deadline
+resolution-undo: c7fb267736febfb6b65cf3938067c9be5046109f6eecada193f7f10238d5d3e3 2026-10-04 7374617475733a206f70656e
 
 ### DW-7: The fork README's visible-metadata example uses `- ` bullets, but the v1.10.1 serializer emits every bullet as `* `, so the example does not round-trip byte for byte.
 origin: spec-deferred 4a4cbba2a02c

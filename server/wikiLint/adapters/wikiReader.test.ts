@@ -521,15 +521,16 @@ describe("readWikiSnapshot", () => {
       "SELECT lookup",
       "SELECT content",
     ]);
-    // Every batch reads the clock once, after the deadline started.
-    expect(readings).toHaveLength(selects.length + 1);
+    // The opening and every batch read the clock once, after the deadline
+    // started.
+    expect(readings).toHaveLength(selects.length + 2);
     const timeouts = selects.map((position, batch) => {
       const value = Number(/= (\d+)$/.exec(recorded[position - 1])?.[1]);
       expect(recorded.slice(position - 2, position)).toEqual([
         `SET LOCAL lock_timeout = ${value}`,
         `SET LOCAL statement_timeout = ${value}`,
       ]);
-      const remainder = expiresAt - readings[batch + 1];
+      const remainder = expiresAt - readings[batch + 2];
       expect(value).toBe(Math.floor(remainder));
       expect(value).toBeLessThanOrEqual(remainder);
       return value;
@@ -1375,10 +1376,10 @@ describe("readWikiSnapshot", () => {
 
     it("carries the sentinels established before a failure", async () => {
       const { actor, sentinel, entries } = await buildDefaultFixture();
-      // The deadline starts and bounds the enumeration at 0 ms; 950 ms have
-      // passed when the documents batch is bounded.
+      // The deadline starts and bounds the opening and the enumeration at
+      // 0 ms; 950 ms have passed when the documents batch is bounded.
       let readings = 0;
-      const clock = () => (readings++ < 2 ? 0 : 950);
+      const clock = () => (readings++ < 3 ? 0 : 950);
 
       const result = await read({
         entries,
@@ -1396,11 +1397,15 @@ describe("readWikiSnapshot", () => {
     it("carries no sentinel when the enumeration batch is refused", async () => {
       const { actor, entries } = await buildDefaultFixture();
       const statements = recordStatements();
+      // The deadline starts and bounds the opening at 0 ms; 950 ms have
+      // passed when the enumeration batch is bounded.
+      let readings = 0;
+      const clock = () => (readings++ < 2 ? 0 : 950);
 
       const result = await read({
         entries,
         actor,
-        deadline: fixedDeadline(99),
+        deadline: new Deadline(1000, clock),
       });
 
       expect(result).toEqual({

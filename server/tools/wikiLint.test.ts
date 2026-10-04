@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { Transaction } from "sequelize";
 import { DocumentPermission, type ProsemirrorData } from "@shared/types";
 import { parser } from "@server/editor";
 import env from "@server/env";
@@ -40,12 +41,16 @@ import {
 } from "@server/wikiLint/adapters/auditEvents";
 import type { WikiSnapshotRead } from "@server/wikiLint/adapters/wikiReader";
 import { lintWikiAdmission } from "@server/wikiLint/application/admission";
+import type { MonotonicClock } from "@server/wikiLint/application/deadline";
 import {
   AUDIT_WRITE_BOUND_MS,
   DeadlineFloorError,
 } from "@server/wikiLint/application/deadline";
 import type { LintDocumentDependencies } from "@server/wikiLint/application/lintDocument";
-import { defaultLintDocumentReader } from "@server/wikiLint/application/lintDocument";
+import {
+  LINT_DOCUMENT_DEADLINE_MS,
+  defaultLintDocumentReader,
+} from "@server/wikiLint/application/lintDocument";
 import type { LintWikiReader } from "@server/wikiLint/application/lintWiki";
 import {
   LINT_WIKI_DEADLINE_MS,
@@ -300,6 +305,69 @@ const linkedText = (text: string, href: string): ProsemirrorData => ({
   text,
   marks: [{ type: "link", attrs: { href } }],
 });
+
+/**
+ * Opens transactions until every pool connection is held.
+ *
+ * @returns the holding transactions.
+ */
+async function holdPool(): Promise<Transaction[]> {
+  const max = sequelize.options.pool?.max ?? 5;
+  const holders: Transaction[] = [];
+  for (let index = 0; index < max; index++) {
+    holders.push(await sequelize.transaction());
+  }
+  return holders;
+}
+
+/**
+ * Releases transactions that hold the pool.
+ *
+ * @param holders - the transactions.
+ */
+async function releasePool(holders: Transaction[]): Promise<void> {
+  await Promise.all(holders.map((holder) => holder.rollback()));
+}
+
+/**
+ * Returns the pool's connections in use and acquisitions waiting.
+ *
+ * @returns the pool usage.
+ */
+function poolUsage(): { using: number; waiting: number } {
+  const { pool } = sequelize.connectionManager as unknown as {
+    pool: { using: number; waiting: number };
+  };
+  return { using: pool.using, waiting: pool.waiting };
+}
+
+/**
+ * Returns a clock whose first reading is 0 ms and whose later readings sit a
+ * remainder before the deadline, advancing in real time from the first.
+ *
+ * @param deadlineMs - the deadline.
+ * @param remainderMs - the remainder left at the first reading's time.
+ * @returns the clock.
+ */
+function remainderClock(
+  deadlineMs: number,
+  remainderMs: number
+): MonotonicClock {
+  let startedAt: number | undefined;
+  return () => {
+    if (startedAt === undefined) {
+      startedAt = performance.now();
+      return 0;
+    }
+    return deadlineMs - remainderMs + (performance.now() - startedAt);
+  };
+}
+
+/** The remainder left when a lint transaction opens on a held pool. */
+const HELD_POOL_REMAINDER_MS = 1000;
+
+/** How long a call on a held pool may take beyond its remainder. */
+const HELD_POOL_SLACK_MS = 2000;
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -628,6 +696,99 @@ describe("lint_document", () => {
       content: [{ type: "text", text: OPERATION_FAILED }],
       isError: true,
     });
+  });
+
+  it("returns the fixed failure message within its remainder when the lookup cannot get a connection", async () => {
+    const { user, collection, document } = await buildFixture();
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: structurePolicy }),
+      {
+        clock: remainderClock(
+          LINT_DOCUMENT_DEADLINE_MS,
+          HELD_POOL_REMAINDER_MS
+        ),
+        writeAudit: async () => undefined,
+      }
+    );
+    const holders = await holdPool();
+
+    try {
+      const startedAt = performance.now();
+      const result = await lint(client, { id: document.id });
+      const elapsedMs = performance.now() - startedAt;
+
+      expect(elapsedMs).toBeGreaterThanOrEqual(HELD_POOL_REMAINDER_MS - 100);
+      expect(elapsedMs).toBeLessThan(
+        HELD_POOL_REMAINDER_MS + HELD_POOL_SLACK_MS
+      );
+      // The abandoned acquisition still waits behind the holders.
+      expect(poolUsage()).toEqual({ using: holders.length, waiting: 1 });
+      expect(result).toEqual({
+        content: [{ type: "text", text: OPERATION_FAILED }],
+        isError: true,
+      });
+    } finally {
+      await releasePool(holders);
+    }
+    await vi.waitFor(() =>
+      expect(poolUsage()).toEqual({ using: 0, waiting: 0 })
+    );
+  });
+
+  it("times out within its remainder when the snapshot cannot get a connection", async () => {
+    const { user, collection, document } = await buildFixture();
+    let holders: Transaction[] = [];
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: structurePolicy }),
+      {
+        clock: remainderClock(
+          LINT_DOCUMENT_DEADLINE_MS,
+          HELD_POOL_REMAINDER_MS
+        ),
+        writeAudit: async () => undefined,
+        reader: {
+          ...defaultLintDocumentReader,
+          authorizeLintTarget: async (input) => {
+            const target =
+              await defaultLintDocumentReader.authorizeLintTarget(input);
+            holders = await holdPool();
+            return target;
+          },
+        },
+      }
+    );
+
+    try {
+      const startedAt = performance.now();
+      const result = await lintResult(client, document.id);
+      const elapsedMs = performance.now() - startedAt;
+
+      expect(elapsedMs).toBeGreaterThanOrEqual(HELD_POOL_REMAINDER_MS - 100);
+      expect(elapsedMs).toBeLessThan(
+        HELD_POOL_REMAINDER_MS + HELD_POOL_SLACK_MS
+      );
+      // The abandoned acquisition still waits behind the holders.
+      expect(poolUsage()).toEqual({ using: holders.length, waiting: 1 });
+      expect(result.state).toBe("failed");
+      expect(result.systemFailures).toEqual([
+        {
+          code: "VALIDATION_TIMEOUT",
+          message: expect.any(String),
+          location: {
+            kind: "scope",
+            scopeKind: "document",
+            documentId: document.id,
+          },
+        },
+      ]);
+    } finally {
+      await releasePool(holders);
+    }
+    await vi.waitFor(() =>
+      expect(poolUsage()).toEqual({ using: 0, waiting: 0 })
+    );
   });
 
   it("returns the fixed failure message for an unmodellable failure", async () => {
@@ -1659,6 +1820,9 @@ describe("lint_wiki", () => {
         /^(SET LOCAL|SELECT|SET TRANSACTION ISOLATION)/.test(statement)
       )
     ).toEqual([]);
+    expect(
+      sql().filter((statement) => statement.startsWith("START TRANSACTION"))
+    ).toEqual([]);
   });
 
   it("returns the fixed failure message when the lookup fails", async () => {
@@ -1700,13 +1864,14 @@ describe("lint_wiki", () => {
 
   it("times out when the first snapshot batch is refused", async () => {
     const { user, collection } = await buildFixture({ text: "# Title" });
-    // The deadline starts and bounds the lookup at 0 ms; 59,950 ms have
-    // passed when the first snapshot batch is bounded.
+    // The deadline starts, and bounds the lookup's opening and batch and the
+    // snapshot's opening, at 0 ms; 59,950 ms have passed when the first
+    // snapshot batch is bounded.
     let readings = 0;
     const client = await connect(
       user,
       policySetFor({ [collection.id]: structurePolicy }),
-      { clock: () => (readings++ < 2 ? 0 : 59950) }
+      { clock: () => (readings++ < 4 ? 0 : 59950) }
     );
 
     await expect(
@@ -1744,6 +1909,82 @@ describe("lint_wiki", () => {
         },
       ],
     });
+  });
+
+  it("returns the fixed failure message within its remainder when the lookup cannot get a connection", async () => {
+    const { user, collection } = await buildFixture();
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: structurePolicy }),
+      {
+        clock: remainderClock(LINT_WIKI_DEADLINE_MS, HELD_POOL_REMAINDER_MS),
+        writeAudit: async () => undefined,
+      }
+    );
+    const holders = await holdPool();
+
+    try {
+      const startedAt = performance.now();
+      const result = await lintWikiCall(client, {
+        collectionId: collection.id,
+      });
+      const elapsedMs = performance.now() - startedAt;
+
+      expect(elapsedMs).toBeGreaterThanOrEqual(HELD_POOL_REMAINDER_MS - 100);
+      expect(elapsedMs).toBeLessThan(
+        HELD_POOL_REMAINDER_MS + HELD_POOL_SLACK_MS
+      );
+      // The abandoned acquisition still waits behind the holders.
+      expect(poolUsage()).toEqual({ using: holders.length, waiting: 1 });
+      expect(result).toEqual({
+        content: [{ type: "text", text: OPERATION_FAILED }],
+        isError: true,
+      });
+    } finally {
+      await releasePool(holders);
+    }
+    await vi.waitFor(() =>
+      expect(poolUsage()).toEqual({ using: 0, waiting: 0 })
+    );
+  });
+
+  it("times out the default scope within its remainder when the snapshot cannot get a connection", async () => {
+    const { user, collection } = await buildFixture({ text: "# Title" });
+    const client = await connect(
+      user,
+      policySetFor({ [collection.id]: structurePolicy }),
+      {
+        clock: remainderClock(LINT_WIKI_DEADLINE_MS, HELD_POOL_REMAINDER_MS),
+        writeAudit: async () => undefined,
+      }
+    );
+    const holders = await holdPool();
+
+    try {
+      const startedAt = performance.now();
+      const result = await wikiResult(client);
+      const elapsedMs = performance.now() - startedAt;
+
+      expect(elapsedMs).toBeGreaterThanOrEqual(HELD_POOL_REMAINDER_MS - 100);
+      expect(elapsedMs).toBeLessThan(
+        HELD_POOL_REMAINDER_MS + HELD_POOL_SLACK_MS
+      );
+      // The abandoned acquisition still waits behind the holders.
+      expect(poolUsage()).toEqual({ using: holders.length, waiting: 1 });
+      expect(result.state).toBe("failed");
+      expect(result.systemFailures).toEqual([
+        {
+          code: "VALIDATION_TIMEOUT",
+          message: expect.any(String),
+          location: { kind: "scope", scopeKind: "configured_collections" },
+        },
+      ]);
+    } finally {
+      await releasePool(holders);
+    }
+    await vi.waitFor(() =>
+      expect(poolUsage()).toEqual({ using: 0, waiting: 0 })
+    );
   });
 
   it("bounds the lookup by the 60000 ms deadline", async () => {
@@ -3988,7 +4229,7 @@ describe("audit summary", () => {
     const eventCount = await Event.count({ where: { teamId: user.teamId } });
     /**
      * Returns a clock whose readings after the first are near the deadline,
-     * so the first lookup batch is refused below the floor.
+     * so the lookup is refused below the floor before its transaction opens.
      *
      * @param deadlineMs - the deadline.
      * @returns the clock.
