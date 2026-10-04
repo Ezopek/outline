@@ -48,5 +48,6 @@ This is an operator-maintained Outline fork for deterministic Wiki linting in th
 - `v1.10.1` is an annotated tag: `9686f7264506a910ed87a4ad8704bafd361a3393` is the tag object; `4a5a616a21be800257dc11cef4263d0dd0412156` is the source commit.
 - Tests against newer `upstream/main` do not validate the `v1.10.1` implementation.
 - Do not mix the post-`v1.10.1` patch-edit fix into the first linting change.
+- During a `bmad-loop` sweep, `_bmad-output/implementation-artifacts/deferred-work.md` can hold an uncommitted change that belongs to the orchestrator's own pending ledger transaction, not to the story being built. It does not fail a clean-working-tree gate. Never stage, edit, revert or commit it; finalize the story without it and let the orchestrator commit it.
 
 <!-- /bmad:context -->
