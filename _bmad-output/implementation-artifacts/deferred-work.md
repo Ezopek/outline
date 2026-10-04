@@ -223,6 +223,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator; sprint-status status open)
 status: open
+decision: 2026-10-04 Keep open for the Gate 1 review
 
 ### DW-26: Reserve COMMIT_PROBE_BOUND_MS out of the COMMIT timeout in runAttempt so a commit timeout can still probe; add a commit-timeout test (F-6).
 origin: retro action item epic-2-retro-item-13-reserve-commit_probe_bound_ms-out-of-the
