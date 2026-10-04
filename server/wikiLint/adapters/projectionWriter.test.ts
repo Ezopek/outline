@@ -4,9 +4,10 @@ import * as Y from "yjs";
 import type { NavigationNode } from "@shared/types";
 import { TextEditMode } from "@shared/types";
 import type { Template, User } from "@server/models";
-import { Collection, Document, Event } from "@server/models";
+import { Attachment, Collection, Document, Event } from "@server/models";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { sequelize } from "@server/storage/database";
+import FileStorage from "@server/storage/files";
 import {
   buildCollection,
   buildDocument,
@@ -15,6 +16,7 @@ import {
   buildUser,
 } from "@server/test/factories";
 import { withAPIContext } from "@server/test/support";
+import { Deadline } from "../application/deadline";
 import { toCanonicalMarkdown } from "./canonicalSyntax";
 import type {
   MarkdownCreateInput,
@@ -27,8 +29,11 @@ import {
   projectMarkdownCreate,
   projectMarkdownUpdate,
 } from "./documentProjection";
+import type { StagedAttachment } from "./mediaStaging";
+import { MediaStager } from "./mediaStaging";
 import {
   UnchangedUpdateError,
+  materializeAttachments,
   persistProjectedCreate,
   persistProjectedUpdate,
 } from "./projectionWriter";
@@ -88,7 +93,9 @@ async function expectStored(projection: ProjectedDocument) {
     paranoid: false,
     rejectOnEmpty: true,
   });
-  const { state, ...fields } = projection;
+  const { state, attachments, ...fields } = projection;
+  // Only media-free projections are checked here.
+  expect(attachments).toEqual([]);
   expect(fields).toEqual({
     documentId: stored.id,
     title: stored.title,
@@ -501,5 +508,202 @@ describe("persistProjectedUpdate", () => {
     await expect(
       Document.unscoped().findOne({ where: { id: document.id }, raw: true })
     ).resolves.toEqual(before);
+  });
+});
+
+describe("materializeAttachments", () => {
+  /** A one-pixel PNG, as a Markdown image `documentUpdater` would import. */
+  const DATA_IMAGE =
+    "![pixel](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=)";
+
+  /**
+   * Stages Markdown text as an enforced attempt's P2 would.
+   *
+   * @param actor - the acting user.
+   * @param text - the text.
+   * @returns the rewritten text and the handles.
+   */
+  async function stage(actor: User, text: string) {
+    const stager = new MediaStager({
+      invocationId: randomUUID(),
+      attemptId: randomUUID(),
+      actor,
+      preparation: new Deadline(30000),
+    });
+    const staged = await stager.stageMarkdown(text);
+    return { text: staged, attachments: stager.attachments };
+  }
+
+  /**
+   * Reads the Attachment rows of a team.
+   *
+   * @param teamId - the team.
+   * @returns the rows.
+   */
+  const rowsOf = (teamId: string) =>
+    Attachment.findAll({ where: { teamId }, order: [["createdAt", "ASC"]] });
+
+  /**
+   * Records the mutating statements and every storage call of a step.
+   *
+   * @param step - the step.
+   * @returns the step's result, the statements, and the storage calls.
+   */
+  async function recorded<T>(step: () => Promise<T>) {
+    const query = vi.spyOn(sequelize, "query");
+    const storage = (
+      ["store", "storeFromUrl", "deleteFile", "getFileBuffer"] as const
+    ).map((method) => vi.spyOn(FileStorage, method));
+    try {
+      const result = await step();
+      const statements = query.mock.calls
+        .map(([sql]) => (typeof sql === "string" ? sql : sql.query))
+        .filter((sql) => /^\s*INSERT INTO "(attachments|documents)"/.test(sql));
+      const storageCalls = storage.reduce(
+        (total, spy) => total + spy.mock.calls.length,
+        0
+      );
+      return { result, statements, storageCalls };
+    } finally {
+      query.mockRestore();
+      for (const spy of storage) {
+        spy.mockRestore();
+      }
+    }
+  }
+
+  /**
+   * Checks the rows and Events of materialized handles.
+   *
+   * @param actor - the acting user.
+   * @param attachments - the handles.
+   */
+  async function expectMaterialized(
+    actor: User,
+    attachments: readonly StagedAttachment[]
+  ) {
+    const rows = await rowsOf(actor.teamId);
+    expect(
+      rows.map((row) => ({
+        id: row.id,
+        key: row.key,
+        acl: row.acl,
+        size: Number(row.size),
+        contentType: row.contentType,
+        teamId: row.teamId,
+        userId: row.userId,
+        documentId: row.documentId,
+      }))
+    ).toEqual(
+      attachments.map((handle) => ({
+        ...handle,
+        teamId: actor.teamId,
+        userId: actor.id,
+        documentId: null,
+      }))
+    );
+    const events = await Event.findAll({
+      where: { name: "attachments.create", teamId: actor.teamId },
+    });
+    expect(new Set(events.map((event) => event.modelId))).toEqual(
+      new Set(attachments.map((handle) => handle.id))
+    );
+    expect(events).toHaveLength(attachments.length);
+    for (const event of events) {
+      expect(event.actorId).toBe(actor.id);
+    }
+  }
+
+  it("inserts the rows of a create before its document, with no storage call", async () => {
+    const { actor, collection } = await fixture();
+    const { text, attachments } = await stage(
+      actor,
+      `## Overview\n\n${DATA_IMAGE}`
+    );
+
+    const { statements, storageCalls } = await recorded(() =>
+      withAPIContext(actor, async (ctx) => {
+        const projection = await projectMarkdownCreate({
+          prepared: {
+            ...prepareMarkdownCreate({ text, publish: true }),
+            attachments,
+          },
+          documentId: randomUUID(),
+          collectionId: collection.id,
+          actor,
+        });
+        return persistProjectedCreate(ctx, projection, null);
+      })
+    );
+
+    expect(attachments).toHaveLength(1);
+    expect(storageCalls).toBe(0);
+    expect(statements.map((sql) => sql.slice(0, 25))).toEqual([
+      'INSERT INTO "attachments"',
+      'INSERT INTO "documents" (',
+    ]);
+    await expectMaterialized(actor, attachments);
+  });
+
+  it("materializes an update's rows and leaves an unpublish without any", async () => {
+    const { actor, collection } = await fixture();
+    const document = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+      collectionId: collection.id,
+      text: BASE_BODY,
+    });
+    const { text, attachments } = await stage(actor, DATA_IMAGE);
+
+    /**
+     * Persists an update whose projection carries the staged handles.
+     *
+     * @param input - the update arguments.
+     * @returns the recorded statements and storage calls.
+     */
+    const persist = (input: MarkdownUpdateInput) =>
+      recorded(() =>
+        withAPIContext(actor, async (ctx) => {
+          const loaded = await Document.findByPk(document.id, {
+            userId: actor.id,
+            includeState: true,
+            rejectOnEmpty: true,
+            transaction: ctx.state.transaction,
+          });
+          const prepared = prepareMarkdownUpdate(input, attachments);
+          const projection = await projectMarkdownUpdate({
+            prepared,
+            document: loaded,
+            collectionId: collection.id,
+          });
+          return persistProjectedUpdate(ctx, {
+            document: loaded,
+            projection,
+            input: prepared.input,
+          });
+        })
+      );
+
+    const unpublished = await persist({ publish: false });
+    expect(unpublished.statements).toEqual([]);
+    expect(await rowsOf(actor.teamId)).toEqual([]);
+
+    const updated = await persist({ text, publish: true });
+    expect(updated.storageCalls).toBe(0);
+    expect(updated.statements).toEqual([
+      expect.stringMatching(/^INSERT INTO "attachments"/),
+    ]);
+    expect(updated.result.text).toContain(
+      `/api/attachments.redirect?id=${attachments[0].id}`
+    );
+    await expectMaterialized(actor, attachments);
+  });
+
+  it("inserts nothing for no handles", async () => {
+    const { actor } = await fixture();
+
+    await withAPIContext(actor, (ctx) => materializeAttachments(ctx, []));
+
+    expect(await rowsOf(actor.teamId)).toEqual([]);
   });
 });

@@ -1,22 +1,20 @@
-import type { Node } from "prosemirror-model";
 import type {
   ProsemirrorData,
   SourceMetadata,
   TextEditMode,
 } from "@shared/types";
 import { TextHelper } from "@shared/utils/TextHelper";
-import { isInternalUrl } from "@shared/utils/urls";
 import type { Template, User } from "@server/models";
 import { Document } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
-import parseImages from "@server/utils/parseImages";
 import { WikiLintContractError } from "../core/contracts";
+import type { StagedAttachment } from "./mediaStaging";
 
 /**
  * The one complete document an enforced MCP write would persist. The object,
- * `content`, and `sourceMetadata` are deep-frozen; `state` is a private copy,
- * since a TypedArray cannot be frozen.
+ * `content`, `sourceMetadata`, and `attachments` are deep-frozen; `state` is
+ * a private copy, since a TypedArray cannot be frozen.
  */
 export type ProjectedDocument = Readonly<{
   documentId: string;
@@ -35,6 +33,11 @@ export type ProjectedDocument = Readonly<{
   fullWidth: boolean;
   templateId: string | null;
   sourceMetadata: SourceMetadata | null;
+  /**
+   * The staged media the content references, materialized in P7 before the
+   * document is written; empty when nothing was staged.
+   */
+  attachments: readonly StagedAttachment[];
 }>;
 
 /** The Markdown create arguments, as the MCP handler maps them. */
@@ -85,31 +88,23 @@ export interface ImportedHtml {
 /**
  * The input-only P2 preparation of a create. `content` is the converted body,
  * or null when the input has no text; `state` is the collaborative state of
- * an imported document, or null.
+ * an imported document, or null; `attachments` are the staged media handles.
  */
 export type PreparedMarkdownCreate = Readonly<{
   input: Readonly<Omit<MarkdownCreateInput, "text">>;
   content: ProsemirrorData | null;
   state: Buffer | null;
-}>;
-
-/** The input-only P2 preparation of an update. */
-export type PreparedMarkdownUpdate = Readonly<{
-  input: Readonly<MarkdownUpdateInput>;
+  attachments: readonly StagedAttachment[];
 }>;
 
 /**
- * Thrown in P2 when update text or imported HTML holds media the baseline
- * would import as an Attachment. Enforced writes refuse such media until it
- * can be staged.
+ * The input-only P2 preparation of an update, with the staged media handles
+ * its text references.
  */
-export class UnstagedMediaError extends Error {
-  name = "UnstagedMediaError";
-
-  constructor() {
-    super("Media import is not supported for this write");
-  }
-}
+export type PreparedMarkdownUpdate = Readonly<{
+  input: Readonly<MarkdownUpdateInput>;
+  attachments: readonly StagedAttachment[];
+}>;
 
 /**
  * Freezes a value and everything reachable from it, leaving TypedArrays,
@@ -156,6 +151,7 @@ export function prepareMarkdownCreate(
     input: rest,
     content: text ? ProsemirrorHelper.toProsemirror(text).toJSON() : null,
     state: null,
+    attachments: [],
   });
 }
 
@@ -169,12 +165,14 @@ export function prepareMarkdownCreate(
  * body. It reads no stored state and issues no query.
  *
  * @param input - the create arguments.
- * @param imported - the converted source.
+ * @param imported - the converted source, its media already staged.
+ * @param attachments - the staged media handles; none by default.
  * @returns the frozen prepared value.
  */
 export function prepareHtmlCreate(
   input: HtmlCreateInput,
-  imported: ImportedHtml
+  imported: ImportedHtml,
+  attachments: readonly StagedAttachment[] = []
 ): PreparedMarkdownCreate {
   return deepFreeze({
     input: {
@@ -186,72 +184,27 @@ export function prepareHtmlCreate(
       ? ProsemirrorHelper.toProsemirror(imported.text).toJSON()
       : null,
     state: null,
+    attachments: structuredClone(attachments),
   });
-}
-
-/**
- * The `documentImporter` media step of an enforced HTML create: it refuses
- * every image or video `src`, and every `data:` link `href`, that parses as a
- * URL and is not internal, which is exactly what the baseline would import.
- * It never fetches, creates an Attachment, or writes storage.
- *
- * @param doc - the converted document.
- * @returns the same document, when it holds no importable media.
- * @throws UnstagedMediaError when it holds importable media.
- */
-export function refuseImportableMedia(doc: Node): Node {
-  // Mirrors ProsemirrorHelper.replaceImagesWithAttachments.
-  const sources = [
-    ...ProsemirrorHelper.getImages(doc),
-    ...ProsemirrorHelper.getVideos(doc),
-  ].map((node) => String(node.attrs.src ?? ""));
-  doc.descendants((node) => {
-    const link = node.marks.find((mark) => mark.type.name === "link");
-    const href = String(link?.attrs.href ?? "");
-    if (href.startsWith("data:")) {
-      sources.push(href);
-    }
-    return true;
-  });
-  for (const src of sources) {
-    try {
-      new URL(src);
-    } catch {
-      continue;
-    }
-    if (!isInternalUrl(src)) {
-      throw new UnstagedMediaError();
-    }
-  }
-  return doc;
 }
 
 /**
  * Prepares a Markdown update in P2. It reads no stored state and issues no
- * query. Update text holding an image the baseline would import is refused
- * until media can be staged; an unpublish ignores the text and is not.
+ * query. Text holding media the baseline would import arrives already
+ * staged and rewritten, with the staged handles.
  *
- * @param input - the update arguments.
+ * @param input - the update arguments, with the rewritten text.
+ * @param attachments - the staged media handles; none by default.
  * @returns the frozen prepared value.
- * @throws UnstagedMediaError when the text holds an importable image.
  */
 export function prepareMarkdownUpdate(
-  input: MarkdownUpdateInput
+  input: MarkdownUpdateInput,
+  attachments: readonly StagedAttachment[] = []
 ): PreparedMarkdownUpdate {
-  if (input.publish !== false && input.text !== undefined) {
-    // Mirrors TextHelper.replaceImagesWithAttachments with `base64Only`.
-    for (const image of parseImages(input.text)) {
-      try {
-        new URL(image.src);
-      } catch {
-        continue;
-      }
-      if (!isInternalUrl(image.src) && image.src.startsWith("data:")) {
-        throw new UnstagedMediaError();
-      }
-    }
-  }
-  return deepFreeze({ input: structuredClone(input) });
+  return deepFreeze({
+    input: structuredClone(input),
+    attachments: structuredClone(attachments),
+  });
 }
 
 /**
@@ -308,6 +261,7 @@ export async function projectMarkdownCreate(args: {
     fullWidth: input.fullWidth ?? template?.fullWidth ?? false,
     templateId: template ? template.id : null,
     sourceMetadata: structuredClone(input.sourceMetadata) ?? null,
+    attachments: structuredClone(prepared.attachments),
   });
 }
 
@@ -394,5 +348,6 @@ export async function projectMarkdownUpdate(args: {
       edit.fullWidth !== undefined ? edit.fullWidth : document.fullWidth,
     templateId: document.templateId ?? null,
     sourceMetadata: structuredClone(document.sourceMetadata) ?? null,
+    attachments: structuredClone(prepared.attachments),
   });
 }

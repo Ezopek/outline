@@ -1,12 +1,13 @@
 import { UniqueConstraintError } from "sequelize";
 import documentCreator from "@server/commands/documentCreator";
 import type { Template } from "@server/models";
-import { Document } from "@server/models";
+import { Attachment, Document } from "@server/models";
 import type { APIContext } from "@server/types";
 import type {
   MarkdownUpdateInput,
   ProjectedDocument,
 } from "./documentProjection";
+import type { StagedAttachment } from "./mediaStaging";
 
 /**
  * Thrown in P7 when an update persisted nothing: the `revisionCount` read
@@ -36,20 +37,49 @@ export function isPreallocatedIdConflict(error: unknown): boolean {
 }
 
 /**
+ * Materializes staged media in P7, before the document write: it inserts
+ * each handle's Attachment row, in order, with the values and the
+ * `attachments.create` Event of `attachmentCreator`, and makes no storage
+ * call (AD-7).
+ *
+ * @param ctx - the API context, bound to the enforcement transaction.
+ * @param attachments - the validated projection's staged media.
+ */
+export async function materializeAttachments(
+  ctx: APIContext,
+  attachments: readonly StagedAttachment[]
+): Promise<void> {
+  const { user } = ctx.state.auth;
+  for (const { id, key, acl, size, contentType } of attachments) {
+    await Attachment.createWithCtx(ctx, {
+      id,
+      key,
+      acl,
+      size,
+      contentType,
+      teamId: user.teamId,
+      userId: user.id,
+    });
+  }
+}
+
+/**
  * Persists the projection of a create in P7 through the baseline writer,
  * which stores the given content as is: it neither parses nor substitutes
- * it. An imported collaborative state is stored with it.
+ * it. An imported collaborative state is stored with it, and the staged
+ * media are materialized first.
  *
  * @param ctx - the API context, bound to the enforcement transaction.
  * @param projection - the validated projection.
  * @param template - the template re-fetched in P3, if any.
  * @returns the document as re-fetched inside the transaction.
  */
-export function persistProjectedCreate(
+export async function persistProjectedCreate(
   ctx: APIContext,
   projection: ProjectedDocument,
   template: Template | null | undefined
 ): Promise<Document> {
+  await materializeAttachments(ctx, projection.attachments);
   return documentCreator(ctx, {
     id: projection.documentId,
     title: projection.title,
@@ -72,8 +102,9 @@ export function persistProjectedCreate(
  * Persists the projection of a Markdown update in P7 on the locked,
  * re-fetched document, replaying only the tail of `documentUpdater`: no edit
  * is re-applied and no row is re-locked. An unpublish goes through the
- * baseline unpublish; any other update assigns only the fields the input
- * names, from the projection, then publishes or saves.
+ * baseline unpublish; any other update materializes the staged media, assigns
+ * only the fields the input names, from the projection, then publishes or
+ * saves.
  *
  * @param ctx - the API context, bound to the enforcement transaction.
  * @param args.document - the document re-fetched after the lock.
@@ -112,6 +143,7 @@ export async function persistProjectedUpdate(
     return refetch();
   }
 
+  await materializeAttachments(ctx, projection.attachments);
   const { revisionCount } = document;
   if (input.title !== undefined) {
     document.title = projection.title;

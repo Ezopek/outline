@@ -16,7 +16,6 @@ import type { PreparedMarkdownCreate } from "../adapters/documentProjection";
 import {
   prepareHtmlCreate,
   projectMarkdownCreate,
-  refuseImportableMedia,
 } from "../adapters/documentProjection";
 import { getPolicySet } from "../adapters/policyConfig";
 import {
@@ -651,7 +650,7 @@ export async function runEnforcedImport(
         instanceOrigin: env.URL,
       },
       {
-        prepare: async () => {
+        prepare: async (media) => {
           const content = await prepareStep(() =>
             FileStorage.getFileBuffer(intent.key).catch(() => {
               throw new MissingSourceError();
@@ -664,7 +663,7 @@ export async function runEnforcedImport(
               mimeType: intent.sourceMetadata.mimeType,
               content,
               ctx,
-              media: refuseImportableMedia,
+              media: (doc) => media.stageProsemirror(doc),
             })
           );
           prepared = await prepareStep(() =>
@@ -678,7 +677,8 @@ export async function runEnforcedImport(
                 parentDocumentId: intent.parentDocumentId,
                 sourceMetadata: intent.sourceMetadata,
               },
-              imported
+              imported,
+              media.attachments
             )
           );
         },

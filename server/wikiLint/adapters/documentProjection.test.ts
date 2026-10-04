@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { http, HttpResponse } from "msw";
 import { yDocToProsemirrorJSON } from "y-prosemirror";
 import * as Y from "yjs";
 import type { NavigationNode, ProsemirrorData } from "@shared/types";
@@ -12,7 +13,7 @@ import { schema as editorSchema } from "@server/editor";
 import DocumentImportTask from "@server/queues/tasks/DocumentImportTask";
 import documentUpdater from "@server/commands/documentUpdater";
 import type { Template, User } from "@server/models";
-import { Collection, Document, Event } from "@server/models";
+import { Attachment, Collection, Document, Event } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { sequelize } from "@server/storage/database";
@@ -25,12 +26,14 @@ import {
   buildTemplate,
   buildUser,
 } from "@server/test/factories";
+import { server as msw } from "@server/test/msw";
 import { withAPIContext } from "@server/test/support";
+import { Deadline } from "../application/deadline";
 import { abortMessage } from "../application/writeDecision";
 import { WikiLintContractError } from "../core/contracts";
 import type { SyntaxNode } from "../core/contracts";
 import { evaluateDocumentRules } from "../core/documentRules";
-import { OPERATION_FAILED, ruleConfigSchema } from "../core/registry";
+import { ruleConfigSchema } from "../core/registry";
 import { parseCanonicalMarkdown, toCanonicalMarkdown } from "./canonicalSyntax";
 import type {
   MarkdownCreateInput,
@@ -38,14 +41,13 @@ import type {
   ProjectedDocument,
 } from "./documentProjection";
 import {
-  UnstagedMediaError,
   prepareHtmlCreate,
   prepareMarkdownCreate,
   prepareMarkdownUpdate,
   projectMarkdownCreate,
   projectMarkdownUpdate,
-  refuseImportableMedia,
 } from "./documentProjection";
+import { MediaStager } from "./mediaStaging";
 import { persistProjectedCreate } from "./projectionWriter";
 
 vi.mock("@server/commands/attachmentCreator", async (importOriginal) => {
@@ -59,6 +61,108 @@ const DATA_IMAGE =
 
 /** The base body of the update fixtures: paragraphs at both ends. */
 const BASE_BODY = "Alpha paragraph\n\n## Middle\n\nOmega paragraph";
+
+/** A one-pixel PNG, base64-encoded. */
+const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+/** Matches a UUID. */
+const UUID_PATTERN =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+
+/**
+ * Copies a JSON value with every UUID other than the known ones replaced by
+ * its order of first appearance, so that two writes with fresh Attachment
+ * IDs compare.
+ *
+ * @param value - the value.
+ * @param known - the IDs to keep.
+ * @returns the normalized copy.
+ */
+function normalized(value: unknown, known: readonly string[] = []): unknown {
+  const seen = new Map<string, string>();
+  return JSON.parse(
+    JSON.stringify(value).replace(UUID_PATTERN, (id) => {
+      if (known.includes(id)) {
+        return id;
+      }
+      if (!seen.has(id)) {
+        seen.set(id, `<id ${seen.size}>`);
+      }
+      return seen.get(id)!;
+    })
+  );
+}
+
+/**
+ * Builds the media stager of one enforced attempt by an actor.
+ *
+ * @param actor - the acting user.
+ * @returns the stager.
+ */
+const stagerFor = (actor: User) =>
+  new MediaStager({
+    invocationId: randomUUID(),
+    attemptId: randomUUID(),
+    actor,
+    preparation: new Deadline(30000),
+  });
+
+/** The values of an Attachment row that a staged handle determines. */
+interface AttachmentValues {
+  id: string;
+  key: string;
+  acl: string;
+  size: number;
+  contentType: string;
+  documentId: string | null;
+  userId: string;
+}
+
+/**
+ * Reads the Attachment rows of a team, optionally only those a text
+ * references.
+ *
+ * @param teamId - the team.
+ * @param referencedBy - the text, if any.
+ * @returns the rows' values.
+ */
+async function attachmentRows(
+  teamId: string,
+  referencedBy?: string
+): Promise<AttachmentValues[]> {
+  const rows = await Attachment.findAll({ where: { teamId } });
+  return rows
+    .map((row) => ({
+      id: row.id,
+      key: row.key,
+      acl: row.acl,
+      size: Number(row.size),
+      contentType: row.contentType,
+      documentId: row.documentId,
+      userId: row.userId,
+    }))
+    .filter(
+      (row) =>
+        referencedBy === undefined ||
+        referencedBy.includes(`/api/attachments.redirect?id=${row.id}`)
+    );
+}
+
+/**
+ * Normalizes Attachment values for a comparison across writes: the IDs are
+ * dropped from the rows and their keys, and the rows are sorted by key.
+ *
+ * @param rows - the rows.
+ * @returns the normalized rows.
+ */
+const comparableRows = (rows: readonly AttachmentValues[]) =>
+  rows
+    .map(({ id, key, ...rest }) => ({
+      ...rest,
+      key: key.replace(`/${id}/`, "/<id>/"),
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key));
 
 /**
  * Runs a projection step and proves it had no effect: no SQL statement, no
@@ -183,7 +287,9 @@ function structureParent(
  */
 async function expectParity(projection: ProjectedDocument) {
   const stored = await storedDocument(projection.documentId);
-  const { state, ...fields } = projection;
+  const { state, attachments, ...fields } = projection;
+  // Only media-free writes are compared here.
+  expect(attachments).toEqual([]);
   expect(fields).toEqual({
     documentId: stored.id,
     title: stored.title,
@@ -1048,27 +1154,56 @@ describe("projection failures", () => {
     }
   );
 
-  it("refuses update text holding an importable image in P2", async () => {
-    const { collection, document, before } = await updateFixture();
-    const failure = await withoutEffect(() =>
-      prepareMarkdownUpdate({ text: `Body\n\n${DATA_IMAGE}` })
-    ).catch((error: unknown) => error);
-
-    expect(failure).toBeInstanceOf(UnstagedMediaError);
-    expect((failure as Error).message).not.toContain("data:");
-    expect(abortMessage(failure)).toBe(OPERATION_FAILED);
-    await expect(storedRows(document.id, collection.id)).resolves.toEqual(
-      before
+  it("projects staged update text and keeps its handles, as the baseline would persist it", async () => {
+    const { actor, collection, document } = await updateFixture();
+    const stager = stagerFor(actor);
+    const text = await stager.stageMarkdown(`Body\n\n${DATA_IMAGE}`);
+    const [handle] = stager.attachments;
+    const prepared = await withoutEffect(() =>
+      prepareMarkdownUpdate(
+        { text, editMode: TextEditMode.Append },
+        stager.attachments
+      )
     );
+
+    const projection = await withoutEffect(() =>
+      projectMarkdownUpdate({ prepared, document, collectionId: collection.id })
+    );
+
+    expect(text).toBe(
+      `Body\n\n![pixel](/api/attachments.redirect?id=${handle.id})`
+    );
+    expect(prepared.attachments).toEqual([handle]);
+    expect(projection.attachments).toEqual([handle]);
+    expect(isDeepFrozen(prepared)).toBe(true);
+    expect(isDeepFrozen(projection)).toBe(true);
+    expect(Object.isFrozen(stager.attachments)).toBe(false);
+    expect(projection.text).toContain(
+      `/api/attachments.redirect?id=${handle.id}`
+    );
+    expect(JSON.stringify(projection.content)).toContain(
+      `/api/attachments.redirect?id=${handle.id}`
+    );
+    expect(JSON.stringify(projection)).not.toContain("data:");
+    await stager.cleanup();
   });
 
-  it("does not refuse images the baseline would not import", async () => {
+  it("stages no image the baseline update would not import", async () => {
+    const { actor } = await updateFixture();
+    const stager = stagerFor(actor);
+    const storeFromUrl = vi.spyOn(FileStorage, "storeFromUrl");
+    const text =
+      "![a](https://example.com/a.png) ![b](/api/attachments.redirect?id=1) ![c](not a url)";
+
+    const staged = await stager.stageMarkdown(text);
+    expect(storeFromUrl).not.toHaveBeenCalled();
+    storeFromUrl.mockRestore();
     const prepared = await withoutEffect(() =>
-      prepareMarkdownUpdate({
-        text: "![a](https://example.com/a.png) ![b](/api/attachments.redirect?id=1) ![c](not a url)",
-      })
+      prepareMarkdownUpdate({ text: staged }, stager.attachments)
     );
-    expect(prepared.input.text).toContain("https://example.com/a.png");
+
+    expect(prepared.input.text).toBe(text);
+    expect(prepared.attachments).toEqual([]);
   });
 
   it("rejects a final collection other than the classified one", async () => {
@@ -1129,6 +1264,58 @@ describe("projection failures", () => {
   });
 });
 
+describe("update parity with media", () => {
+  it("projects a data image as documentUpdater persists it, modulo Attachment IDs", async () => {
+    const { actor, collection } = await fixture();
+    const built = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+      collectionId: collection.id,
+      text: BASE_BODY,
+    });
+    const input = {
+      text: `Tail with ${DATA_IMAGE} inline`,
+      editMode: TextEditMode.Append,
+    };
+    const document = await loadForUpdate(built.id, actor);
+    const stager = stagerFor(actor);
+    const prepared = prepareMarkdownUpdate(
+      { ...input, text: await stager.stageMarkdown(input.text) },
+      stager.attachments
+    );
+    const projection = await withoutEffect(() =>
+      projectMarkdownUpdate({ prepared, document, collectionId: collection.id })
+    );
+    expect(await attachmentRows(actor.teamId)).toEqual([]);
+
+    await withAPIContext(actor, (ctx) =>
+      documentUpdater(ctx, { document, ...input })
+    );
+
+    const stored = await storedDocument(built.id);
+    const known = [actor.id, built.id];
+    expect(normalized(projection.content, known)).toEqual(
+      normalized(stored.content, known)
+    );
+    expect(normalized(projection.text, known)).toEqual(
+      normalized(stored.text, known)
+    );
+    expect(normalized(decodeState(projection.state), known)).toEqual(
+      normalized(decodeState(stored.state), known)
+    );
+    expect(
+      comparableRows(
+        projection.attachments.map((handle) => ({
+          ...handle,
+          documentId: null,
+          userId: actor.id,
+        }))
+      )
+    ).toEqual(comparableRows(await attachmentRows(actor.teamId)));
+    await stager.cleanup();
+  });
+});
+
 describe("prepareMarkdownCreate", () => {
   it("converts text input-only", async () => {
     const prepared = await withoutEffect(() =>
@@ -1171,17 +1358,19 @@ describe("HTML creates", () => {
     attributes: { title?: string; icon?: string; color?: string } = {}
   ) =>
     withoutEffect(async () => {
+      const stager = stagerFor(actor);
       const imported = await documentImporter({
         user: actor,
         fileName: sourceMetadata.fileName,
         mimeType: sourceMetadata.mimeType,
         content: html,
         ctx: createContext({ user: actor }),
-        media: refuseImportableMedia,
+        media: (doc) => stager.stageProsemirror(doc),
       });
       const prepared = prepareHtmlCreate(
         { ...attributes, publish: true, sourceMetadata },
-        imported
+        imported,
+        stager.attachments
       );
       const projection = await projectMarkdownCreate({
         prepared,
@@ -1252,8 +1441,10 @@ describe("HTML creates", () => {
       collection.id,
       attributes
     );
-    const { state, documentId, ...fields } = projection;
+    const { state, documentId, attachments, ...fields } = projection;
     void documentId;
+    // Only media-free sources are compared here.
+    expect(attachments).toEqual([]);
     return {
       projected: { ...fields, state: decodeState(state) },
       baseline: {
@@ -1681,7 +1872,10 @@ describe("HTML creates", () => {
         mimeType: sourceMetadata.mimeType,
         content: html,
         ctx: createContext({ user: actor }),
-        ...(enforced && { media: refuseImportableMedia }),
+        ...(enforced && {
+          media: (doc: Parameters<MediaStager["stageProsemirror"]>[0]) =>
+            stagerFor(actor).stageProsemirror(doc),
+        }),
       });
 
     await expect(convert(false)).rejects.toBeInstanceOf(RangeError);
@@ -1689,7 +1883,8 @@ describe("HTML creates", () => {
   });
 });
 
-describe("refuseImportableMedia", () => {
+describe("the enforced HTML media step", () => {
+  const sourceMetadata = { fileName: "notes.html", mimeType: "text/html" };
   const external = "https://example.com/a.png";
   const internal = "https://app.outline.dev/api/attachments.redirect?id=1";
   const data = `data:image/png;base64,iVBORw0KGgo=`;
@@ -1725,6 +1920,10 @@ describe("refuseImportableMedia", () => {
       ],
     });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each([
     ["image", external, true],
     ["image", data, true],
@@ -1735,7 +1934,7 @@ describe("refuseImportableMedia", () => {
     ["link", data, true],
     ["link", external, false],
   ] as const)(
-    "refuses a %s at %s exactly when the baseline would import it",
+    "stages a %s at %s exactly when the baseline would import it",
     async (kind, src, expected) => {
       const actor = await buildUser();
       const doc = docWith(kind, src);
@@ -1747,20 +1946,133 @@ describe("refuseImportableMedia", () => {
         doc,
         actor
       );
-      const imported = storeFromUrl.mock.calls.length > 0;
+      const imported = storeFromUrl.mock.calls.map(([url]) => url);
       storeFromUrl.mockClear();
 
-      let refused = false;
-      try {
-        expect(refuseImportableMedia(doc)).toBe(doc);
-      } catch (error) {
-        expect(error).toBeInstanceOf(UnstagedMediaError);
-        refused = true;
-      }
+      const staged = await stagerFor(actor).stageProsemirror(doc);
 
-      expect(storeFromUrl).not.toHaveBeenCalled();
-      expect(refused).toBe(imported);
-      expect(refused).toBe(expected);
+      expect(storeFromUrl.mock.calls.map(([url]) => url)).toEqual(imported);
+      expect(imported.length > 0).toBe(expected);
+      // A failed import keeps the source, as in the baseline.
+      expect(staged.toJSON()).toEqual(doc.toJSON());
+    }
+  );
+
+  it.each([
+    [
+      "a data image, a data link, and an external image",
+      `<h2>Overview</h2><p><img src="data:image/png;base64,${PNG_BASE64}" alt="pixel"></p><p><a href="data:application/pdf;base64,${PNG_BASE64}">report</a></p><p><img src="https://media.example.test/a.png"></p>`,
+      3,
+      3,
+      undefined,
+    ],
+    [
+      // The baseline's racy duplicate imports twice and references the row
+      // that finished last; the stager stages once, under the first name.
+      "a repeated data image",
+      `<p><img src="data:image/png;base64,${PNG_BASE64}" alt="one"></p><p><img src="data:image/png;base64,${PNG_BASE64}" alt="two"></p>`,
+      2,
+      1,
+      "one",
+    ],
+  ])(
+    "matches the baseline import of %s, modulo Attachment IDs",
+    async (_name, html, imports, count, firstName) => {
+      msw.use(
+        http.get(
+          "https://media.example.test/a.png",
+          () =>
+            new HttpResponse(Buffer.from(PNG_BASE64, "base64"), {
+              headers: { "Content-Type": "image/png" },
+            })
+        )
+      );
+      const actor = await buildUser();
+      const collection = await buildCollection({
+        teamId: actor.teamId,
+        userId: actor.id,
+      });
+      const response = await new DocumentImportTask().perform({
+        userId: actor.id,
+        content: html,
+        sourceMetadata,
+        publish: true,
+        collectionId: collection.id,
+      });
+      if (!("documentId" in response)) {
+        throw new Error(response.error);
+      }
+      const stored = await storedDocument(response.documentId);
+      expect(await attachmentRows(actor.teamId)).toHaveLength(imports);
+      const baselineRows = await attachmentRows(actor.teamId, stored.text);
+
+      const stager = stagerFor(actor);
+      const query = vi.spyOn(sequelize, "query");
+      const imported = await documentImporter({
+        user: actor,
+        fileName: sourceMetadata.fileName,
+        mimeType: sourceMetadata.mimeType,
+        content: html,
+        ctx: createContext({ user: actor }),
+        media: (doc) => stager.stageProsemirror(doc),
+      });
+      const projection = await projectMarkdownCreate({
+        prepared: prepareHtmlCreate(
+          { publish: true, sourceMetadata },
+          imported,
+          stager.attachments
+        ),
+        documentId: randomUUID(),
+        collectionId: collection.id,
+        actor,
+        template: null,
+      });
+      expect(query).not.toHaveBeenCalled();
+      query.mockRestore();
+
+      expect(baselineRows).toHaveLength(count);
+      expect(projection.attachments).toHaveLength(count);
+      expect(isDeepFrozen(projection)).toBe(true);
+      expect(normalized(projection.content, [actor.id])).toEqual(
+        normalized(stored.content, [actor.id])
+      );
+      expect(normalized(projection.text, [actor.id])).toEqual(
+        normalized(stored.text, [actor.id])
+      );
+      /**
+       * Drops the file name of a racy duplicate from its key.
+       *
+       * @param rows - the rows.
+       * @returns the rows, named only when the baseline is deterministic.
+       */
+      const named = (rows: ReturnType<typeof comparableRows>) =>
+        rows.map((row) => ({
+          ...row,
+          key: firstName ? row.key.replace(/[^/]+$/, "") : row.key,
+        }));
+      expect(
+        named(
+          comparableRows(
+            projection.attachments.map((handle) => ({
+              ...handle,
+              documentId: null,
+              userId: actor.id,
+            }))
+          )
+        )
+      ).toEqual(named(comparableRows(baselineRows)));
+      if (firstName) {
+        expect(projection.attachments[0].key).toMatch(
+          new RegExp(`/${firstName}$`)
+        );
+      }
+      for (const handle of projection.attachments) {
+        expect(projection.text).toContain(
+          `/api/attachments.redirect?id=${handle.id}`
+        );
+        await expect(FileStorage.getFileExists(handle.key)).resolves.toBe(true);
+      }
+      await stager.cleanup();
     }
   );
 });

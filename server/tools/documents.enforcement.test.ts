@@ -1951,13 +1951,15 @@ describe("enforced Markdown writes", () => {
       message: "The specified text was not found in the document",
     },
     {
-      name: "an importable image",
-      transactions: 0,
+      name: "an absent patch target with a staged image",
+      transactions: 1,
       args: (id: string) => ({
         id,
-        text: `${VALID}\n\n![image](data:image/png;base64,${PNG_BASE64})`,
+        text: `![image](data:image/png;base64,${PNG_BASE64})`,
+        editMode: TextEditMode.Patch,
+        findText: "absent text",
       }),
-      message: OPERATION_FAILED,
+      message: "The specified text was not found in the document",
     },
   ])(
     "aborts before the decision on $name",

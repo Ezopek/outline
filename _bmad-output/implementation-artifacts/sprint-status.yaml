@@ -65,7 +65,7 @@ development_status:
   2-3-enforce-markdown-creates-and-updates-atomically: done
   2-4-preserve-exact-mcp-write-responses-and-baseline-compatibilit: done
   2-5-carry-enforced-html-projection-through-a-distinct-trusted-wo: done
-  2-6-materialize-staged-media-without-visible-partial-effects: backlog
+  2-6-materialize-staged-media-without-visible-partial-effects: done
   2-7-record-correlated-and-failure-isolated-write-validation-audi: backlog
   epic-2-retrospective: optional
 

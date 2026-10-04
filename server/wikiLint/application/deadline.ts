@@ -47,6 +47,14 @@ export const COMMIT_PROBE_BOUND_MS = 2000;
 export const POST_COMMIT_ASSEMBLY_BOUND_MS = 2000;
 
 /**
+ * The AD-11 bound, in milliseconds, of the staged media cleanup of an
+ * enforced write attempt that ends in AD-20 row 2, 3, 4, or 5: the
+ * concurrent deletion of every blob the attempt staged, measured from the
+ * end of its transaction. Such an attempt has no post-commit assembly.
+ */
+export const STAGED_MEDIA_CLEANUP_BOUND_MS = 1000;
+
+/**
  * The fixed AD-7 grace, in milliseconds, that an enforced HTML create's
  * `deadlineAt` adds to the worker's code-owned bounds.
  */

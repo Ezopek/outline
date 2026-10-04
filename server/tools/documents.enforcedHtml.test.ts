@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Job } from "bull";
+import { http, HttpResponse } from "msw";
 import { QueryTypes } from "sequelize";
 import { yDocToProsemirrorJSON } from "y-prosemirror";
 import * as Y from "yjs";
@@ -25,6 +26,7 @@ import {
   buildUser,
 } from "@server/test/factories";
 import { buildOAuthUser, callMcpTool } from "@server/test/McpHelper";
+import { server as msw } from "@server/test/msw";
 import { getTestServer } from "@server/test/support";
 import type * as PolicyConfig from "@server/wikiLint/adapters/policyConfig";
 import type { AuditDataV1 } from "@server/wikiLint/adapters/auditEvents";
@@ -388,6 +390,49 @@ describe("enforced HTML creates", () => {
     await expect(FileStorage.getFileExists(intent.key)).resolves.toBe(false);
   });
 
+  it("stages importable media into an Attachment row the committed content references", async () => {
+    const { user, accessToken, collection } = await fixture();
+    msw.use(
+      http.get(
+        "https://example.com/a.png",
+        () =>
+          new HttpResponse(Buffer.from("PNG"), {
+            headers: { "Content-Type": "image/png" },
+          })
+      )
+    );
+    configure([[collection, "enforced"]]);
+    const intents = recordIntents();
+
+    const response = await callMcpTool(server, accessToken, "create_document", {
+      text: `<h2>Overview</h2><p><img src="https://example.com/a.png"></p>`,
+      format: "html",
+      collectionId: collection.id,
+    });
+
+    const [intent] = intents;
+    expect(response?.result?.isError).toBeUndefined();
+    expect(
+      JSON.parse(response?.result?.content?.[0]?.text ?? "")
+    ).toMatchObject({
+      id: intent.documentId,
+      validation: { status: "validated" },
+    });
+    const [attachment, ...others] = await Attachment.findAll({
+      where: { teamId: user.teamId },
+    });
+    expect(others).toEqual([]);
+    expect(Number(attachment.size)).toBe(3);
+    expect(attachment.contentType).toBe("image/png");
+    const document = await Document.unscoped().findByPk(intent.documentId, {
+      rejectOnEmpty: true,
+    });
+    expect(document.text).toContain(attachment.redirectUrl);
+    expect(document.text).not.toContain("https://example.com/a.png");
+    const [summary] = await summaries(intent.invocationId);
+    expect(summary.data.outcome).toBe("validated");
+  });
+
   it("commits a draft with every create attribute equal to the baseline import", async () => {
     const { user, accessToken, collection } = await fixture();
     const baselineCollection = await buildCollection({
@@ -691,24 +736,6 @@ describe("worker-time failures", () => {
       intent
     );
     expect(await summaries(intent.invocationId)).toEqual([]);
-  });
-
-  it("reports importable media as a projection failure without an Attachment", async () => {
-    const { user, accessToken, collection } = await fixture();
-    configure([[collection, "enforced"]]);
-    const intents = recordIntents();
-
-    const response = await callMcpTool(server, accessToken, "create_document", {
-      text: `<h2>Overview</h2><p><img src="https://example.com/a.png"></p>`,
-      format: "html",
-      collectionId: collection.id,
-    });
-
-    const [intent] = intents;
-    await expectFailure(response, OPERATION_FAILED, intent);
-    expect(await Attachment.count({ where: { teamId: user.teamId } })).toBe(0);
-    const [summary] = await summaries(intent.invocationId);
-    expect(summary.data.outcome).toBe("aborted_before_decision");
   });
 
   it("reports a transaction rollback in P7 as row 5", async () => {

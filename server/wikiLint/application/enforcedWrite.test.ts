@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { DatabaseError } from "sequelize";
+import { DatabaseError, QueryTypes } from "sequelize";
 import { DocumentPermission, TextEditMode } from "@shared/types";
 import type { ProsemirrorData } from "@shared/types";
 import { APIUpdateExtension } from "@server/collaboration/APIUpdateExtension";
@@ -21,6 +21,7 @@ import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { authorize } from "@server/policies";
 import { globalEventQueue } from "@server/queues";
 import { sequelize } from "@server/storage/database";
+import FileStorage from "@server/storage/files";
 import {
   buildCollection,
   buildDocument,
@@ -39,6 +40,7 @@ import {
   prepareMarkdownCreate,
   projectMarkdownCreate,
 } from "../adapters/documentProjection";
+import type { MediaStager } from "../adapters/mediaStaging";
 import { persistProjectedCreate } from "../adapters/projectionWriter";
 import {
   ContainedReadError,
@@ -52,8 +54,10 @@ import {
   COMMIT_PROBE_BOUND_MS,
   Deadline,
   DeadlineFloorError,
+  ENFORCED_IMPORT_GRACE_MS,
   POST_COMMIT_ASSEMBLY_BOUND_MS,
   SET_LOCAL_FLOOR_MS,
+  STAGED_MEDIA_CLEANUP_BOUND_MS,
   VALIDATION_DEADLINE_MS,
   WRITE_PERSISTENCE_BUDGET_MS,
   WRITE_PREPARATION_BOUND_MS,
@@ -123,6 +127,22 @@ const INVALID_BODY = "No overview here";
 
 /** A table, which `UNSUPPORTED` forbids. */
 const TABLE = "| a | b |\n|---|---|\n| 1 | 2 |";
+
+/** A one-pixel PNG, base64-encoded. */
+const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+/**
+ * Builds a distinct `data:` image source; none is a prefix of another.
+ *
+ * @param n - the distinguishing number.
+ * @returns the source.
+ */
+const dataSrc = (n: number) =>
+  `data:image/png;base64,${"A".repeat(4 * (n + 1))}${PNG_BASE64}`;
+
+/** A Markdown image that `documentUpdater` would import. */
+const DATA_IMAGE = `![pixel](${dataSrc(0)})`;
 
 /**
  * Builds a Markdown link to a document path.
@@ -791,6 +811,27 @@ describe("AD-11 bounds", () => {
     );
     expect(LINT_DOCUMENT_DEADLINE_MS).toBe(VALIDATION_DEADLINE_MS);
   });
+
+  it("keeps the staged media cleanup within both totals", () => {
+    // An attempt that cleans up has no post-commit assembly.
+    expect(
+      ENFORCED_PRE_WRITE_BOUND_MS +
+        WRITE_PREPARATION_BOUND_MS +
+        VALIDATION_DEADLINE_MS +
+        WRITE_PERSISTENCE_BUDGET_MS +
+        STAGED_MEDIA_CLEANUP_BOUND_MS +
+        AUDIT_WRITE_BOUND_MS
+    ).toBeLessThanOrEqual(55000);
+    // The worker's tail after persistence: cleanup, the repeated lookup,
+    // the committed summary or its own, and the staged-source delete.
+    expect(
+      STAGED_MEDIA_CLEANUP_BOUND_MS +
+        COMMIT_PROBE_BOUND_MS +
+        Math.max(COMMIT_PROBE_BOUND_MS, AUDIT_WRITE_BOUND_MS) +
+        1000
+    ).toBeLessThanOrEqual(AUDIT_WRITE_BOUND_MS + ENFORCED_IMPORT_GRACE_MS);
+    expect(STAGED_MEDIA_CLEANUP_BOUND_MS).toBe(1000);
+  });
 });
 
 describe("valid writes", () => {
@@ -1430,21 +1471,95 @@ describe("aborts before the decision", () => {
     });
   });
 
-  it("ends in row 3 in P2 for an importable image, opening no transaction", async () => {
+  it("stages an importable image in P2, before the transaction opens", async () => {
     const { user, collection, ctx } = await fixture();
     const document = await documentOf(user, collection.id, VALID_BODY);
     const classification = classify(collection.id, [REQUIRED]);
-    const transaction = vi.spyOn(sequelize, "transaction");
+    const order: string[] = [];
+    vi.spyOn(FileStorage, "storeFromUrl").mockImplementation(
+      async function (this: unknown) {
+        order.push("storeFromUrl");
+        return undefined;
+      }
+    );
+    const open = vi.spyOn(EnforcementTransaction, "open");
+    open.mockImplementation(async (...args) => {
+      order.push("open");
+      open.mockRestore();
+      return EnforcementTransaction.open(...args);
+    });
+
+    const outcome = await update(ctx, classification, {
+      id: document.id,
+      text: `${VALID_BODY}\n\n${DATA_IMAGE}`,
+    });
+
+    // The failed import keeps the source, as in the baseline.
+    expect((await committed(outcome)).stored.text).toContain(dataSrc(0));
+    expect(order).toEqual(["storeFromUrl", "open"]);
+  });
+
+  it("ends in row 3 when a store outlives the preparation bound, deleting every staged blob (2.3 AC2)", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    // The first reading starts the preparation deadline; every later one
+    // leaves 200 ms of it.
+    let readings = 0;
+    state.clock = () =>
+      readings++ === 0 ? 0 : WRITE_PREPARATION_BOUND_MS - 200;
+    const store = FileStorage.storeFromUrl.bind(FileStorage);
+    let land: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      land = resolve;
+    });
+    const storeFromUrl = vi
+      .spyOn(FileStorage, "storeFromUrl")
+      .mockImplementation(async (...args) => {
+        if (storeFromUrl.mock.calls.length === 2) {
+          await held;
+        }
+        return store(...args);
+      });
+    const deleteFile = vi.spyOn(FileStorage, "deleteFile");
+    const open = vi.spyOn(EnforcementTransaction, "open");
+    const images = Array.from(
+      { length: 11 },
+      (_, n) => `![i${n}](${dataSrc(n)})`
+    ).join("\n\n");
 
     const outcome = await withoutEffect(user.teamId, () =>
       update(ctx, classification, {
         id: document.id,
-        text: `${VALID_BODY}\n\n![pixel](data:image/png;base64,iVBORw0KGgo=)`,
+        text: `${VALID_BODY}\n\n${images}`,
       })
     );
 
     expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
-    expect(transaction).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    // The eleventh source, in the next chunk, was refused.
+    expect(storeFromUrl).toHaveBeenCalledTimes(10);
+    const keys = storeFromUrl.mock.calls.map(([, key]) => key);
+    /**
+     * Counts the deletions of a key.
+     *
+     * @param key - the key.
+     * @returns the count.
+     */
+    const deletions = (key: string) =>
+      deleteFile.mock.calls.filter(([deleted]) => deleted === key).length;
+    expect(keys.filter((key) => deletions(key) === 0)).toEqual([]);
+    for (const key of keys) {
+      await expect(FileStorage.getFileExists(key)).resolves.toBe(false);
+    }
+
+    // The late blob lands after cleanup and deletes itself.
+    land();
+    await storeFromUrl.mock.results[1].value;
+    await vi.waitFor(() => expect(deletions(keys[1])).toBe(2));
+    await vi.waitFor(async () =>
+      expect(await FileStorage.getFileExists(keys[1])).toBe(false)
+    );
   });
 
   it("ends in row 3 when the preparation bound expires before the transaction opens", async () => {
@@ -1972,5 +2087,424 @@ describe("attempt options", () => {
     ).not.toBeNull();
     expect(enqueue).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("staged media", () => {
+  /**
+   * Records the keys of every staged blob, calling through to storage.
+   *
+   * @returns the recorded keys.
+   */
+  function recordStagedKeys(): string[] {
+    const keys: string[] = [];
+    const store = FileStorage.storeFromUrl.bind(FileStorage);
+    vi.spyOn(FileStorage, "storeFromUrl").mockImplementation((...args) => {
+      keys.push(args[1]);
+      return store(...args);
+    });
+    return keys;
+  }
+
+  /**
+   * Checks whether each key's blob exists.
+   *
+   * @param keys - the keys.
+   * @returns whether each blob exists.
+   */
+  const blobsExist = (keys: readonly string[]) =>
+    Promise.all(keys.map((key) => FileStorage.getFileExists(key)));
+
+  /**
+   * Builds an enforced update fixture with a document.
+   *
+   * @param rules - the policy rules.
+   * @returns the fixture.
+   */
+  async function mediaFixture(rules: unknown[] = [REQUIRED]) {
+    const built = await fixture();
+    const document = await documentOf(
+      built.user,
+      built.collection.id,
+      VALID_BODY
+    );
+    return {
+      ...built,
+      document,
+      classification: classify(built.collection.id, rules),
+    };
+  }
+
+  it("stages nothing for an unpublish, which ignores its text", async () => {
+    const { user, ctx, document, classification } = await mediaFixture();
+    const storeFromUrl = vi.spyOn(FileStorage, "storeFromUrl");
+
+    const { stored } = await committed(
+      await update(ctx, classification, {
+        id: document.id,
+        publish: false,
+        text: `${VALID_BODY}\n\n${DATA_IMAGE}`,
+      })
+    );
+
+    expect(stored.publishedAt).toBeNull();
+    expect(stored.text).toBe(document.text);
+    expect(storeFromUrl).not.toHaveBeenCalled();
+    expect(
+      await Attachment.unscoped().count({ where: { teamId: user.teamId } })
+    ).toBe(0);
+  });
+
+  it("stages the text of a draft publication", async () => {
+    const { user, collection, ctx } = await fixture();
+    const draft = await documentOf(user, collection.id, VALID_BODY, {
+      publishedAt: null,
+    });
+    const classification = classify(collection.id, [REQUIRED]);
+    const keys = recordStagedKeys();
+
+    const { stored } = await committed(
+      await update(ctx, classification, {
+        id: draft.id,
+        publish: true,
+        text: `${VALID_BODY}\n\n${DATA_IMAGE}`,
+      })
+    );
+
+    const [attachment, ...others] = await Attachment.unscoped().findAll({
+      where: { teamId: user.teamId },
+    });
+    expect(others).toEqual([]);
+    expect(keys).toEqual([attachment.key]);
+    expect(stored.publishedAt).not.toBeNull();
+    expect(stored.text).toContain(
+      `/api/attachments.redirect?id=${attachment.id}`
+    );
+    expect(stored.text).not.toContain("data:");
+  });
+
+  it("commits an update with one Attachment row, both Events correlated", async () => {
+    const { user, ctx, document, classification } = await mediaFixture();
+    const keys = recordStagedKeys();
+    const enqueue = vi.spyOn(globalEventQueue(), "add");
+
+    const { stored } = await committed(
+      await update(ctx, classification, {
+        id: document.id,
+        text: `${VALID_BODY}\n\n${DATA_IMAGE}`,
+      })
+    );
+
+    const [attachment, ...others] = await Attachment.unscoped().findAll({
+      where: { teamId: user.teamId },
+    });
+    expect(others).toEqual([]);
+    expect(keys).toEqual([attachment.key]);
+    expect(attachment.key).toBe(`uploads/${user.id}/${attachment.id}/pixel`);
+    expect(stored.text).toContain(
+      `/api/attachments.redirect?id=${attachment.id}`
+    );
+    expect(stored.text).not.toContain("data:");
+    expect(await blobsExist(keys)).toEqual([true]);
+    const [created] = await Event.findAll({
+      where: { name: "attachments.create", modelId: attachment.id },
+    });
+    const [updated] = await Event.findAll({
+      where: { name: "documents.update", documentId: document.id },
+    });
+    expect(created.data?.validationCorrelationId).toEqual(expect.any(String));
+    expect(created.data?.validationCorrelationId).toBe(
+      updated.data?.validationCorrelationId
+    );
+    expect(enqueue).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "row 2, a target moved before P3",
+      row: 2,
+      setup: async (args: { user: User; document: Document }) => {
+        const other = await buildCollection({
+          teamId: args.user.teamId,
+          userId: args.user.id,
+        });
+        await Document.unscoped().update(
+          { collectionId: other.id },
+          { where: { id: args.document.id }, hooks: false }
+        );
+      },
+      text: `${VALID_BODY}\n\n${DATA_IMAGE}`,
+    },
+    {
+      name: "row 3, an absent patch target",
+      row: 3,
+      text: DATA_IMAGE,
+      editMode: TextEditMode.Patch,
+      findText: "absent text",
+    },
+    {
+      name: "row 4, a body without the required section",
+      row: 4,
+      text: `${INVALID_BODY}\n\n${DATA_IMAGE}`,
+    },
+    {
+      name: "row 5, a failed Attachment insert",
+      row: 5,
+      failAttachmentInsert: true,
+      text: `${VALID_BODY}\n\n${DATA_IMAGE}`,
+    },
+  ])(
+    "deletes every staged blob on $name",
+    async ({ row, setup, text, editMode, findText, failAttachmentInsert }) => {
+      const { user, ctx, document, classification } = await mediaFixture();
+      await setup?.({ user, document });
+      const keys = recordStagedKeys();
+      if (failAttachmentInsert) {
+        interceptQueries().use((sql, _args, next) =>
+          sql.startsWith('INSERT INTO "attachments"')
+            ? Promise.reject(new Error("insert failed"))
+            : next()
+        );
+      }
+
+      const outcome = await withoutEffect(
+        user.teamId,
+        () =>
+          update(ctx, classification, {
+            id: document.id,
+            text,
+            editMode,
+            findText,
+          }),
+        { mutations: row === 5 }
+      );
+
+      expect(outcome.row).toBe(row);
+      expect(keys).toHaveLength(1);
+      expect(await blobsExist(keys)).toEqual([false]);
+    }
+  );
+
+  it("keeps the blobs and shows no row when the COMMIT outcome is unestablished (row 7)", async () => {
+    const { user, ctx, document, classification } = await mediaFixture();
+    const keys = recordStagedKeys();
+    const deleteFile = vi.spyOn(FileStorage, "deleteFile");
+    interceptQueries().use((sql, args, next) => {
+      if (sql === "COMMIT;") {
+        (
+          (args[1] as { transaction: unknown }).transaction as {
+            connection: { connection: { stream: { destroy(): void } } };
+          }
+        ).connection.connection.stream.destroy();
+      }
+      return next();
+    });
+
+    const outcome = await withoutEffect(
+      user.teamId,
+      () =>
+        update(ctx, classification, {
+          id: document.id,
+          text: `${VALID_BODY}\n\n${DATA_IMAGE}`,
+        }),
+      { mutations: true }
+    );
+
+    expect(outcome).toEqual({ row: 7 });
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(await blobsExist(keys)).toEqual([true]);
+  });
+
+  it("sends no storage call between the opening and the end of the transaction", async () => {
+    for (const body of [VALID_BODY, INVALID_BODY]) {
+      const { ctx, document, classification } = await mediaFixture();
+      const order: string[] = [];
+      for (const method of [
+        "store",
+        "storeFromUrl",
+        "deleteFile",
+        "getFileBuffer",
+      ] as const) {
+        const original = FileStorage[method].bind(FileStorage) as (
+          ...args: unknown[]
+        ) => Promise<unknown>;
+        vi.spyOn(FileStorage, method).mockImplementation(((
+          ...args: unknown[]
+        ) => {
+          order.push("storage");
+          return original(...args);
+        }) as never);
+      }
+      const open = EnforcementTransaction.open.bind(EnforcementTransaction);
+      vi.spyOn(EnforcementTransaction, "open").mockImplementation(
+        async (...args) => {
+          const opened = await open(...args);
+          order.push("open");
+          return opened;
+        }
+      );
+      interceptQueries().use(async (sql, _args, next) => {
+        const result = await next();
+        if (sql === "COMMIT;" || sql === "ROLLBACK;") {
+          order.push("end");
+        }
+        return result;
+      });
+
+      const outcome = await update(ctx, classification, {
+        id: document.id,
+        text: `${body}\n\n${DATA_IMAGE}`,
+      });
+
+      expect(outcome.row).toBe(body === VALID_BODY ? 6 : 4);
+      const opened = order.indexOf("open");
+      const ended = order.indexOf("end");
+      expect(opened).toBeGreaterThan(0);
+      expect(ended).toBeGreaterThan(opened);
+      expect(order.slice(opened + 1, ended)).toEqual([]);
+      expect(order.slice(ended + 1)).toEqual(
+        body === VALID_BODY ? [] : ["storage"]
+      );
+      vi.restoreAllMocks();
+      activeQueries = undefined;
+    }
+  });
+
+  it("shows no Attachment row before COMMIT is sent, and every effect after", async () => {
+    const { user, ctx, document, classification } = await mediaFixture();
+    const enqueue = vi.spyOn(globalEventQueue(), "add");
+    const queries = interceptQueries();
+    let seen: unknown;
+    queries.use(async (sql, _args, next) => {
+      if (sql === "COMMIT;") {
+        // Fresh connections, outside the enforcement transaction.
+        const rows = await queries.original(
+          `SELECT id FROM attachments WHERE "teamId" = '${user.teamId}'`,
+          { type: QueryTypes.SELECT }
+        );
+        const [stored] = (await queries.original(
+          `SELECT text FROM documents WHERE id = '${document.id}'`,
+          { type: QueryTypes.SELECT }
+        )) as { text: string }[];
+        seen = { rows, text: stored.text, enqueued: enqueue.mock.calls.length };
+      }
+      return next();
+    });
+
+    const { stored } = await committed(
+      await update(ctx, classification, {
+        id: document.id,
+        text: `${VALID_BODY}\n\n${DATA_IMAGE}`,
+      })
+    );
+
+    expect(seen).toEqual({ rows: [], text: document.text, enqueued: 0 });
+    const rows = await Attachment.findAll({ where: { teamId: user.teamId } });
+    expect(rows).toHaveLength(1);
+    expect(stored.text).toContain(rows[0].redirectUrl);
+    expect(enqueue).toHaveBeenCalled();
+  });
+
+  it("refuses staging once the stager is sealed, before the transaction", async () => {
+    const { user, collection, ctx } = await fixture();
+    const classification = classify(collection.id, [REQUIRED], {
+      create: true,
+    });
+    const documentId = classification.documentId!;
+    const storeFromUrl = vi.spyOn(FileStorage, "storeFromUrl");
+    let stager: MediaStager | undefined;
+    let prepared: PreparedMarkdownCreate;
+    const plan: AttemptPlan = {
+      prepare: (media) => {
+        stager = media;
+        prepared = prepareMarkdownCreate({
+          title: "Doc",
+          text: VALID_BODY,
+          publish: true,
+        });
+      },
+      reauthorize: async () => {
+        await stager!.stageMarkdown(DATA_IMAGE);
+        return collection.id;
+      },
+      project: () =>
+        projectMarkdownCreate({
+          prepared,
+          documentId,
+          collectionId: collection.id,
+          actor: user,
+        }),
+      persist: (projection) => persistProjectedCreate(ctx, projection, null),
+      probeTarget: () => ({ kind: "document", documentId }),
+    };
+
+    const outcome = await withoutEffect(user.teamId, () =>
+      runAttempt(
+        { ctx, classification, requestId: "test", instanceOrigin: ORIGIN },
+        plan
+      )
+    );
+
+    expect(outcome).toEqual({ row: 3, message: OPERATION_FAILED });
+    expect(storeFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("deletes nothing when the attempt throws unexpectedly", async () => {
+    const { user, collection, ctx } = await fixture();
+    const classification = classify(collection.id, [REQUIRED], {
+      create: true,
+    });
+    const documentId = classification.documentId!;
+    const keys = recordStagedKeys();
+    const deleteFile = vi.spyOn(FileStorage, "deleteFile");
+    let prepared: PreparedMarkdownCreate;
+    interceptQueries().use((sql, args, next) => {
+      if (sql === "COMMIT;") {
+        (
+          (args[1] as { transaction: unknown }).transaction as {
+            connection: { connection: { stream: { destroy(): void } } };
+          }
+        ).connection.connection.stream.destroy();
+      }
+      return next();
+    });
+
+    await expect(
+      runAttempt(
+        { ctx, classification, requestId: "test", instanceOrigin: ORIGIN },
+        {
+          prepare: async (media) => {
+            const text = await media.stageMarkdown(
+              `${VALID_BODY}\n\n${DATA_IMAGE}`
+            );
+            prepared = {
+              ...prepareMarkdownCreate({ title: "Doc", text, publish: true }),
+              attachments: media.attachments,
+            };
+          },
+          reauthorize: async () =>
+            (
+              await authorizeDocumentCreate(ctx, {
+                collectionId: collection.id,
+              })
+            ).collection?.id,
+          project: () =>
+            projectMarkdownCreate({
+              prepared,
+              documentId,
+              collectionId: collection.id,
+              actor: user,
+            }),
+          persist: (projection) =>
+            persistProjectedCreate(ctx, projection, null),
+          probeTarget: () => {
+            throw new Error("unexpected");
+          },
+        }
+      )
+    ).rejects.toThrow("unexpected");
+    expect(keys).toHaveLength(1);
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(await blobsExist(keys)).toEqual([true]);
   });
 });

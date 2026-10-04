@@ -24,6 +24,7 @@ import {
   isDatabaseTimeout,
   resolveLinkTargets,
 } from "../adapters/documentReader";
+import { MediaStager } from "../adapters/mediaStaging";
 import {
   persistProjectedCreate,
   persistProjectedUpdate,
@@ -345,8 +346,12 @@ export interface ShellInput {
 export interface AttemptPlan {
   /** The document to lock after the collection; none for a create. */
   lockDocumentId?: string;
-  /** P2: preparation outside the transaction; a promise is awaited. */
-  prepare(): void | Promise<void>;
+  /**
+   * P2: preparation outside the transaction; a promise is awaited.
+   *
+   * @param media - the attempt's media stager, sealed once this resolves.
+   */
+  prepare(media: MediaStager): void | Promise<void>;
   /**
    * P3: re-fetches and re-authorizes under the transaction.
    *
@@ -414,7 +419,10 @@ function runHook<T>(hook: () => T): T | undefined {
 
 /**
  * Runs one AD-20 P2 to P8 attempt of an enforced write in one unmanaged
- * transaction, bounded by AD-11.
+ * transaction, bounded by AD-11. The attempt owns one media stager: the plan
+ * stages through it in P2, it is sealed before `BEGIN`, and an attempt that
+ * ends in row 2, 3, 4, or 5 deletes the blobs it staged once its transaction
+ * has ended. Rows 6 and 7, and an unexpected throw, delete nothing.
  *
  * @param shell - the shared inputs.
  * @param plan - the write-specific steps.
@@ -426,19 +434,63 @@ export async function runAttempt(
   plan: AttemptPlan,
   options: AttemptOptions = {}
 ): Promise<EnforcedWriteOutcome> {
-  const { ctx, classification, signal, requestId, instanceOrigin } = shell;
-  const { entry, readable } = classification;
-  const { collectionId } = entry;
-  const actor = ctx.state.auth.user;
   const invocationId = options.invocationId ?? randomUUID();
   const preparation =
     options.preparation ??
     new Deadline(WRITE_PREPARATION_BOUND_MS, monotonicClock);
+  const media = new MediaStager({
+    invocationId,
+    attemptId: randomUUID(),
+    actor: shell.ctx.state.auth.user,
+    preparation,
+    requestId: shell.requestId,
+  });
+  const outcome = await attempt(shell, plan, {
+    options,
+    invocationId,
+    preparation,
+    media,
+  });
+  if (outcome.row >= 2 && outcome.row <= 5) {
+    await media.cleanup();
+  }
+  return outcome;
+}
 
-  // P2: preparation, then the transaction, within the bound.
+/**
+ * The body of `runAttempt`: P2 to P8, with the attempt's resolved
+ * correlation ID, preparation bound, and media stager.
+ *
+ * @param shell - the shared inputs.
+ * @param plan - the write-specific steps.
+ * @param attemptState.options - the optional differences.
+ * @param attemptState.invocationId - the correlation ID.
+ * @param attemptState.preparation - the preparation bound.
+ * @param attemptState.media - the media stager.
+ * @returns the row the attempt ended in.
+ */
+async function attempt(
+  shell: ShellInput,
+  plan: AttemptPlan,
+  attemptState: {
+    options: AttemptOptions;
+    invocationId: string;
+    preparation: Deadline;
+    media: MediaStager;
+  }
+): Promise<EnforcedWriteOutcome> {
+  const { ctx, classification, signal, requestId, instanceOrigin } = shell;
+  const { options, invocationId, preparation, media } = attemptState;
+  const { entry, readable } = classification;
+  const { collectionId } = entry;
+  const actor = ctx.state.auth.user;
+
+  // P2: preparation, then the transaction, within the bound. The stager is
+  // sealed before the transaction opens, so no staging runs inside it.
   let enforcement: EnforcementTransaction;
   try {
-    await plan.prepare();
+    await plan.prepare(media);
+    media.seal();
     throwIfAborted(signal);
     enforcement = await EnforcementTransaction.open(
       invocationId,
@@ -681,8 +733,13 @@ export function enforceMarkdownUpdate(
   let document: Document;
   return runAttempt(args, {
     lockDocumentId: documentId,
-    prepare: () => {
-      prepared = prepareMarkdownUpdate(input);
+    prepare: async (media) => {
+      // Stages exactly when `documentUpdater` would import.
+      const staged =
+        input.publish !== false && input.text !== undefined
+          ? { ...input, text: await media.stageMarkdown(input.text) }
+          : input;
+      prepared = prepareMarkdownUpdate(staged, media.attachments);
     },
     reauthorize: async () => {
       const reauthorized = await reauthorize();

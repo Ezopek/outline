@@ -9,7 +9,7 @@ import {
   ValidationError,
 } from "@server/errors";
 import { CanonicalMarkdownError } from "../adapters/canonicalSyntax";
-import { UnstagedMediaError } from "../adapters/documentProjection";
+import { MediaStagingRefusedError } from "../adapters/mediaStaging";
 import { WikiLintContractError } from "../core/contracts";
 import type {
   Finding,
@@ -332,7 +332,7 @@ describe("abortMessage", () => {
   });
 
   it.each([
-    ["an UnstagedMediaError", new UnstagedMediaError()],
+    ["a MediaStagingRefusedError", new MediaStagingRefusedError()],
     [
       "a Sequelize ValidationError",
       new SequelizeValidationError("Validation error", []),
