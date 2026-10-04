@@ -1,31 +1,4 @@
 {
-  "DW-12": {
-    "answered_at": "2026-10-04",
-    "bundle_name": "",
-    "effect": "build",
-    "intent": "Change the server/tools/README.md visible-metadata example to `* ` bullets and add the Story 1.10 AC5 interpretation (canonical `* ` round-trips byte-identically; `- ` input lints clean) to the binding SPEC. Close DW-7 with the same change.",
-    "key": "1",
-    "label": "Apply README and SPEC reconciliation",
-    "resolution": ""
-  },
-  "DW-14": {
-    "answered_at": "2026-10-04",
-    "bundle_name": "",
-    "effect": "build",
-    "intent": "Add an acceptance criterion to Story 3.4 in _bmad-output/planning-artifacts/epics.md: the Gate 1 decision record states that no read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5 and DW-6 (event-loop blocking, CPU between deadline checks, pool-wait acquisition). Planning-artifact edit only.",
-    "key": "1",
-    "label": "Amend Story 3.4 ACs now",
-    "resolution": ""
-  },
-  "DW-15": {
-    "answered_at": "2026-10-04",
-    "bundle_name": "",
-    "effect": "build",
-    "intent": "Add a short 'Story preconditions' convention to the header of _bmad-output/planning-artifacts/epics.md stating that a deferral requiring a decision before Story X is recorded as a named precondition on Story X, and record the currently known preconditions (e.g. Story 3.4 on DW-4..DW-6). Planning-artifact edit only; no sprint-status or tooling change.",
-    "key": "1",
-    "label": "Add a preconditions convention to epics.md",
-    "resolution": ""
-  },
   "DW-18": {
     "answered_at": "2026-10-04",
     "bundle_name": "",
@@ -69,15 +42,6 @@
     "intent": "Add one line to 'Known pitfalls' in CLAUDE.md and the matching AGENTS.md section: before setting a bmad-loop story done by hand, move every open finding from its review gates into _bmad-output/implementation-artifacts/deferred-work.md. No other change.",
     "key": "1",
     "label": "Add it to CLAUDE.md/AGENTS.md pitfalls",
-    "resolution": ""
-  },
-  "DW-7": {
-    "answered_at": "2026-10-04",
-    "bundle_name": "",
-    "effect": "build",
-    "intent": "Change the server/tools/README.md visible-metadata example to `* Status: Active` / `* Last verified: 2026-09-20`, and record in the binding SPEC that canonical `* ` bullets round-trip byte-identically while `- ` input lints clean (Story 1.10 AC5 interpretation). No code change.",
-    "key": "1",
-    "label": "Apply README and SPEC reconciliation",
     "resolution": ""
   }
 }
