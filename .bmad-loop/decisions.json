@@ -53,6 +53,15 @@
     "label": "Keep open for the Gate 1 review",
     "resolution": ""
   },
+  "DW-29": {
+    "answered_at": "2026-10-04",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Add a package.json script (e.g. test:server:conformance = TZ=UTC vitest run --project server --maxWorkers=2) and name it in CLAUDE.md and AGENTS.md 'Running and verifying' as the broad verification command for Epic 3 conformance evidence. Verify that it runs green once against scripts/test-db.sh ensure, and record the result.",
+    "key": "1",
+    "label": "Pin --maxWorkers=2",
+    "resolution": ""
+  },
   "DW-7": {
     "answered_at": "2026-10-04",
     "bundle_name": "",
