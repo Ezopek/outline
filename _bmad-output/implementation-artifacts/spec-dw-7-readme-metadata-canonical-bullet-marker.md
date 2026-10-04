@@ -3,7 +3,7 @@ title: 'DW-7: Reconcile the README visible-metadata example and the SPEC with th
 type: 'chore'
 created: '2026-10-04'
 status: done
-review_loop_iteration: 3
+review_loop_iteration: 0
 followup_review_recommended: false
 context: []
 warnings: ['oversized']
@@ -15,7 +15,7 @@ deferred:
     location: >-
       server/tools/README.md:119-140
     severity: low
-baseline_revision: 426c228e6351fff091ea8be80509c360888be059
+baseline_revision: 72e8f2ea6b4e346823f3def86965342b5aa159c4
 ---
 
 <intent-contract>
@@ -32,6 +32,7 @@ baseline_revision: 426c228e6351fff091ea8be80509c360888be059
 - The README example keeps its heading, field names, values and order. Only the three bullet markers change from `- ` to `* ` (`Authority: Repository` included, since a marker change inside one list starts a new list and breaks the round trip).
 - The SPEC addition states only what the decision says and what the Story 1.10 HTTP suite proves. It is one bullet under `## Constraints`, in the SPEC's existing voice, with no workspace-specific values.
 - Append one `(change)` line to the spec folder's `.memlog.md` that records this authorized amendment, matching its existing `(change)` entries.
+- The work is already committed on the branch (README, SPEC, memlog). A modified `deferred-work.md` is the orchestrator's own pending ledger transaction, not this story's change. It does not fail the clean-tree gate: finalize the story without staging, editing, reverting or committing that file, and leave the orchestrator to commit it.
 
 **Never:**
 - Change code, tests, the serializer, `epics.md`, the PRD, its addendum, the Architecture Spine or `AGENTS.md`.
@@ -201,6 +202,58 @@ baseline_revision: 426c228e6351fff091ea8be80509c360888be059
   - `[low]` `[reject]` Intent Alignment: the test comment at `wikiLint.test.ts:1687` is broader than the new wording. — carried: same claim as the pass-3 Blind Hunter "every bullet" row.
   - `[false]` `[reject]` Intent Alignment: the artifact-only receipt does not apply. — carried: same claim as the pass-1 Intent Alignment receipt row.
 
+### 2026-10-04 — Follow-up review pass
+- verdicts: 14 findings — high 0, medium 0, low 9, false 5, maybe-false 0
+- findings:
+  - `[low]` `[reject]` Blind Hunter: DW-12 remains open for the README and SPEC decision. — The ledger belongs to the orchestrator, and the operator expressly forbids this run from modifying, reopening, or rewriting its entries. Its status is not a defect in the documentation change.
+  - `[low]` `[reject]` Blind Hunter: the retrospective action item remains open in `sprint-status.yaml`. — That board belongs to the orchestrator; its status is bookkeeping, not verification evidence or a change for this run to make.
+  - `[false]` `[reject]` Blind Hunter: this story changed the ledger despite its Never boundary. — The staged diff includes a separate, pre-existing uncommitted orchestrator change to `deferred-work.md`; this run has made no ledger edit.
+  - `[low]` `[reject]` Blind Hunter: the file-set AC and `git diff --stat` expectation omit the ledger. — The extra dirty file is orchestrator-owned and outside the story's reviewed documentation changes. Fixing this claim would edit this build's spec, which the review workflow rejects.
+  - `[false]` `[reject]` Blind Hunter: the promised Auto Run Result is missing. — This is a follow-up run; Finalize writes the new result after triage and verification, so absence in the staged pre-review diff is not an implementation defect.
+  - `[low]` `[reject]` Blind Hunter: the Intent says every bullet serializes as `* `. — Checklist items are a counterexample, but this wording is inside the immutable intent contract, and the binding SPEC bullet is scoped to one plain bullet list. A correction would edit this build's spec.
+  - `[low]` `[defer]` Blind Hunter: rendered README text does not teach authors to use fetched Markdown for `patch` `findText`. — Carried from earlier passes and already recorded once in frontmatter `deferred`; the canonical example is fixed, while guidance for authors' own `- ` input is a pre-existing issue.
+  - `[low]` `[reject]` Blind Hunter: no committed test pins the exact three-field example or patch matching. — Carried from earlier passes: the intent excludes code and test changes. A temporary three-field HTTP probe passed during this follow-up and was removed; the committed two-field test covers the canonical behavior.
+  - `[low]` `[reject]` Edge Case Hunter: the Intent overstates `* ` serialization for checklists. — Carried from the Blind Hunter Intent wording row; a fix would edit this build's intent contract.
+  - `[low]` `[reject]` Edge Case Hunter: the file-set AC omits `deferred-work.md`. — Carried from the Blind Hunter file-set row; the ledger change is orchestrator-owned.
+  - `[low]` `[reject]` Edge Case Hunter: an adjacent bullet list may prevent whole-document byte identity. — Carried from review pass 4. The SPEC defines canonical metadata as one tight `* ` list in the selected baseline; adjacent-list behavior is outside this decision and predates the change.
+  - `[false]` `[reject]` Intent Alignment: the documentation change edited the prohibited ledger. — The diff includes an independently dirty orchestrator file, but this run did not edit it; it is not part of the reviewed documentation commit.
+  - `[false]` `[reject]` Intent Alignment: the spec artifact, README comments, and memlog timestamp diverge from the requested amendment. — The workflow requires its own spec artifact, the comments keep the decided `* ` example stable under the declared formatter, and the timestamp follows the memlog's amendment convention; none changes the requested rendered example or SPEC rule.
+  - `[false]` `[reject]` Intent Alignment: narrower committed HTTP coverage means the README example is unverified. — The committed test covers two fields, but this follow-up ran the exact three-field example through `createDocument`, `fetchMarkdown`, and `lint_document`; it passed. No lasting test edit is allowed by the intent.
+
+### 2026-10-04 — Review pass
+- verdicts: 30 findings — high 0, medium 0, low 21, false 8, maybe-false 1
+- findings:
+  - `[low]` `[reject]` Blind Hunter: `baseline_revision` now points at `72e8f2ea6`, the commit holding the README, SPEC and memlog edits, so this pass's diff cannot show them; AC3, the Finalize file check and the Code Map line references no longer match. — Real: step-03 captures HEAD as the baseline, and the escalation resolution set the same value. Restoring the old baseline or rewriting AC3 and the Code Map edits this build's spec. The deliverable passed four review passes and a follow-up against `426c228e6`, and this run re-ran the round-trip test, the three-field probe and `oxfmt --check` on HEAD. `git diff --stat 426c228e6` still shows only the three documents plus this spec, outside the orchestrator's ledger. The Finalize check covers only this pass's reviewed-diff files, which is this spec alone.
+  - `[low]` `[reject]` Blind Hunter: the deleted `## Auto Run Result` leaves earlier rows pointing at nothing and drops the DW-12 and retro-item handoff, the probe record and the residual risks. — Real before Finalize. Restoring the old section edits this build's spec. Finalize in this run writes a new Auto Run Result that carries the handoff, this run's probe and the residual risks again.
+  - `[low]` `[reject]` Blind Hunter: a bullet was added inside `<intent-contract>` with no Spec Change Log entry, while the same follow-up pass calls the contract immutable. — Real: nothing in the spec says who added it. The operator's escalation resolution added it (journal `story-escalation-resolved`, 2026-10-04 05:30:18, baseline `72e8f2ea6`). The follow-up rows that call the contract immutable were written before that, when the review workflow's rule was the binding constraint. Adding a change-log entry edits this build's spec; the Auto Run Result records where the bullet came from.
+  - `[false]` `[reject]` Blind Hunter: the bullet waives a gate it cannot waive, and since the ledger is already staged, a plain `git commit` would sweep it into the story commit. — The blocked follow-up escalation asked the operator to "explicitly decide how this clean-tree gate applies", and the bullet is that decision. This run commits only this spec, by pathspec (`git commit --only`), so the staged ledger stays out of the commit.
+  - `[low]` `[reject]` Blind Hunter: AC3 and the Verification `git diff --stat` line still contradict the new bullet, and plain `git diff --stat` shows only unstaged changes. — carried: same claim as the follow-up Blind Hunter file-set row and the pass-2 `git diff --stat` row; the fix edits this build's spec.
+  - `[low]` `[reject]` Blind Hunter: the follow-up rows claim a three-field probe passed without command, body or output. — Real in the file as it stands. That session's command and result are in its escalation record in the run journal (05:29:35). Rewriting those rows edits this build's spec. This run re-ran the probe, and the Auto Run Result records its body, command and output.
+  - `[low]` `[reject]` Blind Hunter: the ledger already closes DW-7 while this story is back in review, and DW-12 stays open. — carried: same claim as the pass-1 Blind Hunter DW-12 row. The staged DW-7 close is the orchestrator's `sweep-bundle-closed` transaction, with a `resolution-undo` line for rollback, and the intent forbids ledger edits.
+  - `[maybe-false]` `[reject]` Blind Hunter: neither the follow-up defer row nor the frontmatter item names DW-23, so a later harvest may record the item in the ledger twice. — Settling it needs the orchestrator's harvest dedup key. The journal's `spec-deferrals-harvested` event tracks `seen_again`/`deduped`, and the ledger row carries `origin: spec-deferred eb7b895ea0db`, which suggests dedup on the unchanged item. If true, the result would only be low (a duplicate open ledger row), and the fix edits this build's spec.
+  - `[low]` `[reject]` Blind Hunter: the pass is headed "Follow-up", but the story came in as `ready-for-dev`, so Finalize uses first-pass rules, and nothing records who reopened it. — The heading belongs to the earlier session, which did enter through the `done` route; this pass is logged separately. Since nothing was patched, `followup_review_recommended` is `false` under either rule. The missing record of who reopened the story is real; the Auto Run Result records it, and any other fix edits this build's spec.
+  - `[low]` `[reject]` Blind Hunter: the follow-up rows do not mark carried claims as `carried`, cite an unnumbered "pass 4", and put three claims under one verdict. — Real but cosmetic. Rewriting old triage rows edits this build's spec, and the pass-3 Blind Hunter heading-number row already rejected the unnumbered-pass point.
+  - `[low]` `[reject]` Edge Case Hunter: with the baseline moved to `72e8f2ea6`, this pass leaves the README, SPEC and memlog unreviewed. — Same root cause as the first Blind Hunter baseline row; same reason.
+  - `[false]` `[reject]` Edge Case Hunter: the ledger is staged, so a Finalize commit without a pathspec sweeps it into the story commit. — Same refutation as the Blind Hunter gate row: this run commits this spec by pathspec only.
+  - `[low]` `[reject]` Edge Case Hunter: the exemption matches the ledger by name, not by content, so a forbidden story edit to it would pass unnoticed. — It did not happen here: the ledger in the index (`b901cb5fc…`) is the same blob as the orchestrator's pre-session snapshot `refs/attempt-preserve-dirty/20261004-001506-b478-72e8f2ea-0`, and the worktree has no unstaged change to it. A content guard adds complexity for an unlikely case and edits this build's spec.
+  - `[low]` `[reject]` Edge Case Hunter: the diff edits the read-only `<intent-contract>`, and the follow-up rows that reject fixes as intent edits now contradict it. — Same root cause as the Blind Hunter intent-contract row; same reason.
+  - `[low]` `[reject]` Edge Case Hunter: the removed Auto Run Result held the orchestrator handoff and residual risks. — Same root cause as the Blind Hunter Auto Run Result row; Finalize carries both again.
+  - `[low]` `[reject]` Edge Case Hunter: triage rows point at handoff and probe records in the removed section. — Same root cause as the Blind Hunter Auto Run Result row. The HALT protocol and Finalize both write an Auto Run Result, so the records exist whatever status this run ends with.
+  - `[low]` `[reject]` Edge Case Hunter: the probe record was removed, and the new rows claim a probe passed without recorded evidence. — Same root cause as the Blind Hunter probe-evidence row; same reason.
+  - `[false]` `[reject]` Edge Case Hunter: the claim that the modified ledger does not fail the clean-tree gate quietly overrides Finalize item 2. — The override is not silent: it is the operator's recorded answer to the escalation that asked how the gate applies. Run `20261004-001506-b478` already finalized DW-1 under the same staged orchestrator ledger (its Run note).
+  - `[low]` `[reject]` Edge Case Hunter: under the new baseline, AC3 and `git diff --stat` cannot list the README, SPEC and memlog. — Same root cause as the first Blind Hunter baseline row; same reason.
+  - `[low]` `[reject]` Edge Case Hunter: the Intent's "serializer emits every bullet as `* `" is false for checklists. — carried: same claim as the follow-up Edge Case Hunter checklist row; the fix edits the intent contract.
+  - `[low]` `[reject]` Intent Alignment: the diff holds none of the work the intent asks for, only spec bookkeeping. — Same root cause as the first Blind Hunter baseline row; the work is in `72e8f2ea6` and was re-verified in this run.
+  - `[low]` `[reject]` Intent Alignment: the verification record went backwards; the earlier Auto Run Result was deleted and the follow-up probe is prose only. — Same root cause as the Blind Hunter Auto Run Result and probe-evidence rows; same reason.
+  - `[low]` `[reject]` Intent Alignment: committed tests cover a two-field list, not the three-field README example. — carried: same claim as the pass-1 Blind Hunter test row.
+  - `[low]` `[reject]` Intent Alignment: no test exercises `patch` `findText` against the example. — carried: same claim as the pass-1 Intent Alignment `findText` row.
+  - `[false]` `[reject]` Intent Alignment: "`- ` lints clean" is shown only after storage, never on enforced-write validation of raw `- ` input. — carried: same claim as the pass-1 Blind Hunter enforced-write row.
+  - `[false]` `[reject]` Intent Alignment: the SPEC wording goes beyond the decision's text. — carried: same claim as the pass-1 Intent Alignment extra-claims row.
+  - `[false]` `[reject]` Intent Alignment: the README changes the third bullet and adds two HTML comments beyond the named lines. — carried: same claims as the pass-1 Intent Alignment third-line and directive rows.
+  - `[low]` `[reject]` Intent Alignment: the diff edits the intent contract that its own triage treats as frozen. — Same root cause as the Blind Hunter intent-contract row; same reason.
+  - `[false]` `[reject]` Intent Alignment: the staged ledger change sits outside the reviewed diff, and nothing shows who wrote it. — carried: same claim as the follow-up Intent Alignment ledger row. This run also checked that the staged blob equals the orchestrator's pre-session snapshot.
+  - `[false]` `[reject]` Intent Alignment: the artifact-only receipt does not apply. — carried: same claim as the pass-1 Intent Alignment receipt row.
+
 ## Verification
 
 **Commands:**
@@ -216,37 +269,37 @@ baseline_revision: 426c228e6351fff091ea8be80509c360888be059
 
 Status: done
 
-**Summary.** DW-7 is resolved as the 2026-10-04 human decision (option 1) directs, with documentation changes only. The `server/tools/README.md` visible-metadata example now uses `* ` bullets, the form that comes back byte for byte from `create_document` + `fetch` on `v1.10.1`. The binding SPEC records the Story 1.10 AC5 interpretation in one Constraints bullet: canonical `* ` metadata round-trips byte-identically, and `- ` input lints clean and converges to `* `. No code, test, serializer, ledger or sprint-status change.
+**Summary.** DW-7 needed no new product change in this run. Commit `72e8f2ea6` already applies the 2026-10-04 human decision (option 1): the `server/tools/README.md` visible-metadata example uses `* ` bullets, and the binding SPEC records the Story 1.10 AC5 interpretation in one Constraints bullet (canonical `* ` metadata round-trips byte-identically; `- ` input lints clean and converges to `* `). This run re-drove the story after the operator resolved the follow-up review's clean-tree escalation. It re-verified the committed documents, ran a fresh review pass and finalized the spec. The operator's resolution (journal `story-escalation-resolved`, 2026-10-04 05:30:18) set this spec to `ready-for-dev`, moved `baseline_revision` to `72e8f2ea6` and reset `review_loop_iteration`. It also added the Always bullet that names the staged `deferred-work.md` as the orchestrator's own ledger transaction and removed the earlier Auto Run Result. This run did not author those edits.
 
 **Files changed:**
-- `server/tools/README.md` -- the three example bullets use `* `; above the fence, a comment saying why, then `<!-- prettier-ignore -->`, without which `oxfmt` (`yarn format`) rewrites them to `- `.
-- `_bmad-output/specs/spec-outline-mcp-wiki-linting/SPEC.md` -- one Constraints bullet after the "Keep workspace-specific schemas…" bullet: canonical visible metadata is one list of `* ` bullets with no blank lines between items, the form the serializer writes; it round-trips byte-identically with stable diagnostic coordinates; `- ` input lints clean and converges; this is the binding interpretation of Story 1.10 AC5 in `epics.md`.
-- `_bmad-output/specs/spec-outline-mcp-wiki-linting/.memlog.md` -- `updated:` bumped; one `(change)` line recording the DW-7 amendment.
-- `_bmad-output/implementation-artifacts/spec-dw-7-readme-metadata-canonical-bullet-marker.md` -- this spec.
+- `_bmad-output/implementation-artifacts/spec-dw-7-readme-metadata-canonical-bullet-marker.md` -- status transitions, this run's Review Triage Log entry and this Auto Run Result; it is committed with the operator's resolution edits already in it.
+- No README, SPEC, memlog, code or test change. The deliverable stays as committed in `72e8f2ea6` (`server/tools/README.md`, `_bmad-output/specs/spec-outline-mcp-wiki-linting/SPEC.md`, `_bmad-output/specs/spec-outline-mcp-wiki-linting/.memlog.md`).
 
-**Review findings breakdown** (four passes, 88 findings; every row is in the Review Triage Log):
-- **Loopbacks (bad_spec, 3):** loopback 1 scoped the SPEC claim, named `epics.md` as the AC5, explained the formatter directive and bumped the memlog `updated:`; loopback 2 corrected the README comment and the checklist wording; loopback 3 narrowed the SPEC bullet to what the decision says and the HTTP suite proves (no checklist clause; one list with no blank lines between items).
-- **Patches applied (1, low):** the memlog line now keeps the "on the selected baseline" qualifier.
-- **Deferred (1, low):** the README does not tell authors that their own `- ` bullets come back as `* `, so a `patch` `findText` taken from their input rather than the fetched Markdown still misses (pre-existing; frontmatter `deferred`).
+**Review findings breakdown** (one pass, 30 findings: high 0, medium 0, low 21, false 8, maybe-false 1; every row is in the Review Triage Log above):
+- **Patches applied:** none. Patched by verdict: high 0, medium 0, low 0.
+- **Deferred:** none new. The existing frontmatter item (authors' own `- ` input versus `patch` `findText`) is still the only `deferred` entry; the orchestrator has already harvested it as DW-23.
 - **Rejected, with reasons:**
-  - No committed test pins the three-field README example or a `patch` `findText` with it -- the intent says "No code change"; the temporary probe below covers the example.
-  - DW-12, retro item 2 and the duplicated ledger decision lines stay open -- the intent forbids ledger edits; see the handoff below.
-  - `+ ` bullets, mixed markers, adjacent lists, escaped values -- unlikely for metadata, and outside the decision's claim.
-  - The over-broad "every bullet" wording in `wikiLint.test.ts:1687`, the DW-7 ledger title and the done Story 1.10 spec -- excluded by the intent (code, ledger) or predating this change and correct in context.
-  - Automated guard for the formatter directive -- a CI or test change, excluded by "No code change".
-  - Verification commands, line references, triage headings and a missing I/O matrix in this spec -- their fix edits this build's spec.
-  - False: enforced-write coverage of "`- ` lints clean" (both paths lint the same canonical text), the third README line (two-marker lists would split), the formatter directive and extra SPEC claims (evidenced, not normative), `fetch` vs `findText` serialization (shared `renderContent`), the `epics.md` citation, escaped values (the serializer's form is canonical), and the artifact-only receipt (not asserted).
+  - The review diff cannot see the README, SPEC and memlog because the baseline is `72e8f2ea6`; AC3, the Code Map and the `git diff --stat` line describe the old baseline. Fixing that edits this build's spec. The deliverable was reviewed in five earlier passes against `426c228e6` and re-verified below.
+  - The deleted earlier Auto Run Result, triage rows pointing at it, and the follow-up probe claims without evidence. Restoring or rewriting those edits this build's spec; this result carries the handoff, the probe and the residual risks again.
+  - The intent-contract bullet has no Spec Change Log entry, and older rows call the contract immutable. The operator added it while resolving the escalation; this result records that, and anything more edits this build's spec.
+  - The clean-tree exemption and the risk of committing the staged ledger. False: the exemption is the operator's answer to the escalation, and this run commits only this spec, by pathspec.
+  - The exemption matches the ledger by name rather than content. The staged ledger blob equals the orchestrator's pre-session snapshot, so nothing slipped through; a content guard would add complexity for an unlikely case.
+  - DW-7 already closed in the ledger while DW-12 stays open, and DW-23 is not named in the spec. Both are orchestrator-owned, and the intent forbids ledger edits. The DW-23 duplicate risk is maybe-false: at worst a duplicate low row.
+  - The "Follow-up" heading versus the `ready-for-dev` entry, and the inconsistent carried-row formatting in the follow-up block. The heading belongs to the earlier session; the rest is cosmetic, and fixing it edits this build's spec.
+  - Carried from earlier passes: the checklist wording in the Intent, the two-field committed test, no `patch` `findText` test, enforced-write "`- ` lints clean" (false), SPEC claims beyond the decision (false), the third README bullet and directive comments (false), and the artifact-only receipt (false; this spec is tracked, not ignored, so the receipt is not asserted).
 
-**Follow-up review recommendation:** `false`. This pass patched one low entry and no high or medium entries.
+**Follow-up review recommendation:** `false`. This run entered through `ready-for-dev`, so the first-pass rule applies, and it patched no high or medium entry (no entries patched at all).
 
-**Verification performed** (after the final patch):
-- `scripts/test-db.sh ensure`, then `corepack yarn vitest run server/routes/mcp/wikiLint.test.ts -t "round trip|dw7 probe"` -- 2 passed, 45 skipped.
-- The temporary probe (`describe("dw7 probe")`, appended to `server/routes/mcp/wikiLint.test.ts` and then reverted with `git checkout`) read the fenced example from the edited README, asserted it equals `"## Document metadata\n\n* Status: Active\n* Last verified: 2026-09-20\n* Authority: Repository"`, created it with `createDocument` in a `read_only` collection with `metadataRules`, asserted `fetchMarkdown` returns it byte for byte, and asserted `lint_document` returns `state: "complete"`, `clean: true`, no errors and no warnings. It passed in every loop; `git status` shows no test change.
-- `corepack yarn oxfmt --check server/tools/README.md` -- "All matched files use the correct format." Without the directive it fails and `oxfmt` rewrites the bullets to `- `. Repo-wide `yarn format:check` reports the same six unrelated files on baseline and after the change.
-- `git status --short` -- only the three documents and this spec.
-- `shared/editor/nodes/BulletList.ts:40-42` -- every plain bullet-list item is written as `* `; the node has no `bullet` attribute.
+**Verification performed:**
+- `scripts/test-db.sh ensure` -- "outline-test ready on 127.0.0.1:5432".
+- Temporary probe `describe("dw7 probe")`, appended to `server/routes/mcp/wikiLint.test.ts`. It read the fenced example from `server/tools/README.md`, asserted it equals `"## Document metadata\n\n* Status: Active\n* Last verified: 2026-09-20\n* Authority: Repository"`, created it with `createDocument` in a `read_only` collection using `metadataRules`, asserted `fetchMarkdown` returns it byte for byte, and asserted `lint_document` returns `state: "complete"`, `clean: true`, `errors: []`, `warnings: []`. `corepack yarn vitest run server/routes/mcp/wikiLint.test.ts -t "round trip|dw7 probe"` -- 2 passed, 45 skipped. The test file was then restored from a backup, and `git diff --exit-code -- server/routes/mcp/wikiLint.test.ts` shows no diff.
+- `corepack yarn oxfmt --check server/tools/README.md` -- "All matched files use the correct format."
+- `git diff --stat 426c228e6351fff091ea8be80509c360888be059`, with the orchestrator's ledger excluded, lists only `server/tools/README.md`, `SPEC.md`, `.memlog.md` and this spec. Against `72e8f2ea6`, only this spec and the orchestrator's staged `deferred-work.md` differ.
+- Manual check: `server/tools/README.md:129-137` holds the explanatory comment, then `<!-- prettier-ignore -->`, then the fence with `## Document metadata`, a blank line and three `* ` bullets in the original order.
+- Ledger untouched: the index blob of `deferred-work.md` (`b901cb5fca673756600828ccab317d946a6dd52c`) equals `refs/attempt-preserve-dirty/20261004-001506-b478-72e8f2ea-0:_bmad-output/implementation-artifacts/deferred-work.md`, and there is no unstaged change to it.
 
 **Residual risks and handoff:**
-- **Handoff for the orchestrator:** DW-12 (`deferred-work.md:98-106`, "Close DW-7 with the same change") and `sprint-status.yaml` `epic-1-retro-item-2-change-the-readme-visible-metadata-examp` record the same decision and are resolved by this change. They are still open because this run may not edit the ledger or the sprint board.
-- Nothing automated guards `<!-- prettier-ignore -->`: if it is removed, `yarn format` silently reverts the example to `- `, and CI does not run `format:check`.
+- **Orchestrator handoff:** the staged `deferred-work.md` change (DW-7 closed, DW-23 added) is left staged and uncommitted, as the Always bullet requires. DW-12 (`deferred-work.md:100`, "Close DW-7 with the same change") and `sprint-status.yaml` `epic-1-retro-item-2-change-the-readme-visible-metadata-examp` record the same decision, and this change resolves them. They stay open only because this run may not edit the ledger or the sprint board.
+- Nothing automated guards `<!-- prettier-ignore -->`. If it is removed, `yarn format` silently reverts the example to `- `, and CI does not run `format:check`.
 - The three-field README example has no committed test; the committed "round trip" test covers the two-field form.
+- DW-23 (open, low): the README does not tell authors that their own `- ` bullets come back as `* `.
