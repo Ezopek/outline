@@ -126,12 +126,14 @@ configured template and structural schema.
 Prefer a visible Markdown section that survives Outline's Markdown/ProseMirror
 round trip, for example:
 
+<!-- Keep `* `: Outline emits plain bullet-list markers as `* `, and the formatter would rewrite them to `- `. -->
+<!-- prettier-ignore -->
 ```markdown
 ## Document metadata
 
-- Status: Active
-- Last verified: 2026-09-20
-- Authority: Repository
+* Status: Active
+* Last verified: 2026-09-20
+* Authority: Repository
 ```
 
 Do not assume YAML front matter has special semantics or stable round-trip
