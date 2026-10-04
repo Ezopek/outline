@@ -189,6 +189,7 @@ source_spec: `spec-dw-10-html-create-state-content-parity.md`
 severity: medium
 reason: DocumentImportTask.ts:97-120 still persists the converter `state` beside `content` parsed again from `text`. DocumentHelper.toProsemirror (DocumentHelper.tsx:86-104) prefers `content`, so the read-only lint tools never see the state. Class A in this spec's Design Notes shows a nested notice that is present in the state and absent from the content. This change fixes only the enforced MCP HTML create; the baseline split predates it.
 status: open
+decision: 2026-10-04 Keep open as a Gate 1 residual
 
 ### DW-22: A metadata one_of policy can validate a linked inline image value that loses its link when Y.js builds the editor state from content.
 origin: spec-deferred e0367ea24a48
