@@ -256,6 +256,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator; sprint-status status open)
 status: open
+decision: 2026-10-04 Pin --maxWorkers=2 — Add a package.json script (e.g. test:server:conformance = TZ=UTC vitest run --project server --maxWorkers=2) and name it in CLAUDE.md and AGENTS.md 'Running and verifying' as the broad verification command for Epic 3 conformance evidence. Verify that it runs green once against scripts/test-db.sh ensure, and record the result.
 
 ### DW-30: Fold the worker post-commit tail and cross-host clock-skew budget into Story 3.3 constant-derivation evidence (F-8, F-9).
 origin: retro action item epic-2-retro-item-17-fold-the-worker-post-commit-tail-and-cro
