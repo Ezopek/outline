@@ -281,6 +281,7 @@ source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator; sprint-status status open)
 status: open
+decision: 2026-10-04 Add it to CLAUDE.md/AGENTS.md pitfalls — Add one line to 'Known pitfalls' in CLAUDE.md and the matching AGENTS.md section: before setting a bmad-loop story done by hand, move every open finding from its review gates into _bmad-output/implementation-artifacts/deferred-work.md. No other change.
 
 ### DW-33: Sync tracking: set epic-2 (and epic-1) to done in sprint-status.yaml.
 origin: retro action item epic-2-retro-item-20-sync-tracking-set-epic-2-and-epic-1-to-d
