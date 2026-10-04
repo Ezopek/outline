@@ -875,8 +875,10 @@ describe("an enforced HTML create with media", () => {
     const html = `<h2>Overview</h2><p><img src="${EXTERNAL}"></p><p><img src="data:image/png;base64,${"A".repeat(400)}"></p><p><img src="data:image/${"x".repeat(260)};base64,${PNG_BASE64}"></p>`;
     const maxSize = env.FILE_STORAGE_UPLOAD_MAX_SIZE;
     env.FILE_STORAGE_UPLOAD_MAX_SIZE = 200;
+    const keys = recordKeys();
     let enforced: { id: string; validation?: { status: string } };
     let baseline: { id: string };
+    let staged: string[];
     try {
       enforced = success(
         await createHtml(accessToken, {
@@ -884,6 +886,7 @@ describe("an enforced HTML create with media", () => {
           collectionId: collection.id,
         })
       );
+      staged = keys.splice(0);
       baseline = success(
         await createHtml(accessToken, {
           text: html,
@@ -903,6 +906,11 @@ describe("an enforced HTML create with media", () => {
       normalized({ ...(await storedFields(baseline.id)), state: null })
     );
     expect(await Attachment.count({ where: { teamId: user.teamId } })).toBe(0);
+    // The refused blob is deleted although a committed write runs no cleanup.
+    expect(staged).toHaveLength(3);
+    await vi.waitFor(async () =>
+      expect(await blobsExist(staged)).toEqual([false, false, false])
+    );
   });
 
   it.each([

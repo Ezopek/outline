@@ -314,8 +314,9 @@ export class MediaStager {
   }
 
   /**
-   * Deletes the key of a blob that landed after cleanup began, within the
-   * cleanup bound; a deletion that rejects or does not settle is reported.
+   * Deletes the key of a blob that landed after cleanup began, or of a blob
+   * whose row values the Attachment model refused, within the cleanup bound;
+   * a deletion that rejects or does not settle is reported.
    *
    * @param id - the blob's Attachment ID.
    * @param key - its key.
@@ -382,7 +383,9 @@ export class MediaStager {
   /**
    * Stages one source at its final key. A failed import, as the baseline
    * would see it, keeps the source: undefined, a rejection, or row values
-   * the Attachment model would refuse.
+   * the Attachment model would refuse. A blob with refused row values can
+   * never be materialized, so its key is disowned and the blob is deleted at
+   * once, without awaiting the deletion.
    *
    * @param src - the source.
    * @param name - the Attachment name.
@@ -442,6 +445,8 @@ export class MediaStager {
         userId: this.actor.id,
       }).validate();
     } catch {
+      this.owned.delete(id);
+      this.deleteLate(id, key);
       return undefined;
     }
     return Object.freeze(handle);

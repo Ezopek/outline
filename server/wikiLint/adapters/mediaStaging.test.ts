@@ -231,7 +231,7 @@ describe("Markdown staging", () => {
     await expect(FileStorage.getFileExists(handle.key)).resolves.toBe(false);
   });
 
-  it("keeps a source whose import fails, as the baseline does, and still owns its key", async () => {
+  it("keeps a source whose import fails, as the baseline does, owns a failed store's key, and deletes a refused blob at once", async () => {
     const actor = actorStub();
     const { storage, storeFromUrl, deleteFile } = fakeStorage();
     storeFromUrl
@@ -246,12 +246,78 @@ describe("Markdown staging", () => {
 
     expect(await stager.stageMarkdown(text)).toBe(text);
     expect(stager.attachments).toEqual([]);
+    const [unstoredKey, rejectedKey, refusedKey] = storeFromUrl.mock.calls.map(
+      ([, key]) => key
+    );
+    await settle();
+    expect(deleteFile.mock.calls.map(([key]) => key)).toEqual([refusedKey]);
 
     await stager.cleanup();
-    expect(deleteFile.mock.calls.map(([key]) => key)).toEqual(
-      storeFromUrl.mock.calls.map(([, key]) => key)
-    );
+    expect(deleteFile.mock.calls.map(([key]) => key)).toEqual([
+      refusedKey,
+      unstoredKey,
+      rejectedKey,
+    ]);
   });
+
+  it.each([
+    {
+      outcome: "rejects",
+      deletion: () => Promise.reject(new Error("delete failed for a key")),
+      settles: true,
+    },
+    {
+      outcome: "does not settle",
+      deletion: () => new Promise<void>(() => undefined),
+      settles: false,
+    },
+  ])(
+    "reports a refused blob's deletion that $outcome, by Attachment ID only",
+    async ({ deletion, settles }) => {
+      const { storage, storeFromUrl, deleteFile } = fakeStorage();
+      storeFromUrl.mockResolvedValueOnce({
+        ...STORED,
+        contentType: `image/${"x".repeat(250)}`,
+      });
+      deleteFile.mockImplementationOnce(deletion);
+      const warn = vi.spyOn(Logger, "warn");
+      const { stager, requestId, invocationId, attemptId } = stagerOf(
+        actorStub(),
+        { storage }
+      );
+      const text = `![refused](${dataSrc(0)})`;
+
+      expect(await stager.stageMarkdown(text)).toBe(text);
+      if (!settles) {
+        // Staging does not wait for the deletion, so nothing is reported yet.
+        expect(warn).not.toHaveBeenCalled();
+      }
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled(), {
+        timeout: STAGED_MEDIA_CLEANUP_BOUND_MS + 1000,
+      });
+
+      const [[src, key]] = storeFromUrl.mock.calls;
+      expect(deleteFile.mock.calls.map(([deleted]) => deleted)).toEqual([key]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        "Enforced write staged media cleanup failed",
+        {
+          requestId,
+          invocationId,
+          attemptId,
+          attachmentIds: [AttachmentHelper.parseKey(key).id],
+        }
+      );
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).not.toContain(src);
+      expect(logged).not.toContain(key);
+      expect(logged).not.toMatch(/uploads|refused|data:|delete failed/);
+
+      await stager.cleanup();
+      expect(deleteFile).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+    }
+  );
 });
 
 describe("ProseMirror staging", () => {

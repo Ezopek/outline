@@ -244,7 +244,9 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Dev agent; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-media-blob-validation-leak
+resolution-undo: f9fd9ffc6dc57559d0ff10951f1473daf9cfeeae47fbf7dc6a509f5c8de59231 2026-10-04 7374617475733a206f70656e
 
 ### DW-28: Add tests for worker row 2/4/5 committedFromSummary conversion and HTML-with-media failure rows and summaries (F-12).
 origin: retro action item epic-2-retro-item-15-add-tests-for-worker-row-2-4-5-committed
@@ -323,4 +325,12 @@ location: server/wikiLint/application/enforcedImport.ts:656, server/wikiLint/app
 source_spec: `spec-dw-28-html-worker-conversion-tests.md`
 severity: medium
 reason: `server/wikiLint/application/enforcedImport.ts:656` (`finish(...pending)` for the reauthorization conflict at :623-624 and the mismatch rejection at :633-638) and `:832` (`finish(...failure)`, `aborted(decided ? 5 : 3, ...)`). No test makes the pre-allocated row appear before either call: the row 3 test and the DW-28 row 2/4/5 tests reach `finish` only through `switch (outcome.row)` at :789-825. Replacing those calls with a direct `return` of the non-committed outcome keeps every test green. Spine :120 requires the lookup before every non-committed outcome (rows 2, 3, 4, 5). DW-28's intent counts coverage per row (it called row 3 covered by one route), so this is the pre-existing remainder of the same gap class, raised by the Blind Hunter, Edge Case Hunter and Intent Alignment layers.
+status: open
+
+### DW-37: LocalStorage.deleteFile hides unlink failures from MediaStager and logs the full path on failure.
+origin: spec-deferred 34abd6e8fa93
+location: server/storage/files/LocalStorage.ts:92
+source_spec: `spec-dw-27-media-blob-validation-leak.md`
+severity: medium
+reason: LocalStorage.ts catches unlink errors, logs the file path and error, then resolves. MediaStager's deleteLate therefore cannot report that failure by Attachment ID. This adapter behavior predates DW-27 and also affects existing staged-media cleanup and late-landing deletion.
 status: open
