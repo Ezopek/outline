@@ -205,3 +205,83 @@ source_spec: `spec-dw-7-readme-metadata-canonical-bullet-marker.md`
 severity: low
 reason: Patch findText is an indexOf over serializeWithPositions output (DocumentHelper.tsx:668-683), and BulletList.toMarkdown always writes `* `. DW-7 fixes only the copied example; metadata an agent writes itself with `- ` behaves as before. Pre-existing, not caused by this change, and outside the 2026-10-04 decision, which covers the example and the SPEC record.
 status: open
+
+### DW-24: Decide the unavailable-probe rule for the HTML worker finish/first lookup and requester (spine analogue: row 7, source retained), record it in the Story 2.5 contract and spine, then implement with tests that fail finish probe (F-1).
+origin: retro action item epic-2-retro-item-11-decide-the-unavailable-probe-rule-for-th
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator with the architect, then Dev agent; sprint-status status open)
+status: open
+
+### DW-25: Restore the Story 2.5 spec (with its blocked follow-up review) from .bmad-loop/archive/20261003-130833-8009 and run one completed independent review of the 2.5 code (F-2).
+origin: retro action item epic-2-retro-item-12-restore-the-story-2-5-spec-with-its-bloc
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator; sprint-status status open)
+status: open
+
+### DW-26: Reserve COMMIT_PROBE_BOUND_MS out of the COMMIT timeout in runAttempt so a commit timeout can still probe; add a commit-timeout test (F-6).
+origin: retro action item epic-2-retro-item-13-reserve-commit_probe_bound_ms-out-of-the
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Dev agent; sprint-status status open)
+status: open
+
+### DW-27: Close staged-blob leaks: delete a late-landing requester source and the media blob when Attachment validation fails (F-7).
+origin: retro action item epic-2-retro-item-14-close-staged-blob-leaks-delete-a-late-la
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Dev agent; sprint-status status open)
+status: open
+
+### DW-28: Add tests for worker row 2/4/5 committedFromSummary conversion and HTML-with-media failure rows and summaries (F-12).
+origin: retro action item epic-2-retro-item-15-add-tests-for-worker-row-2-4-5-committed
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Dev agent; sprint-status status open)
+status: open
+
+### DW-29: Pin one reproducible broad verification command (--maxWorkers=2 or raised test PostgreSQL connection limit) for Epic 3 conformance evidence (F-13).
+origin: retro action item epic-2-retro-item-16-pin-one-reproducible-broad-verification
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator; sprint-status status open)
+status: open
+
+### DW-30: Fold the worker post-commit tail and cross-host clock-skew budget into Story 3.3 constant-derivation evidence (F-8, F-9).
+origin: retro action item epic-2-retro-item-17-fold-the-worker-post-commit-tail-and-cro
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Dev agent; sprint-status status open)
+status: open
+
+### DW-31: Reconcile ARCHITECTURE-SPINE.md:118 with the HTML worker probe-established row 6: fix or record an accepted deviation (F-3).
+origin: retro action item epic-2-retro-item-18-reconcile-architecture-spine-md-118-with
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator with the architect; sprint-status status open)
+status: open
+
+### DW-32: Never mark a loop-deferred story done by hand without moving its open review findings into deferred-work.md (F-2).
+origin: retro action item epic-2-retro-item-19-never-mark-a-loop-deferred-story-done-by
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator; sprint-status status open)
+status: open
+
+### DW-33: Sync tracking: set epic-2 (and epic-1) to done in sprint-status.yaml.
+origin: retro action item epic-2-retro-item-20-sync-tracking-set-epic-2-and-epic-1-to-d
+location: n/a
+source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
+severity: low
+reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator; sprint-status status open)
+status: open
