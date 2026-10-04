@@ -204,6 +204,7 @@ source_spec: `spec-dw-10-html-create-state-content-parity.md`
 severity: medium
 reason: The class B metadata fixture in documentProjection.test.ts shows that the linked image is present in validated content but loses its link in the derived Y.js document. metadataFieldFormats in documentRules.ts compares the field value to configured one_of values. This Y.js conversion also occurs for Markdown creates and predates DW-10; the accepted Decision explicitly retains that behavior.
 status: open
+decision: 2026-10-04 Keep open as a Gate 1 residual
 
 ### DW-23: server/tools/README.md does not tell authors that their own `- ` bullets are stored and fetched as `* `, so a patch findText written from their input instead of the fetched Markdown still misses.
 origin: spec-deferred eb7b895ea0db
@@ -342,7 +343,9 @@ location: server/storage/files/LocalStorage.ts:92
 source_spec: `spec-dw-27-media-blob-validation-leak.md`
 severity: medium
 reason: LocalStorage.ts catches unlink errors, logs the file path and error, then resolves. MediaStager's deleteLate therefore cannot report that failure by Attachment ID. This adapter behavior predates DW-27 and also affects existing staged-media cleanup and late-landing deletion.
-status: open
+status: done 2026-10-04
+resolution: closed by human decision: Accepted: baseline v1.10.1 LocalStorage behavior, left unchanged to preserve upstream callers; S3 deletion already reports failures
+decision: 2026-10-04 Close as accepted baseline behavior — Accepted: baseline v1.10.1 LocalStorage behavior, left unchanged to preserve upstream callers; S3 deletion already reports failures
 
 ### DW-38: Enforced HTML create outcomes decided outside runAttempt (requester row 3 before queue.add, requester row 7, and the worker's pre-attempt and final-catch aborts) still leave no operator log.
 origin: spec-deferred e4dc78f49ace
@@ -368,6 +371,7 @@ source_spec: `spec-dw-15-story-preconditions-convention.md`
 severity: medium
 reason: The human decision for DW-15 excludes sprint-status and tooling changes. bmad-loop dispatches from sprint-status.yaml, where Stories 3.3 and 3.4 are plain backlog. Ledger entries are written by the orchestrator, and no step adds the matching Preconditions item to epics.md, so F-1 (epic-1-retro-2026-10-03.md) can recur for a future deferral unless the operator, owner of Epic 1 retrospective action item 5, adds it. A run obeys a block only if it reads the story text; the compiled epic context has "No story-level details" (compile-epic-context.md). This change's verification proves the text only, not that any consumer obeys it.
 status: open
+decision: 2026-10-04 Add an AGENTS.md/CLAUDE.md pitfall — Add one Known pitfalls line to AGENTS.md and CLAUDE.md: when a deferral needs a decision before Story X, add the Preconditions item to Story X in epics.md and ask the orchestrator to add a gate: line on the ledger entry, because ledger prose alone does not stop a run. No tooling or sprint-status change.
 
 ### DW-41: Ledger work folded into Stories 3.3 and 3.4 (DW-20, DW-30) and their Gate 1 dispositions (DW-21, DW-25) do not appear in those stories' text.
 origin: spec-deferred 7ec70511a749
