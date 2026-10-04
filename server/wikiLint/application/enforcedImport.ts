@@ -12,7 +12,10 @@ import FileStorage from "@server/storage/files";
 import type { APIContext } from "@server/types";
 import { AuthenticationType } from "@server/types";
 import type { AuditEventWriter } from "../adapters/auditEvents";
-import type { PreparedMarkdownCreate } from "../adapters/documentProjection";
+import type {
+  PreparedMarkdownCreate,
+  ProjectedDocument,
+} from "../adapters/documentProjection";
 import {
   prepareHtmlCreate,
   projectMarkdownCreate,
@@ -22,7 +25,11 @@ import {
   isPreallocatedIdConflict,
   persistProjectedCreate,
 } from "../adapters/projectionWriter";
-import { probeCommit, readWriteSummary } from "../adapters/writeTransaction";
+import {
+  probeCommit,
+  readDocumentContent,
+  readWriteSummary,
+} from "../adapters/writeTransaction";
 import type {
   Finding,
   SystemFailure,
@@ -389,7 +396,13 @@ function mismatchValidation(intent: EnforcedImportIntent): WriteValidation {
  * and only then converts the staged source and runs the shared attempt. It
  * owns the decision, the commit, and the write summary, deletes the staged
  * source when it returns, and returns `aborted` by phase for every failure
- * of its own code.
+ * of its own code. A lookup of the pre-allocated document that cannot run,
+ * first or before a non-committed outcome, is row 7: it throws, writes no
+ * summary, and keeps the staged source. When only the commit probe found the
+ * row after its own commit rejected, it returns its own validation only when
+ * the found row's title and text equal those of the projection it persisted;
+ * otherwise it resolves the row through the committed summary and writes no
+ * summary of its own.
  *
  * @param value - the job's intent.
  * @param dependencies.write - the audit Event writer.
@@ -426,6 +439,11 @@ export async function runEnforcedImport(
   let validated: ProjectionValidation | undefined;
   let decided = false;
   let ownConflict: WriteValidation | undefined;
+  let persisted: ProjectedDocument | undefined;
+  // Whether the row the commit probe found was not confirmed as this
+  // attempt's own: its title and text were not shown equal to those of the
+  // persisted projection, so that it may be another delivery's.
+  let probedOther = false;
   let committedSummary: Promise<void> | undefined;
 
   /**
@@ -504,6 +522,23 @@ export async function runEnforcedImport(
   const deleteSource = () => deleteStagedSource(intent.key);
 
   /**
+   * Reads the pre-allocated document on a fresh connection within the probe
+   * bound and compares it with the projection this attempt persisted.
+   *
+   * @returns whether the found row's title and text equal the projection's;
+   *   false when the read cannot run or finds no row.
+   */
+  const sameAsPersisted = async (): Promise<boolean> => {
+    const found = await readDocumentContent(documentId, COMMIT_PROBE_BOUND_MS);
+    return (
+      found !== undefined &&
+      persisted !== undefined &&
+      found.title === persisted.title &&
+      found.text === persisted.text
+    );
+  };
+
+  /**
    * Ends the attempt in a non-committed outcome. The pre-allocated document
    * is looked up again first: a found row converts the outcome through the
    * committed summary and writes no summary of its own.
@@ -511,14 +546,18 @@ export async function runEnforcedImport(
    * @param result - the outcome.
    * @param summary - the summary outcome; none for a conflict.
    * @returns the result the job returns.
-   * @throws UnestablishedImportError when a found row has no committed
-   *   summary.
+   * @throws UnestablishedImportError when the lookup cannot run, before any
+   *   summary or deletion, or when a found row has no committed summary.
    */
   const finish = async (
     result: NonCommittedResult,
     summary: WriteAuditOutcome | undefined
   ): Promise<EnforcedImportResult> => {
-    if ((await probeCommit(target, COMMIT_PROBE_BOUND_MS)) === "present") {
+    const lookup = await probeCommit(target, COMMIT_PROBE_BOUND_MS);
+    if (lookup === "unavailable") {
+      throw new UnestablishedImportError();
+    }
+    if (lookup === "present") {
       const found = await committedFromSummary(intent);
       await deleteSource();
       return found;
@@ -555,7 +594,7 @@ export async function runEnforcedImport(
       return found;
     }
     if (lookup === "unavailable") {
-      return await finish(...aborted(3, OPERATION_FAILED));
+      throw new UnestablishedImportError();
     }
 
     // Reload the actor, re-authorize the destination, check the collection,
@@ -709,6 +748,7 @@ export async function runEnforcedImport(
             template: null,
           }),
         persist: async (projection, validation) => {
+          persisted = projection;
           try {
             return await persistProjectedCreate(ctx, projection, null);
           } catch (error) {
@@ -734,7 +774,13 @@ export async function runEnforcedImport(
         onValidated: (projectionValidation) => {
           validated = projectionValidation;
         },
-        onCommitted: ({ validation }) => {
+        onCommitted: async ({ validation, probed }) => {
+          // Awaited before the summary would start, so that a mismatched
+          // attempt never writes one that `committedFromSummary` reads back.
+          if (probed && !(await sameAsPersisted())) {
+            probedOther = true;
+            return;
+          }
           committedSummary = summarize(decidedSummary(validation, rules), true);
         },
       }
@@ -742,6 +788,11 @@ export async function runEnforcedImport(
 
     switch (outcome.row) {
       case 6:
+        if (probedOther) {
+          const found = await committedFromSummary(intent);
+          await deleteSource();
+          return found;
+        }
         await committedSummary;
         await deleteSource();
         return {

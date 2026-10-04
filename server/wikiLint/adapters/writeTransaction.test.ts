@@ -25,6 +25,7 @@ import {
   installCorrelationHook,
   isServerReported,
   probeCommit,
+  readDocumentContent,
 } from "./writeTransaction";
 
 /** The internals of a Sequelize transaction that the tests inspect. */
@@ -516,6 +517,37 @@ describe("probeCommit", () => {
     await expect(
       probeCommit({ kind: "document", documentId: randomUUID() }, 2000)
     ).resolves.toBe("unavailable");
+  });
+});
+
+describe("readDocumentContent", () => {
+  it("reads a stored row's title and text, whether or not it is deleted", async () => {
+    const document = await buildDocument({
+      title: "Stored title",
+      text: "Stored text",
+    });
+    await document.destroy();
+
+    await expect(readDocumentContent(document.id, 2000)).resolves.toEqual({
+      title: "Stored title",
+      text: "Stored text",
+    });
+  });
+
+  it("is undefined for an absent row", async () => {
+    await expect(
+      readDocumentContent(randomUUID(), 2000)
+    ).resolves.toBeUndefined();
+  });
+
+  it("is undefined below the floor without opening a transaction", async () => {
+    const document = await buildDocument();
+    const transaction = vi.spyOn(sequelize, "transaction");
+
+    await expect(
+      readDocumentContent(document.id, SET_LOCAL_FLOOR_MS - 1)
+    ).resolves.toBeUndefined();
+    expect(transaction).not.toHaveBeenCalled();
   });
 });
 

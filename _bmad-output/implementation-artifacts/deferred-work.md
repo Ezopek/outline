@@ -215,7 +215,9 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator with the architect, then Dev agent; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-html-worker-commit-detection-rules
+resolution-undo: caab443ce1ce16cfb94760b90a68e2456134656cd7d153e1ae1966a4453445c5 2026-10-04 7374617475733a206f70656e
 
 ### DW-25: Restore the Story 2.5 spec (with its blocked follow-up review) from .bmad-loop/archive/20261003-130833-8009 and run one completed independent review of the 2.5 code (F-2).
 origin: retro action item epic-2-retro-item-12-restore-the-story-2-5-spec-with-its-bloc
@@ -273,7 +275,9 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator with the architect; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-html-worker-commit-detection-rules
+resolution-undo: caab443ce1ce16cfb94760b90a68e2456134656cd7d153e1ae1966a4453445c5 2026-10-04 7374617475733a206f70656e
 
 ### DW-32: Never mark a loop-deferred story done by hand without moving its open review findings into deferred-work.md (F-2).
 origin: retro action item epic-2-retro-item-19-never-mark-a-loop-deferred-story-done-by
@@ -292,3 +296,19 @@ severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Operator; sprint-status status open)
 status: done 2026-10-04
 resolution: closed by the operator coordinator: epic-1 and epic-2 set to done in sprint-status.yaml by hand (the sprint tooling has no flag for it), as the DW-18 decision requires; a sweep bundle must not edit that file. Action item epic-2-retro-item-20 set done
+
+### DW-34: The spine's 2026-10-04 Amendment Record row still describes D2 as a match on a "recorded intent/source fingerprint", contradicting AD-7 and the amendment's resolved D2 (title and text equality).
+origin: spec-deferred 7983dbba7b29
+location: _bmad-output/planning-artifacts/architecture/architecture-outline-2026-09-21/ARCHITECTURE-SPINE.md:434
+source_spec: `spec-dw-24-dw-31-html-worker-commit-detection-rules.md`
+severity: low
+reason: ARCHITECTURE-SPINE.md:434 says "the worker may report its own `validation` as row 6 after its commit-detection probe finds a row whose fingerprint equals its recorded intent/source fingerprint (AD-7)". AD-7 at :118 and amendment-proposal-unavailable-probe-rule.md D2 / Open Point 1 instead require the found row's title and `text` to equal the validated projection's. The implementation follows AD-7. The stale record row predates this change (commit 78f9c101f).
+status: open
+
+### DW-35: The preallocated-ID conflict path can attribute a concurrent delivery's different row to this attempt without comparing its content.
+origin: spec-deferred 480f0b2042f1
+location: server/wikiLint/application/enforcedImport.ts:805
+source_spec: `spec-dw-24-dw-31-html-worker-commit-detection-rules.md`
+severity: medium
+reason: This path predates DW-24/DW-31: enforcedImport.ts captures ownConflict on isPreallocatedIdConflict during persist and case 5 returns this attempt's validation and writes its summary. If another delivery inserted a different row after the in-transaction absence check, the conflict branch does not compare title and text. D2 applies only to probe-established row 6, so this is separate work.
+status: open

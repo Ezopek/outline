@@ -33,8 +33,10 @@ import { buildPolicySet } from "../core/policySet";
 import { OPERATION_FAILED, createFinding } from "../core/registry";
 import type * as DeadlineModule from "./deadline";
 import {
+  COMMIT_PROBE_BOUND_MS,
   Deadline,
   ENFORCED_IMPORT_WAIT_MS,
+  SET_LOCAL_FLOOR_MS,
   WRITE_PREPARATION_BOUND_MS,
 } from "./deadline";
 import type {
@@ -402,6 +404,12 @@ function interceptQueries() {
 
 /** The after-lock lookup of the worker's attempt. */
 const AFTER_LOCK_LOOKUP = "SELECT id FROM documents WHERE id = :documentId";
+
+/** The worker's commit-detection lookup, first and before an outcome. */
+const FIRST_LOOKUP = "SELECT id FROM documents WHERE id = :id";
+
+/** The read of a probe-found row that the worker compares with its projection. */
+const CONTENT_READ = "SELECT title, text FROM documents WHERE id = :documentId";
 
 /**
  * Asserts a committed result and its stored effects.
@@ -1152,7 +1160,7 @@ describe("worker outcomes", () => {
     });
   });
 
-  it("ends in row 3 without a transaction when the first lookup is unavailable", async () => {
+  it("throws without a transaction, a summary, or a deletion when the first lookup is unavailable", async () => {
     const { user, collection, fingerprint } = await fixture();
     const intent = await stagedIntent({
       user,
@@ -1161,25 +1169,54 @@ describe("worker outcomes", () => {
       html: VALID_HTML,
     });
     const open = vi.spyOn(EnforcementTransaction, "open");
+    const write = vi.fn(insertAuditEvent);
     const queries = interceptQueries();
     let failed = false;
     queries.use((sql, _options, next) => {
-      if (sql === "SELECT id FROM documents WHERE id = :id" && !failed) {
+      if (sql === FIRST_LOOKUP && !failed) {
         failed = true;
         return Promise.reject(new Error("lookup failed"));
       }
       return next();
     });
 
-    expect(await runEnforcedImport(intent)).toEqual({
-      kind: "aborted",
-      row: 3,
-      message: OPERATION_FAILED,
-    });
+    await expect(runEnforcedImport(intent, { write })).rejects.toThrow(
+      UnestablishedImportError
+    );
     expect(failed).toBe(true);
     expect(open).not.toHaveBeenCalled();
-    const [summary] = await summaries(intent.invocationId);
-    expect(summary.data.outcome).toBe("aborted_before_decision");
+    expect(write).not.toHaveBeenCalled();
+    expect(await summaries(intent.invocationId)).toEqual([]);
+    await expect(FileStorage.getFileExists(intent.key)).resolves.toBe(true);
+  });
+
+  it("throws without a summary or a deletion when the lookup before a non-committed outcome is unavailable", async () => {
+    const { user, collection, fingerprint } = await fixture();
+    const intent = await stagedIntent({
+      user,
+      collectionId: collection.id,
+      fingerprint,
+      html: INVALID_HTML,
+    });
+    const write = vi.fn(insertAuditEvent);
+    const queries = interceptQueries();
+    let lookups = 0;
+    queries.use((sql, _options, next) => {
+      // Only the lookup repeated before the row 4 is returned fails.
+      if (sql === FIRST_LOOKUP && ++lookups === 2) {
+        return Promise.reject(new Error("lookup failed"));
+      }
+      return next();
+    });
+
+    await expect(runEnforcedImport(intent, { write })).rejects.toThrow(
+      UnestablishedImportError
+    );
+    expect(lookups).toBe(2);
+    expect(write).not.toHaveBeenCalled();
+    expect(await summaries(intent.invocationId)).toEqual([]);
+    expect(await storedDocument(intent.documentId)).toBeNull();
+    await expect(FileStorage.getFileExists(intent.key)).resolves.toBe(true);
   });
 
   it("returns an invalid intent as row 3 without a summary or deletion", async () => {
@@ -1513,17 +1550,19 @@ describe("COMMIT outcomes", () => {
   /**
    * Builds a staged intent with spies on the post-commit effects.
    *
+   * @param html - the source.
    * @returns the fixture.
    */
-  async function commitFixture() {
+  async function commitFixture(html = VALID_HTML) {
     const { user, collection, fingerprint } = await fixture();
     const intent = await stagedIntent({
       user,
       collectionId: collection.id,
       fingerprint,
-      html: VALID_HTML,
+      html,
     });
     return {
+      user,
       intent,
       enqueue: vi.spyOn(globalEventQueue(), "add"),
       notify: vi.spyOn(APIUpdateExtension, "notifyUpdate"),
@@ -1579,6 +1618,161 @@ describe("COMMIT outcomes", () => {
     await expectCommitted(result, intent, "validated");
     expect(enqueue).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Breaks the connection after the real COMMIT resolves, first running a
+   * step on fresh connections, outside the committed transaction.
+   *
+   * @param before - the step.
+   * @returns the statements seen, and a way to add query handlers.
+   */
+  function breakAfterCommit(before: () => Promise<unknown> = async () => {}) {
+    const statements: string[] = [];
+    const queries = interceptQueries();
+    let broken = false;
+    queries.use(async (sql, options, next) => {
+      statements.push(sql);
+      const result = await next();
+      if (sql === "COMMIT;" && !broken) {
+        broken = true;
+        await before();
+        destroySocket(options);
+        throw socketError();
+      }
+      return result;
+    });
+    return { statements, queries };
+  }
+
+  it("returns its own validation and summary when the probe-found row equals its projection", async () => {
+    const { intent, enqueue } = await commitFixture(WARNING_HTML);
+    const { statements } = breakAfterCommit();
+
+    const result = await runEnforcedImport(intent);
+
+    await expectCommitted(result, intent, "validated_with_warnings");
+    expect(result).toMatchObject({
+      validation: { warnings: [{ code: "DISCOURAGED_MARKDOWN_STRUCTURE" }] },
+    });
+    expect(statements).toContain(CONTENT_READ);
+    const [summary] = await summaries(intent.invocationId);
+    expect(summary.data.counts.byCode).toEqual({
+      DISCOURAGED_MARKDOWN_STRUCTURE: 1,
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it.each(["text", "title"])(
+    "resolves through the committed summary, writing none, when the probe-found row's %s differs",
+    async (column) => {
+      const { user, intent, enqueue } = await commitFixture(WARNING_HTML);
+      const write = vi.fn(insertAuditEvent);
+      breakAfterCommit(async () => {
+        await sequelize.query(
+          `UPDATE documents SET "${column}" = :value WHERE id = :id`,
+          { replacements: { value: "Another delivery", id: intent.documentId } }
+        );
+        await storeSummary(intent, user, {
+          outcome: "degraded_validation",
+          counts: {
+            errors: 0,
+            warnings: 0,
+            systemFailures: 1,
+            byCode: { VALIDATION_TIMEOUT: 1 },
+          },
+        });
+      });
+
+      const result = await runEnforcedImport(intent, { write });
+
+      expect(result).toEqual({
+        kind: "committed",
+        documentId: intent.documentId,
+        validation: {
+          status: "degraded_validation",
+          policySchemaVersion: 1,
+          policyFingerprint: intent.expectedPolicyFingerprint,
+          errors: [],
+          warnings: [],
+          systemFailures: [
+            {
+              code: "VALIDATION_TIMEOUT",
+              message: "Validation did not finish before the deadline.",
+              location: {
+                kind: "scope",
+                scopeKind: "collection",
+                collectionId: intent.collectionId,
+              },
+            },
+          ],
+        },
+      });
+      expect(write).not.toHaveBeenCalled();
+      const [summary, ...rest] = await summaries(intent.invocationId);
+      expect(rest).toEqual([]);
+      expect(summary.data.counts.byCode).toEqual({ VALIDATION_TIMEOUT: 1 });
+      expect(enqueue).not.toHaveBeenCalled();
+      await expect(FileStorage.getFileExists(intent.key)).resolves.toBe(false);
+    }
+  );
+
+  it("resolves through the committed summary, writing none, when the probe-found row's content read fails", async () => {
+    const { user, intent } = await commitFixture(WARNING_HTML);
+    const write = vi.fn(insertAuditEvent);
+    const { queries } = breakAfterCommit(() =>
+      storeSummary(intent, user, {
+        outcome: "degraded_validation",
+        counts: {
+          errors: 0,
+          warnings: 0,
+          systemFailures: 1,
+          byCode: { VALIDATION_TIMEOUT: 1 },
+        },
+      })
+    );
+    queries.use((sql, _options, next) =>
+      sql === CONTENT_READ ? Promise.reject(new Error("read failed")) : next()
+    );
+
+    const result = await runEnforcedImport(intent, { write });
+
+    expect(result).toMatchObject({
+      kind: "committed",
+      documentId: intent.documentId,
+      validation: {
+        status: "degraded_validation",
+        errors: [],
+        warnings: [],
+        systemFailures: [{ code: "VALIDATION_TIMEOUT" }],
+      },
+    });
+    expect(write).not.toHaveBeenCalled();
+    const [summary, ...rest] = await summaries(intent.invocationId);
+    expect(rest).toEqual([]);
+    expect(summary.data.counts.byCode).toEqual({ VALIDATION_TIMEOUT: 1 });
+    await expect(FileStorage.getFileExists(intent.key)).resolves.toBe(false);
+  });
+
+  it("throws after the probe bound, keeping its source, when the probe-found row differs and has no committed summary", async () => {
+    const { intent } = await commitFixture(WARNING_HTML);
+    const write = vi.fn(insertAuditEvent);
+    breakAfterCommit(() =>
+      sequelize.query(`UPDATE documents SET text = :value WHERE id = :id`, {
+        replacements: { value: "Another delivery", id: intent.documentId },
+      })
+    );
+    const started = performance.now();
+
+    await expect(runEnforcedImport(intent, { write })).rejects.toThrow(
+      UnestablishedImportError
+    );
+    expect(performance.now() - started).toBeGreaterThanOrEqual(
+      COMMIT_PROBE_BOUND_MS - 2 * SET_LOCAL_FLOOR_MS
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(await summaries(intent.invocationId)).toEqual([]);
+    await expect(FileStorage.getFileExists(intent.key)).resolves.toBe(true);
   });
 
   it("throws when the socket is destroyed before COMMIT and leaves the source", async () => {

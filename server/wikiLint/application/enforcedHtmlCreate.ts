@@ -139,8 +139,9 @@ async function waitFor<T>(
  * policy (AD-7): it stages the source, schedules the distinct worker task
  * with a credential-free trusted intent, and waits for its result until
  * `deadlineAt`. Before reporting anything but a commit, it probes the
- * pre-allocated document once. It writes a summary only for a row 3 it
- * determines before scheduling, and then deletes the staged source itself.
+ * pre-allocated document once; a probe that cannot run is row 7, whatever
+ * the worker returned. It writes a summary only for a row 3 it determines
+ * before scheduling, and then deletes the staged source itself.
  *
  * @param args.ctx - the handler's API context.
  * @param args.classification - the enforced classification, with the
@@ -326,6 +327,9 @@ export async function enforceHtmlCreate(args: {
           assembly: new Deadline(POST_COMMIT_ASSEMBLY_BOUND_MS, monotonicClock),
         }
       : { row: 7 };
+  }
+  if (probe === "unavailable") {
+    return { row: 7 };
   }
   switch (result?.kind) {
     case "rejected":

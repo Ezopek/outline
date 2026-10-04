@@ -504,6 +504,37 @@ export function probeCommit(
   );
 }
 
+/**
+ * Reads, on a fresh connection in a short transaction, the stored `title` and
+ * `text` of a document, whether or not it is deleted. The whole read,
+ * acquisition included, runs within the bound.
+ *
+ * @param documentId - the document.
+ * @param boundMs - the bound, in milliseconds.
+ * @returns the title and text; undefined when the row is absent, the bound is
+ *   below the floor, expires, or the read fails.
+ */
+export function readDocumentContent(
+  documentId: string,
+  boundMs: number
+): Promise<{ title: string; text: string } | undefined> {
+  return boundedRead(
+    boundMs,
+    async (transaction) => {
+      const rows = await sequelize.query<{ title: string; text: string }>(
+        "SELECT title, text FROM documents WHERE id = :documentId",
+        {
+          replacements: { documentId },
+          transaction,
+          type: QueryTypes.SELECT,
+        }
+      );
+      return rows.length > 0 ? rows[0] : undefined;
+    },
+    undefined
+  );
+}
+
 /** The Event name of an enforced write's audit summary. */
 const WRITE_SUMMARY_EVENT = "wikiLint.write_validation";
 

@@ -2074,6 +2074,7 @@ describe("attempt options", () => {
     expect(onCommitted).toHaveBeenCalledWith({
       document: expect.objectContaining({ id: documentId }),
       validation: cleanValidation(classification),
+      probed: false,
     });
     expect(enqueue).toHaveBeenCalled();
     expect(order.slice(0, 2)).toEqual(["validated", "committed"]);
@@ -2151,6 +2152,9 @@ describe("attempt options", () => {
 
     expect(outcome.row).toBe(6);
     expect(onCommitted).toHaveBeenCalledTimes(1);
+    expect(onCommitted).toHaveBeenCalledWith(
+      expect.objectContaining({ probed: true })
+    );
     expect(
       await Document.unscoped().findByPk(documentId, { paranoid: false })
     ).not.toBeNull();

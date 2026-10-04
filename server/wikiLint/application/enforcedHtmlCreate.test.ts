@@ -689,14 +689,14 @@ describe("the requester probe", () => {
           ],
         },
       },
-      4,
     ],
-    ["conflict", { kind: "conflict" }, 2],
-    ["aborted", { kind: "aborted", row: 3, message: OPERATION_FAILED }, 3],
+    ["conflict", { kind: "conflict" }],
+    ["aborted", { kind: "aborted", row: 3, message: OPERATION_FAILED }],
   ] as const)(
-    "maps a %s result to its row when the probe is unavailable",
-    async (_name, value, row) => {
+    "reports row 7 for a %s result when the probe is unavailable",
+    async (_name, value) => {
       const { user, classification } = await fixture({ readable: false });
+      const write = vi.fn(insertAuditEvent);
       const query = sequelize.query.bind(sequelize) as (
         ...args: unknown[]
       ) => Promise<unknown>;
@@ -707,9 +707,10 @@ describe("the requester probe", () => {
             ? Promise.reject(new Error("probe failed"))
             : query(...args)) as never);
 
-      const { outcome } = await request({
+      const result = await request({
         user,
         classification,
+        write,
         schedule: () =>
           Promise.resolve({ finished: () => Promise.resolve(value) }),
       });
@@ -719,13 +720,7 @@ describe("the requester probe", () => {
           ([sql]) => typeof sql === "string" && sql.includes("LEFT JOIN")
         )
       ).toBe(true);
-      expect(outcome).toEqual(
-        value.kind === "rejected"
-          ? { row, validation: value.validation }
-          : value.kind === "aborted"
-            ? { row, message: value.message }
-            : { row }
-      );
+      await expectNoResult(result, write);
     }
   );
 

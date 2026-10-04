@@ -402,11 +402,13 @@ export interface AttemptOptions {
   /**
    * Called once the commit is established, before the callbacks start. A
    * returned promise is awaited, a rejection ignored, before the post-commit
-   * assembly deadline starts.
+   * assembly deadline starts. `probed` is true when `commit()` rejected and
+   * only the commit probe established the commit, by finding the row.
    */
   onCommitted?: (committed: {
     document: Document;
     validation: WriteValidation;
+    probed: boolean;
   }) => void | Promise<void>;
 }
 
@@ -637,7 +639,13 @@ async function attempt(
     // callback wait and the response enrichments then share one deadline.
     if (options.onCommitted) {
       await Promise.resolve(
-        runHook(() => options.onCommitted!({ document, validation }))
+        runHook(() =>
+          options.onCommitted!({
+            document,
+            validation,
+            probed: !commit.committed,
+          })
+        )
       ).catch(() => undefined);
     }
     const assembly = new Deadline(
