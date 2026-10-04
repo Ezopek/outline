@@ -62,6 +62,15 @@
     "label": "Pin --maxWorkers=2",
     "resolution": ""
   },
+  "DW-32": {
+    "answered_at": "2026-10-04",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Add one line to 'Known pitfalls' in CLAUDE.md and the matching AGENTS.md section: before setting a bmad-loop story done by hand, move every open finding from its review gates into _bmad-output/implementation-artifacts/deferred-work.md. No other change.",
+    "key": "1",
+    "label": "Add it to CLAUDE.md/AGENTS.md pitfalls",
+    "resolution": ""
+  },
   "DW-7": {
     "answered_at": "2026-10-04",
     "bundle_name": "",
