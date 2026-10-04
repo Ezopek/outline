@@ -1683,3 +1683,8 @@ AD: AD-1–AD-20 evidence index, with AD-17–AD-20 governing readiness, failure
    **When** later-gate prerequisites are listed
    **Then** OD-2, OD-6, and OD-7 retain their approved owners and revisit gates without invented environment-specific values
    **And** the index does not claim SM-P1–SM-P7 pilot evidence or production success.
+
+8. **Given** the event-loop blocking, CPU work between deadline checks, and pool-wait acquisition risks that `deferred-work.md` records as DW-4, DW-5, and DW-6 (Epic 1 retrospective action item 4)
+   **When** the Gate 1 decision record states its decision, `ready` or `not ready`
+   **Then** it states that no read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5, and DW-6, and for each item it links the Story 3.3 evidence that closes it or records the item as open
+   **And** closing them authorizes no rollout, because read-only rollout remains a separately approved Gate 4 decision (criterion 6).

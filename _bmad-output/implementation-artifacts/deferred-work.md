@@ -124,7 +124,9 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-decision-dw-14
+resolution-undo: 58b6aa863dad7dbac330682a693d175eaf44eba12b69a32ff9e4b9fc0439c6bc 2026-10-04 7374617475733a206f70656e
 decision: 2026-10-04 Amend Story 3.4 ACs now — Add an acceptance criterion to Story 3.4 in _bmad-output/planning-artifacts/epics.md: the Gate 1 decision record states that no read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5 and DW-6 (event-loop blocking, CPU between deadline checks, pool-wait acquisition). Planning-artifact edit only.
 decision: 2026-10-04 Amend Story 3.4 ACs now — Add an acceptance criterion to Story 3.4 in _bmad-output/planning-artifacts/epics.md: the Gate 1 decision record states that no read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5 and DW-6 (event-loop blocking, CPU between deadline checks, pool-wait acquisition). Planning-artifact edit only.
 
@@ -343,4 +345,12 @@ location: server/wikiLint/application/enforcedHtmlCreate.ts; server/wikiLint/app
 source_spec: `spec-dw-9-enforced-write-operator-log.md`
 severity: low
 reason: DW-9 logs only the rows that runAttempt's body returns. enforcedHtmlCreate.ts has no Logger call for its own row 3 before scheduling or for row 7 when the worker returns nothing, a queue.add error, or an unavailable requester probe. enforcedImport.ts returns aborted for an unparseable intent and for its final catch (aborted(decided ? 5 : 3, ...)) without logging. The worker can also turn a logged attempt row 3 or 5 into committed or unestablished after its repeated lookup, so the logged row can differ from the row the client sees. These gaps existed before DW-9; the bundle intent scopes the fix to enforcedWrite.ts.
+status: open
+
+### DW-39: Story 3.3 has no acceptance criterion that produces the evidence Story 3.4 criterion 8 needs to close DW-4, DW-5 or DW-6.
+origin: spec-deferred c84c517a00f9
+location: _bmad-output/planning-artifacts/epics.md:1575-1634 (Story 3.3)
+source_spec: `spec-dw-14-gate-1-read-only-rollout-precondition.md`
+severity: medium
+reason: Story 3.3 criteria 3, 5 and 7 measure lint_wiki call latency, atomic-unit time, result-assembly time and single SET LOCAL statement durations. None measures how long synchronous evaluation blocks the event loop (DW-4), or the serialize/parse CPU time of a keyset batch between deadline checks (DW-5). Criterion 2 forbids competing traffic, and criterion 7's re-run list has no held-pool case, so no Story 3.3 evidence exercises pool-wait acquisition (DW-6). DW-6 was resolved in code by b732efe0f2c58494558327776719fcaa122f2350 after the DW-14 decision was recorded in 495d11015982b164311f1f97072d7a7cdd526c7b. So the Gate 1 record will list DW-6 as not closed by Story 3.3 evidence while the ledger marks it done. Two ways to settle this, and the operator has to choose: amend Story 3.3 to add the DW-4 and DW-5 measurements and a held-pool fixture re-run under the AD-17-fixed floor, or revisit which evidence may close DW-6. The gap predates this change. This change follows the "Amend Story 3.4
 status: open
