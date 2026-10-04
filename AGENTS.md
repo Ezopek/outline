@@ -30,6 +30,7 @@ This is an operator-maintained Outline fork for deterministic Wiki linting in th
 - Prefer targeted Vitest files while iterating. Run broad suites only when their scope is justified.
 - DB-backed server tests need the PostgreSQL named in `.env.test`. Run `scripts/test-db.sh ensure` before them: it is idempotent, installs PostgreSQL 14 on first use where none is running, applies migrations, and leaves the server running. Without the database Vitest hangs instead of failing, so do not wait on a silent run.
 - Run the relevant formatting, lint, type-check, and targeted test commands declared in `package.json` before presenting implementation as complete.
+- Broad verification for this fork (Epic 3 conformance evidence, and any claim about the whole linting surface): `yarn test:wikilint`. It runs the server project with `--maxWorkers=2` over `server/wikiLint`, `server/tools`, `server/queues` and `server/routes/mcp`; without the worker cap, parallel DB-backed files exhaust the test PostgreSQL connections.
 - Keep tests collocated with the code they cover; do not create new test directories.
 
 ## Conventions that differ from defaults
@@ -48,6 +49,7 @@ This is an operator-maintained Outline fork for deterministic Wiki linting in th
 - `v1.10.1` is an annotated tag: `9686f7264506a910ed87a4ad8704bafd361a3393` is the tag object; `4a5a616a21be800257dc11cef4263d0dd0412156` is the source commit.
 - Tests against newer `upstream/main` do not validate the `v1.10.1` implementation.
 - Do not mix the post-`v1.10.1` patch-edit fix into the first linting change.
+- Before setting a `bmad-loop` story to `done` by hand, move every open finding from its review gates into `_bmad-output/implementation-artifacts/deferred-work.md`; a story spec that is deleted or archived takes its unresolved findings with it (Epic 2 retro, Story 2.5).
 - During a `bmad-loop` sweep, `_bmad-output/implementation-artifacts/deferred-work.md` can hold an uncommitted change that belongs to the orchestrator's own pending ledger transaction, not to the story being built. It does not fail a clean-working-tree gate. Never stage, edit, revert or commit it; finalize the story without it and let the orchestrator commit it.
 
 <!-- /bmad:context -->

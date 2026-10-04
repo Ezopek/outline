@@ -32,6 +32,7 @@
     "test:app": "TZ=UTC vitest run --project app",
     "test:shared": "TZ=UTC vitest run --project shared-node --project shared-jsdom",
     "test:server": "TZ=UTC vitest run --project server",
+    "test:wikilint": "TZ=UTC vitest run --project server --maxWorkers=2 server/wikiLint server/tools server/queues server/routes/mcp",
     "test:watch": "TZ=UTC vitest",
     "vite:dev": "VITE_CJS_IGNORE_WARNING=true vite",
     "vite:build": "VITE_CJS_IGNORE_WARNING=true vite build",
