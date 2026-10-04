@@ -616,14 +616,14 @@ async function attempt(
       return { row: 5, message: abortMessage(error) };
     }
 
-    // P8: establish the commit.
+    // P8: establish the commit. COMMIT's timer leaves the probe reserve.
     const commit = await enforcement.commit(
-      Math.floor(persistence.remainingMs())
+      Math.floor(persistence.remainingMs()) - COMMIT_PROBE_BOUND_MS
     );
     if (!commit.committed) {
       const probe = await probeCommit(
         plan.probeTarget(enforcement.startedAt, invocationId),
-        Math.min(COMMIT_PROBE_BOUND_MS, Math.floor(persistence.remainingMs()))
+        COMMIT_PROBE_BOUND_MS
       );
       if (probe !== "present") {
         enforcement.discard();

@@ -30,6 +30,8 @@ import { buildPolicySet } from "../core/policySet";
 import { OPERATION_FAILED } from "../core/registry";
 import type * as DeadlineModule from "./deadline";
 import {
+  COMMIT_PROBE_BOUND_MS,
+  SET_LOCAL_FLOOR_MS,
   VALIDATION_DEADLINE_MS,
   WRITE_PERSISTENCE_BUDGET_MS,
 } from "./deadline";
@@ -590,34 +592,93 @@ describe("COMMIT outcomes", () => {
     expect(enqueue).toHaveBeenCalled();
   });
 
-  it("ends in row 7 when COMMIT hangs past its timer, and never runs the callbacks", async () => {
-    const { classification, enqueue, run } = await commitFixture();
+  /**
+   * Leaves a persistence remainder of the probe reserve plus 500 ms at P7
+   * entry, so COMMIT's timer is about 500 ms, holds the enforcement COMMIT
+   * until released, and records the probe: the statement timeout of its
+   * transaction, its rows, and the persistence remainder when it is sent.
+   *
+   * @param landed - whether the COMMIT reaches the database and only its
+   *   reply is held.
+   * @returns the probe's records, if any, and the release.
+   */
+  function holdCommit(landed: boolean) {
+    const remainderMs = COMMIT_PROBE_BOUND_MS + 500;
     let offset = 0;
     state.clock = () => performance.now() + offset;
     const queries = interceptQueries();
     let setLocals = 0;
+    let enforcement: Transaction | undefined;
+    const timeouts = new Map<Transaction | undefined, number>();
+    let probeTimeoutMs: number | undefined;
+    let probeRows: unknown;
+    let p7At = Number.NaN;
+    let probeAt = Number.NaN;
     let release: () => void = () => undefined;
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
-    queries.use(async (sql, _options, next) => {
-      if (sql === "COMMIT;") {
+    queries.use(async (sql, options, next) => {
+      const transaction = options?.transaction;
+      const commit = sql === "COMMIT;" && transaction === enforcement;
+      const probe = sql === "SELECT id FROM documents WHERE id = :id";
+      const timeout = /^SET LOCAL statement_timeout = (\d+)$/.exec(sql);
+      if (timeout) {
+        timeouts.set(transaction, Number(timeout[1]));
+      }
+      if (probe) {
+        probeAt = performance.now();
+        probeTimeoutMs = timeouts.get(transaction);
+      }
+      if (commit && !landed) {
         await held;
       }
       const result = await next();
-      // At P7 entry, leave a persistence remainder just above the probe
-      // reserve and the floor.
+      if (probe) {
+        probeRows = result;
+      }
+      if (commit && landed) {
+        await held;
+      }
+      // At P7 entry, leave the persistence remainder.
       if (sql.startsWith("SET LOCAL lock_timeout") && ++setLocals === 4) {
-        offset += WRITE_PERSISTENCE_BUDGET_MS - 2300;
+        enforcement = transaction;
+        offset += WRITE_PERSISTENCE_BUDGET_MS - remainderMs;
+        p7At = performance.now();
       }
       return result;
     });
+    return {
+      probeTimeoutMs: () => probeTimeoutMs,
+      probeRows: () => probeRows,
+      remainderAtProbeMs: () => remainderMs - (probeAt - p7At),
+      release,
+    };
+  }
 
-    const outcome = await run();
-    expect(outcome).toEqual({ row: 7 });
-    expect(await storedDocument(classification.documentId!)).toBeNull();
+  it("ends in row 7 when COMMIT hangs past its timer and the probe finds no row, and never runs the callbacks", async () => {
+    const { classification, enqueue, run } = await commitFixture();
+    const hold = holdCommit(false);
 
-    release();
+    try {
+      const outcome = await run();
+      expect(outcome).toEqual({ row: 7 });
+      expect(hold.remainderAtProbeMs()).toBeGreaterThan(
+        COMMIT_PROBE_BOUND_MS - SET_LOCAL_FLOOR_MS
+      );
+      expect(hold.remainderAtProbeMs()).toBeLessThan(
+        COMMIT_PROBE_BOUND_MS + SET_LOCAL_FLOOR_MS
+      );
+      expect(hold.probeTimeoutMs()).toBeGreaterThan(
+        COMMIT_PROBE_BOUND_MS - SET_LOCAL_FLOOR_MS
+      );
+      expect(hold.probeTimeoutMs()).toBeLessThanOrEqual(COMMIT_PROBE_BOUND_MS);
+      expect(hold.probeRows()).toEqual([]);
+      expect(await storedDocument(classification.documentId!)).toBeNull();
+    } finally {
+      hold.release();
+    }
+
     await vi.waitFor(
       async () =>
         expect(await storedDocument(classification.documentId!)).not.toBeNull(),
@@ -625,6 +686,30 @@ describe("COMMIT outcomes", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("ends in row 6 with its callbacks when COMMIT lands but its reply outlives the timer", async () => {
+    const { classification, enqueue, run } = await commitFixture();
+    const hold = holdCommit(true);
+
+    try {
+      const outcome = await run();
+      expect(outcome.row).toBe(6);
+      expect(hold.remainderAtProbeMs()).toBeGreaterThan(
+        COMMIT_PROBE_BOUND_MS - SET_LOCAL_FLOOR_MS
+      );
+      expect(hold.remainderAtProbeMs()).toBeLessThan(
+        COMMIT_PROBE_BOUND_MS + SET_LOCAL_FLOOR_MS
+      );
+      expect(hold.probeTimeoutMs()).toBeGreaterThan(
+        COMMIT_PROBE_BOUND_MS - SET_LOCAL_FLOOR_MS
+      );
+      expect(hold.probeTimeoutMs()).toBeLessThanOrEqual(COMMIT_PROBE_BOUND_MS);
+      expect(await storedDocument(classification.documentId!)).not.toBeNull();
+      expect(enqueue).toHaveBeenCalled();
+    } finally {
+      hold.release();
+    }
   });
 
   it("ends in row 5 on a server-reported COMMIT error with no row", async () => {
