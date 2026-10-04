@@ -605,7 +605,7 @@ describe("worker outcomes", () => {
     expect(document.title).toBe("T");
     expect(document.collectionId).toBe(collection.id);
     expect(document.publishedAt).not.toBeNull();
-    expect(document.state).not.toBeNull();
+    expect(document.state).toBeNull();
     expect(document.sourceMetadata).toEqual({
       fileName: "document.html",
       mimeType: "text/html",

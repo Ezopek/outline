@@ -163,8 +163,10 @@ export function prepareMarkdownCreate(
  * Prepares an HTML create in P2 from the baseline conversion of its source,
  * with the `DocumentImportTask` precedence: explicit attributes over the
  * converted title and icon. Like `documentCreator`, the body is the converted
- * Markdown parsed again, and the converted state is kept. It reads no stored
- * state and issues no query.
+ * Markdown parsed again. The converted state is dropped, as for a Markdown
+ * create, because it can hold structure the body lost, such as a notice
+ * nested in a notice: the editor then derives its state from the validated
+ * body. It reads no stored state and issues no query.
  *
  * @param input - the create arguments.
  * @param imported - the converted source.
@@ -183,7 +185,7 @@ export function prepareHtmlCreate(
     content: imported.text
       ? ProsemirrorHelper.toProsemirror(imported.text).toJSON()
       : null,
-    state: copyState(imported.state),
+    state: null,
   });
 }
 

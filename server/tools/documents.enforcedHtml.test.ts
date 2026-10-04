@@ -359,9 +359,11 @@ describe("enforced HTML creates", () => {
     });
     const [intent] = intents;
     expect(first.id).toBe(intent.documentId);
-    expect(await storedFields(first.id)).toEqual(
-      await storedFields(baselineFirst.id)
-    );
+    // The converted state is dropped; the editor derives it from the content.
+    expect(await storedFields(first.id)).toEqual({
+      ...(await storedFields(baselineFirst.id)),
+      state: null,
+    });
 
     const events = (await Event.findAll({ where: { documentId: first.id } }))
       .filter((event) => event.name !== "wikiLint.write_validation")
@@ -421,7 +423,10 @@ describe("enforced HTML creates", () => {
     expect(first.validation).toMatchObject({ status: "validated" });
     expect(first.id).toBe(intents[0].documentId);
     const stored = await storedFields(first.id);
-    expect(stored).toEqual(await storedFields(baselineFirst.id));
+    expect(stored).toEqual({
+      ...(await storedFields(baselineFirst.id)),
+      state: null,
+    });
     expect(stored).toMatchObject({
       title: "Explicit title",
       icon: "😀",

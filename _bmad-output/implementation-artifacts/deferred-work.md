@@ -82,7 +82,9 @@ origin: spec-deferred 25158c5d6970
 location: server/wikiLint/adapters/documentProjection.ts (prepareHtmlCreate)
 source_spec: `spec-2-5-carry-enforced-html-projection-through-a-distinct-trusted-wo.md`
 reason: The baseline DocumentImportTask persists the same text/state split, and the projection parity tests prove the enforced path matches it (documentProjection.test.ts "HTML creates"). Unverified: whether any DocumentConverter output loses lint-relevant structure (headings, metadata lines, links, discouraged structures) in serializer.serialize -> toProsemirror. Settle it with a fixture sweep across the converter's node and mark coverage that compares yDocToProsemirrorJSON(state) with the validated content. If lint-relevant divergence exists, an architecture decision is needed between failing closed and deriving state from the validated content (the latter departs from exact baseline semantics).
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-html-create-state-content-parity
+resolution-undo: 59058bad43d47ff45aa438e74a8d3e893357c52a6f19a952b461ef2766173784 2026-10-04 7374617475733a206f70656e
 
 ### DW-11: Decide how a Finding identifies the missing configured item (e.g. readability-gated detail) and amend AD-12 before Story 2.1 starts; then re-run the Story 1.10 repair loop without supplied conventions (DW-2, DW-3, DW-8).
 origin: retro action item epic-1-retro-item-1-decide-how-a-finding-identifies-the-miss
@@ -175,4 +177,20 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Dev agent; sprint-status status open)
+status: open
+
+### DW-21: Documents created by the baseline DocumentImportTask (REST imports, or imports made before a collection had a policy) keep a converter state that can hold structure their content lost, so
+origin: spec-deferred 689f0b395a0b
+location: server/queues/tasks/DocumentImportTask.ts:97-120
+source_spec: `spec-dw-10-html-create-state-content-parity.md`
+severity: medium
+reason: DocumentImportTask.ts:97-120 still persists the converter `state` beside `content` parsed again from `text`. DocumentHelper.toProsemirror (DocumentHelper.tsx:86-104) prefers `content`, so the read-only lint tools never see the state. Class A in this spec's Design Notes shows a nested notice that is present in the state and absent from the content. This change fixes only the enforced MCP HTML create; the baseline split predates it.
+status: open
+
+### DW-22: A metadata one_of policy can validate a linked inline image value that loses its link when Y.js builds the editor state from content.
+origin: spec-deferred e0367ea24a48
+location: server/wikiLint/adapters/documentProjection.test.ts:1557; server/wikiLint/core/documentRules.ts:270-285
+source_spec: `spec-dw-10-html-create-state-content-parity.md`
+severity: medium
+reason: The class B metadata fixture in documentProjection.test.ts shows that the linked image is present in validated content but loses its link in the derived Y.js document. metadataFieldFormats in documentRules.ts compares the field value to configured one_of values. This Y.js conversion also occurs for Markdown creates and predates DW-10; the accepted Decision explicitly retains that behavior.
 status: open

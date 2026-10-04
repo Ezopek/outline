@@ -28,8 +28,10 @@ import {
 import { withAPIContext } from "@server/test/support";
 import { abortMessage } from "../application/writeDecision";
 import { WikiLintContractError } from "../core/contracts";
-import { OPERATION_FAILED } from "../core/registry";
-import { toCanonicalMarkdown } from "./canonicalSyntax";
+import type { SyntaxNode } from "../core/contracts";
+import { evaluateDocumentRules } from "../core/documentRules";
+import { OPERATION_FAILED, ruleConfigSchema } from "../core/registry";
+import { parseCanonicalMarkdown, toCanonicalMarkdown } from "./canonicalSyntax";
 import type {
   MarkdownCreateInput,
   MarkdownUpdateInput,
@@ -44,6 +46,7 @@ import {
   projectMarkdownUpdate,
   refuseImportableMedia,
 } from "./documentProjection";
+import { persistProjectedCreate } from "./projectionWriter";
 
 vi.mock("@server/commands/attachmentCreator", async (importOriginal) => {
   const actual = await importOriginal<typeof AttachmentCreator>();
@@ -1141,6 +1144,78 @@ describe("prepareMarkdownCreate", () => {
 });
 
 describe("HTML creates", () => {
+  const sourceMetadata = { fileName: "notes.html", mimeType: "text/html" };
+
+  /**
+   * A notice inside a notice holding a table, an internal link, and an `h3`,
+   * after a heading and a paragraph. The converter keeps the outer notice in
+   * its state, but its Markdown parses back without it.
+   */
+  const NESTED_NOTICE =
+    '<h2>Overview</h2><p>ok</p><div class="notice-block info"><div class="content"><div class="notice-block warning"><div class="content"><table><tr><td>cell</td></tr></table><p><a href="/doc/missing-abc123">missing</a></p><h3>Hidden</h3></div></div></div></div>';
+
+  /**
+   * Runs HTML through the enforced worker's conversion, preparation, and
+   * projection, and proves they had no effect.
+   *
+   * @param html - the source.
+   * @param actor - the acting user.
+   * @param collectionId - the target collection.
+   * @param attributes - the explicit create attributes.
+   * @returns the conversion, the preparation, and the projection.
+   */
+  const enforcedProjection = (
+    html: string,
+    actor: User,
+    collectionId: string,
+    attributes: { title?: string; icon?: string; color?: string } = {}
+  ) =>
+    withoutEffect(async () => {
+      const imported = await documentImporter({
+        user: actor,
+        fileName: sourceMetadata.fileName,
+        mimeType: sourceMetadata.mimeType,
+        content: html,
+        ctx: createContext({ user: actor }),
+        media: refuseImportableMedia,
+      });
+      const prepared = prepareHtmlCreate(
+        { ...attributes, publish: true, sourceMetadata },
+        imported
+      );
+      const projection = await projectMarkdownCreate({
+        prepared,
+        documentId: randomUUID(),
+        collectionId,
+        actor,
+        template: null,
+      });
+      return { imported, prepared, projection };
+    });
+
+  /**
+   * Creates a document from HTML as the enforced worker does: it converts,
+   * prepares, and projects the source, then persists the projection.
+   *
+   * @param html - the source.
+   * @returns the conversion, the preparation, the projection, and the row.
+   */
+  async function enforcedCreate(html: string) {
+    const actor = await buildUser();
+    const collection = await buildCollection({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    const created = await enforcedProjection(html, actor, collection.id);
+    await withAPIContext(actor, (ctx) =>
+      persistProjectedCreate(ctx, created.projection, null)
+    );
+    return {
+      ...created,
+      stored: await storedDocument(created.projection.documentId),
+    };
+  }
+
   /**
    * Imports HTML through the baseline task and through the enforced
    * preparation and projection, and returns both for comparison.
@@ -1158,7 +1233,6 @@ describe("HTML creates", () => {
       teamId: actor.teamId,
       userId: actor.id,
     });
-    const sourceMetadata = { fileName: "notes.html", mimeType: "text/html" };
     const response = await new DocumentImportTask().perform({
       userId: actor.id,
       content: html,
@@ -1172,24 +1246,11 @@ describe("HTML creates", () => {
     }
     const stored = await storedDocument(response.documentId);
 
-    const projection = await withoutEffect(async () =>
-      projectMarkdownCreate({
-        prepared: prepareHtmlCreate(
-          { ...attributes, publish: true, sourceMetadata },
-          await documentImporter({
-            user: actor,
-            fileName: sourceMetadata.fileName,
-            mimeType: sourceMetadata.mimeType,
-            content: html,
-            ctx: createContext({ user: actor }),
-            media: refuseImportableMedia,
-          })
-        ),
-        documentId: randomUUID(),
-        collectionId: collection.id,
-        actor,
-        template: null,
-      })
+    const { projection } = await enforcedProjection(
+      html,
+      actor,
+      collection.id,
+      attributes
     );
     const { state, documentId, ...fields } = projection;
     void documentId;
@@ -1212,6 +1273,38 @@ describe("HTML creates", () => {
     };
   }
 
+  /**
+   * Reduces a document to the structure the document rules read from its
+   * canonical syntax: block kinds in pre-order without paragraphs, each
+   * heading's level and text, each list item's metadata field, and the link
+   * hrefs in order. Positions are left out: this compares rule inputs,
+   * not the source locations attached to Findings.
+   *
+   * @param json - the document.
+   * @returns the reduced structure.
+   */
+  async function lintStructure(json: ProsemirrorData) {
+    const syntax = parseCanonicalMarkdown(await toCanonicalMarkdown(json));
+    const blocks: string[] = [];
+    const visit = (nodes: readonly SyntaxNode[]) => {
+      for (const node of nodes) {
+        if (node.kind === "heading") {
+          blocks.push(`heading ${node.level} ${JSON.stringify(node.text)}`);
+        } else if (node.field) {
+          const { name, value } = node.field;
+          blocks.push(`${node.kind} ${JSON.stringify(`${name}=${value}`)}`);
+        } else if (node.kind !== "paragraph") {
+          blocks.push(node.kind);
+        }
+        visit(node.children);
+      }
+    };
+    visit(syntax.children);
+    return { blocks, links: syntax.links.map((link) => link.href) };
+  }
+
+  type Structure = Awaited<ReturnType<typeof lintStructure>>;
+
   it.each([
     ["a converted title", "<h1>Converted</h1><h2>Overview</h2><p>ok</p>", {}],
     [
@@ -1225,26 +1318,25 @@ describe("HTML creates", () => {
       "<table><tr><td>a</td></tr></table><ul><li>b</li></ul>",
       {},
     ],
-  ])("matches the baseline import with %s", async (_name, html, attributes) => {
-    const { projected, baseline } = await importBoth(html, attributes);
+  ])(
+    "matches the baseline import, without its converted state, with %s",
+    async (_name, html, attributes) => {
+      const { projected, baseline } = await importBoth(html, attributes);
 
-    expect(projected).toEqual(baseline);
-    expect(projected.state).not.toBeNull();
-  });
+      expect(projected).toEqual({ ...baseline, state: null });
+      expect(baseline.state).not.toBeNull();
+    }
+  );
 
-  it("keeps a private state copy and refuses a template with it", async () => {
-    const state = Buffer.from([1, 2, 3]);
+  it("drops the converted state, while a template still refuses one", async () => {
+    const imported = { title: "T", text: "Body", state: Buffer.from([1, 2]) };
     const prepared = prepareHtmlCreate(
-      {
-        publish: true,
-        sourceMetadata: { fileName: "a.html", mimeType: "text/html" },
-      },
-      { title: "T", text: "Body", state }
+      { publish: true, sourceMetadata },
+      imported
     );
-    state[0] = 9;
 
-    expect(prepared.state).toEqual(Buffer.from([1, 2, 3]));
-    expect(Object.isFrozen(prepared.input)).toBe(true);
+    expect(prepared.state).toBeNull();
+    expect(isDeepFrozen(prepared)).toBe(true);
     const actor = await buildUser();
     const template = await buildTemplate({
       teamId: actor.teamId,
@@ -1252,13 +1344,348 @@ describe("HTML creates", () => {
     });
     await expect(
       projectMarkdownCreate({
-        prepared,
+        prepared: { ...prepared, state: imported.state },
         documentId: randomUUID(),
         collectionId: randomUUID(),
         actor,
         template,
       })
     ).rejects.toBeInstanceOf(WikiLintContractError);
+  });
+
+  it.each<[name: string, html: string, divergent?: Structure]>([
+    ["paragraphs", "<p>One</p><p>Two</p>"],
+    [
+      "headings of every level",
+      "<p>Lead</p><h1>One</h1><h2>Two</h2><h3>Three</h3><h4>Four</h4>",
+    ],
+    ["a blockquote", "<blockquote><p>Quoted</p><h3>Inside</h3></blockquote>"],
+    ["a quote list", '<ul class="listtype-quote"><li>Quoted</li></ul>'],
+    [
+      "a code block",
+      '<div class="code-block" data-language="js"><pre><code>let a = 1;\n## Not a heading</code></pre></div>',
+    ],
+    ["a multi-line code element", "<pre><code>a\nb</code></pre>"],
+    ["a horizontal rule", "<p>Before</p><hr><p>After</p>"],
+    [
+      "a table with header cells",
+      '<table><tr><th>Head</th><th>Other</th></tr><tr><td>Cell</td><td><a href="/doc/cell-abc123">link</a></td></tr></table>',
+    ],
+    [
+      "a bullet list",
+      "<ul><li>One</li><li>Two<ul><li>Nested</li></ul></li></ul>",
+    ],
+    [
+      "an ordered list",
+      '<ol start="3" style="list-style-type: lower-alpha"><li>One</li><li>Two</li></ol>',
+    ],
+    [
+      "a checkbox list",
+      '<ul class="checkbox_list"><li data-type="checkbox_item" class="checked"><p>Done</p></li><li data-type="checkbox_item"><p>Open</p></li></ul>',
+    ],
+    [
+      "a notice",
+      '<div class="notice-block tip"><div class="content"><p>Tip</p><h3>Inside</h3></div></div>',
+    ],
+    [
+      "a hint notice",
+      '<div class="ql-hint" data-hint="warning"><p>Hint</p></div>',
+    ],
+    [
+      "an admonition notice",
+      '<div class="alert theme-admonition theme-admonition-success"><p>Done</p></div>',
+    ],
+    [
+      "a Confluence notice",
+      '<div class="confluence-information-macro confluence-information-macro-note"><p>Note</p></div>',
+    ],
+    ["display math", "<math-display>x^2</math-display>"],
+    [
+      "Wikipedia display math",
+      '<dl><dd><span class="mwe-math-element"><math><semantics><annotation encoding="application/x-tex">x^2</annotation></semantics></math></span></dd></dl>',
+    ],
+    ["inline math", "<p>Sum <math-inline>a+b</math-inline> here</p>"],
+    [
+      "Wikipedia inline math",
+      '<p>Sum <span class="mwe-math-element"><math><semantics><annotation encoding="application/x-tex">a+b</annotation></semantics></math></span> here</p>',
+    ],
+    [
+      "a toggle",
+      '<div data-type="container_toggle"><p>Head</p><p>Body</p></div>',
+    ],
+    [
+      "a toggle-block div",
+      '<div class="toggle-block"><h2>Head</h2><ul><li>Body</li></ul></div>',
+    ],
+    [
+      "an image",
+      '<p><img src="/api/attachments.redirect?id=1" alt="pixel"></p>',
+    ],
+    [
+      "an image div",
+      '<div class="image"><img src="/api/attachments.redirect?id=1" alt="pixel"></div>',
+    ],
+    [
+      "a video",
+      '<video src="/api/attachments.redirect?id=2" title="clip"></video>',
+    ],
+    [
+      "an iframe embed",
+      '<iframe data-canonical-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ" src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>',
+    ],
+    [
+      "an embed link",
+      '<p>Before</p><a class="embed" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">video</a>',
+    ],
+    [
+      "an emoji",
+      '<p>Hi <strong class="emoji" data-name="smile">😄</strong></p>',
+    ],
+    ["a line break", "<p>One<br>Two</p>"],
+    [
+      "links",
+      '<p><a href="/doc/target-abc123">internal</a>, <a href="https://example.com/a?b=c&amp;d=e">external</a> and <a href="mailto:a@example.com">mail</a></p>',
+    ],
+    [
+      "bold, italic, and underline marks",
+      '<p><strong>s</strong> <b>b</b> <span style="font-weight: 700">w</span> <em>e</em> <i>i</i> <span style="font-style: italic">f</span> <u>u</u> <span style="text-decoration: underline">d</span></p>',
+    ],
+    [
+      "strikethrough marks",
+      '<p><s>s</s> <del>d</del> <strike>k</strike> <span style="text-decoration: line-through">l</span></p>',
+    ],
+    [
+      "highlight marks",
+      '<p><mark>m</mark> <span style="background-color: rgb(255, 255, 0)">y</span></p>',
+    ],
+    ["an inline code mark", "<p>Run <code>ls -la</code></p>"],
+    [
+      "a placeholder mark",
+      '<p><span class="template-placeholder">Name</span></p>',
+    ],
+    [
+      "a comment mark",
+      '<p><span class="comment-marker" id="comment-1" data-user-id="u">noted</span></p>',
+    ],
+    [
+      "overlapping marks",
+      '<p><a href="/doc/x-abc123"><strong>bold <em>both</em></strong> link</a> <em>a <s>b</s> <u>c</u></em></p>',
+    ],
+    [
+      "a metadata list",
+      '<h2>Metadata</h2><ul><li>Owner: Ada</li><li>Status: <a href="/doc/status-abc123">draft</a></li><li>Due: 2026-10-04</li></ul>',
+    ],
+    [
+      "a heading in a list item",
+      "<ul><li><h3>Item heading</h3><p>Body</p></li></ul>",
+    ],
+    [
+      "a heading in a table cell",
+      "<table><tr><td><h3>Cell heading</h3></td></tr></table>",
+    ],
+    [
+      "a linked heading",
+      '<h2><a href="/doc/heading-abc123">Linked</a> heading</h2>',
+    ],
+    [
+      "Markdown-looking text",
+      "<p># Not a heading</p><p>- not a list</p><p>[not](a-link) and *stars*</p><p>Owner: Ada</p>",
+    ],
+    [
+      "a link in a quote in a list",
+      '<ul><li><blockquote><p><a href="/doc/q-abc123">quoted</a></p></blockquote></li></ul>',
+    ],
+    [
+      "a table in a notice",
+      '<div class="notice-block info"><div class="content"><table><tr><td>a</td></tr></table></div></div>',
+    ],
+    [
+      "a notice in a toggle",
+      '<div class="toggle-block"><p>Head</p><div class="notice-block info"><div class="content"><p>Tip</p></div></div></div>',
+    ],
+    [
+      "a notice in a list item",
+      '<ul><li><div class="notice-block info"><div class="content"><p>Tip</p></div></div></li></ul>',
+    ],
+    [
+      "empty and adjacent blocks",
+      "<p></p><ul><li>a</li></ul><ul><li>b</li></ul><p></p>",
+    ],
+    [
+      "class A: a notice inside a notice",
+      NESTED_NOTICE,
+      { blocks: ['heading 2 "Overview"'], links: [] },
+    ],
+    [
+      "class A, related: a notice inside a blockquote",
+      '<blockquote><div class="notice-block info"><div class="content"><p>Tip</p></div></div></blockquote>',
+      {
+        blocks: [
+          "blockquote",
+          "container_notice",
+          "blockquote",
+          "container_notice",
+          "blockquote",
+          "bullet_list",
+          "list_item",
+          "container_notice",
+        ],
+        links: [],
+      },
+    ],
+    [
+      "class B: a linked image",
+      '<p><a href="/doc/image-abc123"><img src="/api/attachments.redirect?id=1" alt="a"></a></p>',
+      { blocks: [], links: ["/doc/image-abc123"] },
+    ],
+    [
+      "class B: a linked emoji",
+      '<p><a href="/doc/emoji-abc123"><strong class="emoji" data-name="smile">😄</strong></a></p>',
+      { blocks: [], links: ["/doc/emoji-abc123"] },
+    ],
+    [
+      "class B: linked inline math",
+      '<p><a href="/doc/math-abc123"><math-inline>x</math-inline></a></p>',
+      { blocks: [], links: ["/doc/math-abc123"] },
+    ],
+    [
+      "class B: a linked line break",
+      '<p><a href="/doc/break-abc123">a<br>b</a></p>',
+      { blocks: [], links: ["/doc/break-abc123"] },
+    ],
+    [
+      "class B: a metadata value from a linked image",
+      '<h2>Metadata</h2><ul><li>Spec: <a href="/doc/spec-abc123"><img src="/api/attachments.redirect?id=1" alt="a"></a></li></ul>',
+      {
+        blocks: [
+          'heading 2 "Metadata"',
+          "bullet_list",
+          'list_item "Spec=[![a](/api/attachments.redirect?id=1)](/doc/spec-abc123)"',
+        ],
+        links: ["/doc/spec-abc123"],
+      },
+    ],
+    [
+      "class C: an image inside a heading",
+      '<h2>A<img src="/api/attachments.redirect?id=1" alt="x">B</h2>',
+      { blocks: ['heading 2 "A  B"'], links: [] },
+    ],
+  ])(
+    "persists only the validated content of %s",
+    async (name, html, divergent) => {
+      const { imported, prepared, projection, stored } =
+        await enforcedCreate(html);
+
+      expect(prepared.state).toBeNull();
+      expect(projection.state).toBeNull();
+      expect(stored.state).toBeNull();
+      expect(stored.content).toEqual(projection.content);
+
+      const fromState = await lintStructure(
+        decodeState(imported.state) as ProsemirrorData
+      );
+      const fromContent = await lintStructure(projection.content);
+      const message = `${name}\nstate:   ${JSON.stringify(fromState)}\ncontent: ${JSON.stringify(fromContent)}`;
+      if (divergent) {
+        expect(fromContent, message).toEqual(divergent);
+        expect(fromState, message).not.toEqual(fromContent);
+      } else {
+        expect(fromState, message).toEqual(fromContent);
+      }
+
+      // As PersistenceExtension opens a stateless document.
+      const editor = yDocToProsemirrorJSON(
+        ProsemirrorHelper.toYDoc(stored.content!, "default"),
+        "default"
+      ) as ProsemirrorData;
+      // Y.js drops or splits links on inline atoms, as for any Markdown create.
+      if (name === "class B: a linked image") {
+        expect(await lintStructure(editor), message).toEqual(fromContent);
+      } else if (name.startsWith("class B")) {
+        const fromEditor = await lintStructure(editor);
+        expect(
+          fromEditor.links.every((href) => fromContent.links.includes(href)),
+          message
+        ).toBe(true);
+      } else {
+        expect(await lintStructure(editor), message).toEqual(fromContent);
+      }
+    }
+  );
+
+  it("persists none of a nested notice that the policy forbids", async () => {
+    const rules = [
+      { kind: "required_sections", headingLevel: 2, headings: ["Overview"] },
+      { kind: "allowed_heading_levels", levels: [2] },
+      {
+        kind: "unsupported_markdown_structures",
+        structures: ["notice", "table", "blockquote"],
+      },
+    ].map((entry) => ruleConfigSchema.parse(entry));
+    /**
+     * Lints a document with the policy.
+     *
+     * @param json - the document.
+     * @returns the codes of its Findings.
+     */
+    const lint = async (json: ProsemirrorData) => {
+      const { findings, failedKinds } = evaluateDocumentRules({
+        documentId: randomUUID(),
+        syntax: parseCanonicalMarkdown(await toCanonicalMarkdown(json)),
+        rules,
+      });
+      expect(failedKinds).toEqual([]);
+      return findings.map((finding) => finding.issue.code);
+    };
+
+    const { imported, projection, stored } =
+      await enforcedCreate(NESTED_NOTICE);
+
+    expect(await lint(projection.content)).toEqual([]);
+    expect(stored.state).toBeNull();
+    expect(stored.content!.content?.map((node) => node.type)).toEqual([
+      "heading",
+      "paragraph",
+    ]);
+    // A stateless document opens in the editor with state derived from it.
+    const editor = yDocToProsemirrorJSON(
+      ProsemirrorHelper.toYDoc(stored.content!),
+      "default"
+    ) as ProsemirrorData;
+    expect(await lint(editor)).toEqual([]);
+    // The dropped converted state holds what the policy forbids.
+    expect(await lint(decodeState(imported.state) as ProsemirrorData)).toEqual([
+      "HEADING_LEVEL_NOT_ALLOWED",
+      ...Array(7).fill("MARKDOWN_STRUCTURE_UNSUPPORTED"),
+    ]);
+  });
+
+  it.each([
+    [
+      "an attachment link",
+      '<p><a class="attachment" href="/api/attachments.redirect?id=1">file.pdf</a></p>',
+    ],
+    [
+      "a mention",
+      '<p><span class="mention" data-type="user" data-id="u">@Ada</span></p>',
+    ],
+  ])("fails to convert %s on both paths", async (_name, html) => {
+    // The RangeError comes from jsdom, which lacks the `innerText` that the
+    // Mention and Attachment parseDOM rules read (Mention.tsx:141,
+    // Attachment.tsx:71).
+    const actor = await buildUser();
+    const convert = (enforced: boolean) =>
+      documentImporter({
+        user: actor,
+        fileName: sourceMetadata.fileName,
+        mimeType: sourceMetadata.mimeType,
+        content: html,
+        ctx: createContext({ user: actor }),
+        ...(enforced && { media: refuseImportableMedia }),
+      });
+
+    await expect(convert(false)).rejects.toBeInstanceOf(RangeError);
+    await expect(convert(true)).rejects.toBeInstanceOf(RangeError);
   });
 });
 
