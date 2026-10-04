@@ -28,8 +28,8 @@ import type {
   EnforcedClassification,
   EnforcedWriteOutcome,
 } from "./enforcedWrite";
-import type { AuthEnvelope } from "./writeAudit";
 import {
+  authEnvelopeOf,
   recordWriteAudit,
   validationFromSummary,
   writeAuditData,
@@ -96,26 +96,6 @@ class RequestCancelledError extends Error {
 }
 
 const NO_RESULT = Symbol("no result");
-
-/**
- * Reads the server-owned credential envelope from `AuthInfo.extra`.
- *
- * @param extra - the `/mcp`-filled extra.
- * @returns the envelope; undefined when it is invalid.
- */
-function authEnvelopeOf(
-  extra: Record<string, unknown> | undefined
-): AuthEnvelope | undefined {
-  const type = extra?.credentialAuthType;
-  const clientId = extra?.authenticatedClientId;
-  if (type === "api") {
-    return { credentialAuthType: "api" };
-  }
-  if (type === "oauth" && typeof clientId === "string" && clientId !== "") {
-    return { credentialAuthType: "oauth", authenticatedClientId: clientId };
-  }
-  return undefined;
-}
 
 /**
  * Waits for a promise until a deadline or the handler's cancellation,

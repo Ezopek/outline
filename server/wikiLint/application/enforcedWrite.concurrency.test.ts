@@ -56,6 +56,16 @@ const server = getTestServer();
 
 const ORIGIN = "https://wiki.example.test";
 
+/** The audit inputs of the helpers' writes, with a no-op summary writer. */
+const audit = {
+  extra: {
+    requestId: "00000000-0000-4000-8000-00000000a001",
+    credentialAuthType: "api",
+  },
+  enteredAt: 0,
+  write: async () => undefined,
+};
+
 const sha256Hex = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
 
@@ -152,6 +162,7 @@ function create(
       });
       return { collectionId: collection?.id };
     },
+    audit,
     instanceOrigin: ORIGIN,
   });
 }
@@ -195,6 +206,7 @@ function update(
       }
       return { document, collectionId };
     },
+    audit,
     instanceOrigin: ORIGIN,
   });
 }

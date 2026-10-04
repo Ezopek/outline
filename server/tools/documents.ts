@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { type McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -57,6 +58,8 @@ import {
   enforceMarkdownCreate,
   enforceMarkdownUpdate,
 } from "@server/wikiLint/application/enforcedWrite";
+import type { RequestAuditInput } from "@server/wikiLint/application/writeAudit";
+import { recordRequestWriteAudit } from "@server/wikiLint/application/writeAudit";
 import type { WriteClassification } from "@server/wikiLint/application/writeClassification";
 import {
   classifyWrite,
@@ -89,21 +92,40 @@ export function presentDocument(
 
 /**
  * Ends an MCP create or update classified under an invalid-policy sentinel or
- * failed in P1, without any effect.
+ * failed in P1, without any effect. A modeled sentinel rejection first
+ * records its summary, without policy fields, under a fresh invocation ID;
+ * the independent audit insert is its only transaction.
  *
  * @param classification - the write's classification.
+ * @param audit - the request's audit inputs.
+ * @param audit.actor - the acting user.
+ * @param audit.operation - the write operation.
+ * @param audit.documentId - the updated document; none for a create.
  * @returns the modeled invalid-policy rejection, or an `isError` result with
  *   the fixed message.
  */
-function nonBaselineWriteResult(
-  classification: Extract<WriteClassification, { kind: "sentinel" | "failed" }>
-): CallToolResult {
+async function nonBaselineWriteResult(
+  classification: Extract<WriteClassification, { kind: "sentinel" | "failed" }>,
+  audit: RequestAuditInput & {
+    actor: User;
+    operation: "create_document" | "update_document";
+    documentId?: string;
+  }
+): Promise<CallToolResult> {
   if (classification.kind === "sentinel") {
+    let rejection: CallToolResult;
     try {
-      return success(rejectInvalidPolicyWrite(classification));
+      rejection = success(rejectInvalidPolicyWrite(classification));
     } catch {
       return error(OPERATION_FAILED);
     }
+    await recordRequestWriteAudit({
+      ...audit,
+      invocationId: randomUUID(),
+      collectionId: classification.entry.collectionId,
+      outcome: { kind: "policy_rejection" },
+    });
+    return rejection;
   }
   return error(OPERATION_FAILED);
 }
@@ -784,6 +806,7 @@ export function documentTools(server: McpServer, scopes: string[]) {
                   template: reauthorized.template,
                 };
               },
+              audit: { extra: context.authInfo?.extra, enteredAt },
               signal: context.signal,
               requestId: requestIdOf(context),
               instanceOrigin: env.URL,
@@ -815,7 +838,12 @@ export function documentTools(server: McpServer, scopes: string[]) {
             return await enforcedHtmlResult(outcome, user);
           }
           if (classification.kind !== "baseline") {
-            return nonBaselineWriteResult(classification);
+            return await nonBaselineWriteResult(classification, {
+              actor: user,
+              operation: "create_document",
+              extra: context.authInfo?.extra,
+              enteredAt,
+            });
           }
 
           // Parsing HTML loads a full DOM, which would block the event loop for
@@ -1082,6 +1110,7 @@ export function documentTools(server: McpServer, scopes: string[]) {
                 publish: input.publish,
               },
               reauthorize: () => authorizeUpdateInput(ctx, input),
+              audit: { extra: context.authInfo?.extra, enteredAt },
               signal: context.signal,
               requestId: requestIdOf(context),
               instanceOrigin: env.URL,
@@ -1093,7 +1122,13 @@ export function documentTools(server: McpServer, scopes: string[]) {
             );
           }
           if (classification.kind !== "baseline") {
-            return nonBaselineWriteResult(classification);
+            return await nonBaselineWriteResult(classification, {
+              actor: user,
+              operation: "update_document",
+              documentId: document.id,
+              extra: context.authInfo?.extra,
+              enteredAt,
+            });
           }
 
           let updated;

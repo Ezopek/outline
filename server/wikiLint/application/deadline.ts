@@ -41,8 +41,9 @@ export const COMMIT_PROBE_BOUND_MS = 2000;
 
 /**
  * The AD-11 bound, in milliseconds, of the whole post-commit assembly of an
- * enforced write, measured from the established commit: the wait for its
- * buffered callbacks plus its response enrichments, in total.
+ * enforced write, starting after any awaited post-commit summary write has
+ * settled or expired: the wait for its buffered callbacks
+ * plus its response enrichments, in total.
  */
 export const POST_COMMIT_ASSEMBLY_BOUND_MS = 2000;
 

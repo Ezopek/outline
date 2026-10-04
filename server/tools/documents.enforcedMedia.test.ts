@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Job } from "bull";
 import { http, HttpResponse } from "msw";
 import type { Transaction } from "sequelize";
+import { Op } from "sequelize";
 import { yDocToProsemirrorJSON } from "y-prosemirror";
 import * as Y from "yjs";
 import { TextEditMode } from "@shared/types";
@@ -24,6 +25,7 @@ import {
 import { buildOAuthUser, callMcpTool } from "@server/test/McpHelper";
 import { server as msw } from "@server/test/msw";
 import { getTestServer } from "@server/test/support";
+import type { AuditDataV1 } from "@server/wikiLint/adapters/auditEvents";
 import type * as PolicyConfig from "@server/wikiLint/adapters/policyConfig";
 import { MediaStager } from "@server/wikiLint/adapters/mediaStaging";
 import type { EnforcedImportIntent } from "@server/wikiLint/application/enforcedImport";
@@ -501,6 +503,36 @@ async function withFailingCommit<T>(
   }
 }
 
+/** The Event name of a write summary, which no effect check counts. */
+const WRITE_SUMMARY = "wikiLint.write_validation";
+
+/**
+ * Counts a team's Events other than write summaries.
+ *
+ * @param teamId - the team.
+ * @returns the count.
+ */
+const effectEvents = (teamId: string) =>
+  Event.count({ where: { teamId, name: { [Op.ne]: WRITE_SUMMARY } } });
+
+/**
+ * Lists the outcome and document column of a team's write summaries.
+ *
+ * @param teamId - the team.
+ * @returns the summaries, oldest first.
+ */
+const summariesOf = async (teamId: string) =>
+  (
+    await Event.findAll({
+      where: { teamId, name: WRITE_SUMMARY },
+      order: [["createdAt", "ASC"]],
+      raw: true,
+    })
+  ).map((event) => ({
+    outcome: (event.data as AuditDataV1).outcome,
+    documentId: event.documentId,
+  }));
+
 afterEach(() => {
   state.policySet = undefined;
   vi.restoreAllMocks();
@@ -601,6 +633,7 @@ describe("an enforced Markdown update with media", () => {
       name: "a rejection",
       args: { text: `${INVALID}\n\n${DATA_IMAGE}` },
       expectResult: expectRejected,
+      summary: "rejected",
     },
     {
       name: "a projection failure",
@@ -614,19 +647,21 @@ describe("an enforced Markdown update with media", () => {
           response,
           "The specified text was not found in the document"
         ),
+      summary: "aborted_before_decision",
     },
     {
       name: "a failed materialization",
       args: { text: `${VALID}\n\n${DATA_IMAGE}` },
       expectResult: (response: McpResponse) => expectToolError(response),
       failInsert: true,
+      summary: "aborted_after_decision",
     },
   ])(
     "leaves no effect and deletes the staged blob on $name",
-    async ({ args, expectResult, failInsert }) => {
+    async ({ args, expectResult, failInsert, summary }) => {
       const { user, accessToken, viewers, collection } = await fixture();
       const document = await documentIn(user, collection.id);
-      const events = await Event.count({ where: { teamId: user.teamId } });
+      const events = await effectEvents(user.teamId);
       const keys = recordKeys();
       if (failInsert) {
         interceptQueries((sql, _options, next) =>
@@ -644,9 +679,10 @@ describe("an enforced Markdown update with media", () => {
       expect(await Attachment.count({ where: { teamId: user.teamId } })).toBe(
         0
       );
-      expect(await Event.count({ where: { teamId: user.teamId } })).toBe(
-        events
-      );
+      expect(await effectEvents(user.teamId)).toBe(events);
+      expect(await summariesOf(user.teamId)).toEqual([
+        { outcome: summary, documentId: document.id },
+      ]);
       expect((await storedFields(document.id)).text).toBe(document.text);
     }
   );
@@ -664,6 +700,9 @@ describe("an enforced Markdown update with media", () => {
     expect(await blobsExist(keys)).toEqual([false]);
     expect(await access(viewers, keys)).toEqual(inaccessible(1));
     expect((await storedFields(document.id)).text).toBe(document.text);
+    expect(await summariesOf(user.teamId)).toEqual([
+      { outcome: "aborted_after_decision", documentId: document.id },
+    ]);
   });
 
   it("ends in row 7 and keeps the blob, with no visible row, when no COMMIT landed", async () => {
@@ -686,6 +725,7 @@ describe("an enforced Markdown update with media", () => {
     expect(await access(viewers, keys)).toEqual(inaccessible(1));
     expect(await Attachment.count({ where: { teamId: user.teamId } })).toBe(0);
     expect((await storedFields(document.id)).text).toBe(document.text);
+    expect(await summariesOf(user.teamId)).toEqual([]);
   });
 
   it("commits with its row and blob on a socket error after a real COMMIT", async () => {
@@ -709,6 +749,9 @@ describe("an enforced Markdown update with media", () => {
     expect(await blobsExist(keys)).toEqual([true]);
     expect(await access(viewers, keys)).toEqual([
       { redirect: 302, files: 200 },
+    ]);
+    expect(await summariesOf(user.teamId)).toEqual([
+      { outcome: "validated", documentId: document.id },
     ]);
   });
 

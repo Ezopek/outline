@@ -16,8 +16,12 @@ import type {
 import { documentSurfaceRules } from "../core/documentRules";
 import { compareUtf8, sortIssues } from "../core/ordering";
 import type { RuleConfig } from "../core/registry";
-import { createSystemFailure, getIssueDefinition } from "../core/registry";
-import { AUDIT_WRITE_BOUND_MS } from "./deadline";
+import {
+  UUID_PATTERN,
+  createSystemFailure,
+  getIssueDefinition,
+} from "../core/registry";
+import { AUDIT_WRITE_BOUND_MS, monotonicClock } from "./deadline";
 import type { ProjectionValidation } from "./enforcedWrite";
 import { awaitAuditWrite } from "./readAudit";
 
@@ -25,6 +29,26 @@ import { awaitAuditWrite } from "./readAudit";
 export type AuthEnvelope =
   | { credentialAuthType: "api" }
   | { credentialAuthType: "oauth"; authenticatedClientId: string };
+
+/**
+ * Reads the server-owned credential envelope from `AuthInfo.extra`.
+ *
+ * @param extra - the `/mcp`-filled extra.
+ * @returns the envelope; undefined when it is invalid.
+ */
+export function authEnvelopeOf(
+  extra: Record<string, unknown> | undefined
+): AuthEnvelope | undefined {
+  const type = extra?.credentialAuthType;
+  const clientId = extra?.authenticatedClientId;
+  if (type === "api") {
+    return { credentialAuthType: "api" };
+  }
+  if (type === "oauth" && typeof clientId === "string" && clientId !== "") {
+    return { credentialAuthType: "oauth", authenticatedClientId: clientId };
+  }
+  return undefined;
+}
 
 /** The evaluated document and link counts of a write summary. */
 export interface EvaluatedCounts {
@@ -89,13 +113,15 @@ export function evaluatedCounts(
 /**
  * Maps an established enforced write attempt to its closed AD-14 summary
  * data. The policy fields are the request-time identity of the valid
- * `enforced` policy, whether or not the actor can read the collection.
+ * `enforced` policy, whether or not the actor can read the collection; a
+ * write classified under an invalid-policy sentinel has none.
  *
  * @param input.requestId - the server-generated request ID.
  * @param input.operation - the write operation.
  * @param input.outcome - how the attempt ended.
  * @param input.durationMs - the elapsed time, in whole milliseconds.
- * @param input.policyFingerprint - the request-time policy fingerprint.
+ * @param input.policyFingerprint - the request-time policy fingerprint;
+ *   omitted for a sentinel, which then omits both policy fields.
  * @param input.auth - the server-owned credential envelope.
  * @returns the summary data.
  */
@@ -104,7 +130,7 @@ export function writeAuditData(input: {
   operation: "create_document" | "update_document";
   outcome: WriteAuditOutcome;
   durationMs: number;
-  policyFingerprint: string;
+  policyFingerprint?: string;
   auth: AuthEnvelope;
 }): AuditDataV1 {
   const { requestId, operation, outcome, durationMs, auth } = input;
@@ -173,8 +199,10 @@ export function writeAuditData(input: {
     complete,
     durationMs,
     scopeKind: "collection",
-    policySchemaVersion: 1,
-    policyFingerprint: input.policyFingerprint,
+    ...(input.policyFingerprint !== undefined && {
+      policySchemaVersion: 1 as const,
+      policyFingerprint: input.policyFingerprint,
+    }),
     evaluatedDocumentCount: evaluated.evaluatedDocumentCount,
     evaluatedLinkCount: evaluated.evaluatedLinkCount,
     counts,
@@ -238,6 +266,88 @@ export function recordWriteAudit(
 ): Promise<void> {
   return awaitAuditWrite(correlation, () =>
     write(typeof row === "function" ? row() : row, AUDIT_WRITE_BOUND_MS)
+  );
+}
+
+/** The request-path inputs of an enforced write's summary. */
+export interface RequestAuditInput {
+  /** The `/mcp`-filled `AuthInfo.extra`, the only source of attribution. */
+  extra: Record<string, unknown> | undefined;
+  /** The handler's first monotonic clock reading. */
+  enteredAt: number;
+  /** The audit Event writer; defaults to `insertAuditEvent`. */
+  write?: AuditEventWriter;
+}
+
+/**
+ * Records the summary of an enforced write on the request path, waiting at
+ * most `AUDIT_WRITE_BOUND_MS`. Attribution comes only from `extra`: an
+ * invalid `requestId` or credential envelope is an audit failure, thrown
+ * while building the row so that it is logged like any other. `durationMs`
+ * is read when the write is initiated.
+ *
+ * @param input.extra - the `/mcp`-filled `AuthInfo.extra`.
+ * @param input.enteredAt - the handler's first monotonic clock reading.
+ * @param input.write - the audit Event writer.
+ * @param input.invocationId - the invocation, the Event ID.
+ * @param input.actor - the acting user.
+ * @param input.operation - the write operation.
+ * @param input.collectionId - the classified collection.
+ * @param input.documentId - the document, only when its row exists.
+ * @param input.policyFingerprint - the request-time policy fingerprint;
+ *   omitted for a sentinel.
+ * @param input.outcome - how the attempt ended.
+ * @returns a promise that resolves once the write settles or its bound
+ *   expires; it never rejects.
+ */
+export function recordRequestWriteAudit(
+  input: RequestAuditInput & {
+    invocationId: string;
+    actor: Pick<User, "id" | "teamId">;
+    operation: "create_document" | "update_document";
+    collectionId: string;
+    documentId?: string;
+    policyFingerprint?: string;
+    outcome: WriteAuditOutcome;
+  }
+): Promise<void> {
+  const { extra, invocationId } = input;
+  const candidate = extra?.requestId;
+  const requestId =
+    typeof candidate === "string" && UUID_PATTERN.test(candidate)
+      ? candidate
+      : undefined;
+  return recordWriteAudit(
+    () => {
+      const auth = authEnvelopeOf(extra);
+      if (requestId === undefined || auth === undefined) {
+        throw new Error("Invalid audit attribution");
+      }
+      const durationMs = Math.max(
+        0,
+        Math.round(monotonicClock() - input.enteredAt)
+      );
+      if (!Number.isFinite(durationMs)) {
+        throw new Error("Invalid audit duration");
+      }
+      return writeAuditRow({
+        invocationId,
+        actor: input.actor,
+        sourceIp: typeof extra?.ip === "string" ? extra.ip : null,
+        collectionId: input.collectionId,
+        documentId: input.documentId,
+        data: writeAuditData({
+          requestId,
+          operation: input.operation,
+          outcome: input.outcome,
+          durationMs,
+          policyFingerprint: input.policyFingerprint,
+          auth,
+        }),
+      });
+    },
+    { requestId, invocationId },
+    input.write
   );
 }
 

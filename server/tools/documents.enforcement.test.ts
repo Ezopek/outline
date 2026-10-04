@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { Op } from "sequelize";
 import { yDocToProsemirrorJSON } from "y-prosemirror";
 import * as Y from "yjs";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -30,6 +31,7 @@ import {
   mcpRequest,
 } from "@server/test/McpHelper";
 import { getTestServer } from "@server/test/support";
+import type { AuditDataV1 } from "@server/wikiLint/adapters/auditEvents";
 import type * as PolicyConfig from "@server/wikiLint/adapters/policyConfig";
 import type * as DeadlineModule from "@server/wikiLint/application/deadline";
 import type { PolicySet } from "@server/wikiLint/core/policySet";
@@ -205,10 +207,14 @@ function expectOperationFailed(response: McpResponse) {
   });
 }
 
+/** The Event name of a write summary, which no effect check counts. */
+const WRITE_SUMMARY = "wikiLint.write_validation";
+
 /**
  * Reads a team's Document, Collection, Event, and Attachment rows, plus the
- * stored state of one target document. Other tables are covered by the
- * mutating-SQL check of `callWithoutEffect`.
+ * stored state of one target document. Write summaries are not effects and
+ * are left out. Other tables are covered by the mutating-SQL check of
+ * `callWithoutEffect`.
  *
  * @param teamId - the team.
  * @param targetId - the target document, if any.
@@ -230,7 +236,11 @@ async function storedState(teamId: string, targetId?: string) {
         order,
         raw: true,
       }),
-      Event.findAll({ where: { teamId }, order, raw: true }),
+      Event.findAll({
+        where: { teamId, name: { [Op.ne]: WRITE_SUMMARY } },
+        order,
+        raw: true,
+      }),
       Attachment.unscoped().findAll({ where: { teamId }, order, raw: true }),
       targetId
         ? Document.unscoped().findByPk(targetId, {
@@ -249,17 +259,41 @@ async function storedState(teamId: string, targetId?: string) {
 }
 
 /**
+ * Lists the write summaries a team has stored.
+ *
+ * @param teamId - the team.
+ * @returns each summary's ID, outcome, and document column.
+ */
+async function summariesOf(teamId: string) {
+  const events = await Event.findAll({
+    where: { teamId, name: WRITE_SUMMARY },
+    order: [["createdAt", "ASC"]],
+    raw: true,
+  });
+  return events.map((event) => ({
+    id: event.id,
+    outcome: (event.data as AuditDataV1).outcome,
+    documentId: event.documentId,
+  }));
+}
+
+/**
  * Calls a write that must have no effect and proves it: no import job, no
  * scheduled or enqueued Event, no mutating SQL, and no snapshotted row or
  * target field changed. A sentinel or pre-classification failure opens no
  * transaction; an enforced write rejected before persistence opens exactly
- * its one enforcement transaction.
+ * its one enforcement transaction. A write that records a summary adds
+ * exactly its one independent transaction and its one `INSERT INTO events`,
+ * and the summary carries the update's target, never a created document.
  *
  * @param actor - the actor and their access token.
  * @param tool - the tool.
  * @param args - the arguments.
  * @param targetId - the target document, if any.
- * @param transactions - the number of transactions the write may open.
+ * @param expected.transactions - the number of transactions the write may
+ *   open, besides that of its summary.
+ * @param expected.summary - the outcome of the one summary the write
+ *   records; none when it records none.
  * @returns the response.
  */
 async function callWithoutEffect(
@@ -267,11 +301,15 @@ async function callWithoutEffect(
   tool: string,
   args: Record<string, unknown>,
   targetId?: string,
-  transactions = 0
+  expected: { transactions?: number; summary?: AuditDataV1["outcome"] } = {}
 ): Promise<McpResponse> {
+  const { transactions = 0, summary } = expected;
   // Settles the throttled authentication activity writes first.
   await callMcpTool(server, actor.accessToken, "list_collections");
   const before = await storedState(actor.user.teamId, targetId);
+  const earlier = new Set(
+    (await summariesOf(actor.user.teamId)).map((event) => event.id)
+  );
   const transaction = vi.spyOn(sequelize, "transaction");
   const importJob = vi.spyOn(DocumentImportTask, "scheduleAndWait");
   const scheduledEvent = vi.spyOn(Event, "schedule");
@@ -283,7 +321,7 @@ async function callWithoutEffect(
   const statements = query.mock.calls.map(([sql]) =>
     typeof sql === "string" ? sql : sql.query
   );
-  expect(transaction).toHaveBeenCalledTimes(transactions);
+  expect(transaction).toHaveBeenCalledTimes(transactions + (summary ? 1 : 0));
   expect(importJob).not.toHaveBeenCalled();
   expect(scheduledEvent).not.toHaveBeenCalled();
   expect(enqueued).not.toHaveBeenCalled();
@@ -291,7 +329,7 @@ async function callWithoutEffect(
   expect(statements.some((sql) => /^\s*SELECT\b/i.test(sql))).toBe(true);
   expect(
     statements.filter((sql) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql))
-  ).toEqual([]);
+  ).toEqual(summary ? [expect.stringMatching(/^INSERT INTO events \(/)] : []);
   transaction.mockRestore();
   importJob.mockRestore();
   scheduledEvent.mockRestore();
@@ -299,6 +337,20 @@ async function callWithoutEffect(
   query.mockRestore();
   await expect(storedState(actor.user.teamId, targetId)).resolves.toEqual(
     before
+  );
+  expect(
+    (await summariesOf(actor.user.teamId))
+      .filter((event) => !earlier.has(event.id))
+      .map(({ outcome, documentId }) => ({ outcome, documentId }))
+  ).toEqual(
+    summary
+      ? [
+          {
+            outcome: summary,
+            documentId: tool === "update_document" ? targetId : null,
+          },
+        ]
+      : []
   );
   return response;
 }
@@ -616,7 +668,8 @@ describe("destination selection across policy states", () => {
             fixture,
             path.tool,
             path.args(fixture),
-            fixture.target?.id
+            fixture.target?.id,
+            { summary: "rejected" }
           );
           expectRejection(
             response,
@@ -680,7 +733,7 @@ describe("destination selection across policy states", () => {
             path.tool,
             path.args(fixture),
             fixture.target?.id,
-            1
+            { transactions: 1, summary: "rejected" }
           );
           expect(response?.result?.isError).toBeUndefined();
           expect(response?.result?.content).toHaveLength(1);
@@ -809,7 +862,8 @@ describe("invalid-policy sentinel", () => {
         actor,
         tool,
         await args({ user, collection, document }),
-        document.id
+        document.id,
+        { summary: "rejected" }
       );
 
       expectRejection(response, sentinelRejection(set, collection.id, true));
@@ -1013,7 +1067,7 @@ describe("actors who cannot read the classified collection", () => {
             tool,
             editorCall.args,
             editorCall.targetId,
-            transactions
+            { transactions, summary: "rejected" }
           );
           const memberCall = await call(member, fixture);
           const visible = await callWithoutEffect(
@@ -1021,7 +1075,7 @@ describe("actors who cannot read the classified collection", () => {
             tool,
             memberCall.args,
             memberCall.targetId,
-            transactions
+            { transactions, summary: "rejected" }
           );
 
           const known = [
@@ -1079,7 +1133,7 @@ describe("collectionless-draft publication into an enforced collection", () => {
         "update_document",
         { id: draft.id, publish: true, collectionId: collection.id },
         draft.id,
-        1
+        { transactions: 1, summary: "rejected" }
       ),
       enforcedRejection(set, collection.id, draft.id, true)
     );
@@ -1156,7 +1210,10 @@ describe("request-supplied values", () => {
               tool,
               args,
               args.id as string | undefined,
-              policyState === "enforced" ? 1 : 0
+              {
+                transactions: policyState === "enforced" ? 1 : 0,
+                summary: "rejected",
+              }
             );
 
       for (const [plain, extra, tool] of pairs) {
@@ -1983,7 +2040,7 @@ describe("enforced Markdown writes", () => {
         "update_document",
         args(document.id),
         document.id,
-        transactions
+        { transactions, summary: "aborted_before_decision" }
       );
 
       expect(response?.result).toEqual({
@@ -2051,6 +2108,14 @@ describe("enforced Markdown writes", () => {
       await expect(storedState(user.teamId, document.id)).resolves.toEqual(
         before
       );
+      expect(
+        (await summariesOf(user.teamId)).map(({ outcome, documentId }) => ({
+          outcome,
+          documentId,
+        }))
+      ).toEqual([
+        { outcome: "aborted_after_decision", documentId: document.id },
+      ]);
     }
   );
 });
@@ -2383,14 +2448,14 @@ describe("internal-link disclosure across actors", () => {
           tool,
           ownerArgs,
           ownerArgs.id as string,
-          1
+          { transactions: 1, summary: "rejected" }
         ),
         await callWithoutEffect(
           reader,
           tool,
           readerArgs,
           readerArgs.id as string,
-          1
+          { transactions: 1, summary: "rejected" }
         ),
       ];
 

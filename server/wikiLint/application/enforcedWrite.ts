@@ -69,6 +69,8 @@ import {
   WRITE_PREPARATION_BOUND_MS,
   monotonicClock,
 } from "./deadline";
+import type { RequestAuditInput, WriteAuditOutcome } from "./writeAudit";
+import { evaluatedCounts, recordRequestWriteAudit } from "./writeAudit";
 import type { WriteClassification } from "./writeClassification";
 import {
   abortMessage,
@@ -86,9 +88,10 @@ export type EnforcedClassification = Extract<
  * The AD-20 row an enforced Markdown write ends in: 2 conflict, 3 aborted
  * before the decision, 4 rejected, 5 aborted after the decision, 6
  * committed, or 7 unestablished. A committed write carries its AD-11
- * post-commit assembly deadline, started once the commit was established;
- * the callback wait has already used part of it, and the response
- * enrichments get only what remains.
+ * post-commit assembly deadline, started once the commit was established
+ * and any awaited summary write had settled or expired; the callback wait
+ * has already used part of it, and the response enrichments get only what
+ * remains.
  */
 export type EnforcedWriteOutcome =
   | { row: 2 }
@@ -396,11 +399,15 @@ export interface AttemptOptions {
   callbacksAfterProbe?: boolean;
   /** Called with the P5 validation, right after P5. */
   onValidated?: (validated: ProjectionValidation) => void;
-  /** Called once the commit is established, before the callbacks start. */
+  /**
+   * Called once the commit is established, before the callbacks start. A
+   * returned promise is awaited, a rejection ignored, before the post-commit
+   * assembly deadline starts.
+   */
   onCommitted?: (committed: {
     document: Document;
     validation: WriteValidation;
-  }) => void;
+  }) => void | Promise<void>;
 }
 
 /**
@@ -626,14 +633,17 @@ async function attempt(
         enforcement.discard();
       }
     }
-    // The callback wait and the response enrichments share one deadline.
+    // A summary write the hook returns settles or expires first; the
+    // callback wait and the response enrichments then share one deadline.
+    if (options.onCommitted) {
+      await Promise.resolve(
+        runHook(() => options.onCommitted!({ document, validation }))
+      ).catch(() => undefined);
+    }
     const assembly = new Deadline(
       POST_COMMIT_ASSEMBLY_BOUND_MS,
       monotonicClock
     );
-    if (options.onCommitted) {
-      runHook(() => options.onCommitted!({ document, validation }));
-    }
     await enforcement.runCallbacks(assembly.remainingMs(), (reason) =>
       Logger.warn("Enforced write post-commit callback failed", {
         requestId,
@@ -649,8 +659,89 @@ async function attempt(
 }
 
 /**
+ * Runs one attempt of an enforced Markdown write and records its one
+ * request-path summary (AD-14, AD-20). A row 6 summary is written once the
+ * commit is established and awaited before the post-commit assembly
+ * deadline starts; a row 3, 4, or 5 summary once the rollback and the
+ * staged media cleanup have ended. Rows 2 and 7 record nothing. The summary
+ * runs in its own transaction and never changes the row. A crash between the
+ * commit and the summary, and a row 7 whose COMMIT did land, leave no
+ * summary; both are recorded evidence gaps (AD-15), and the summary never
+ * joins the mutation transaction.
+ *
+ * @param args - the shared inputs and the request's audit inputs.
+ * @param target.operation - the write operation.
+ * @param target.documentId - the updated document, or the pre-allocated ID
+ *   of a create, which is recorded only once its row exists.
+ * @param plan - the write-specific steps.
+ * @returns the row the write ended in.
+ */
+async function runAuditedAttempt(
+  args: ShellInput & { audit: RequestAuditInput },
+  target: {
+    operation: "create_document" | "update_document";
+    documentId?: string;
+  },
+  plan: AttemptPlan
+): Promise<EnforcedWriteOutcome> {
+  const { ctx, classification, audit } = args;
+  const { entry } = classification;
+  const { operation, documentId } = target;
+  const invocationId = randomUUID();
+  let validated: ProjectionValidation | undefined;
+
+  /**
+   * Records the attempt's summary.
+   *
+   * @param outcome - how the attempt ended.
+   * @param committed - whether the written document row exists.
+   * @returns a promise that never rejects.
+   */
+  const record = (outcome: WriteAuditOutcome, committed: boolean) =>
+    recordRequestWriteAudit({
+      ...audit,
+      invocationId,
+      actor: ctx.state.auth.user,
+      operation,
+      collectionId: entry.collectionId,
+      documentId:
+        committed || operation === "update_document" ? documentId : undefined,
+      policyFingerprint: entry.policyFingerprint,
+      outcome,
+    });
+
+  /**
+   * Builds the summary outcome of a decided validation.
+   *
+   * @param validation - the decided validation.
+   * @returns the summary outcome.
+   */
+  const decided = (validation: WriteValidation): WriteAuditOutcome => ({
+    kind: "decided",
+    validation,
+    evaluated: validated
+      ? evaluatedCounts(validated, entry.policy.rules)
+      : { evaluatedDocumentCount: 0, evaluatedLinkCount: 0 },
+  });
+
+  const outcome = await runAttempt(args, plan, {
+    invocationId,
+    onValidated: (projectionValidation) => {
+      validated = projectionValidation;
+    },
+    onCommitted: ({ validation }) => record(decided(validation), true),
+  });
+  if (outcome.row === 3 || outcome.row === 5) {
+    await record({ kind: "aborted", row: outcome.row }, false);
+  } else if (outcome.row === 4) {
+    await record(decided(outcome.validation), false);
+  }
+  return outcome;
+}
+
+/**
  * Enforces an MCP Markdown create classified under a valid `enforced`
- * policy (AD-20 P2 to P8).
+ * policy (AD-20 P2 to P8), and records its summary.
  *
  * @param args.ctx - the handler's API context.
  * @param args.classification - the enforced classification, with the
@@ -658,6 +749,7 @@ async function attempt(
  * @param args.input - the create arguments, as the handler maps them.
  * @param args.reauthorize - the handler's P0 re-run under the transaction:
  *   the post-operation collection and the template.
+ * @param args.audit - the request's audit inputs.
  * @param args.signal - the handler's cancellation signal.
  * @param args.requestId - the request ID, for diagnostics.
  * @param args.instanceOrigin - the origin internal links are recognized
@@ -666,6 +758,7 @@ async function attempt(
  */
 export function enforceMarkdownCreate(
   args: ShellInput & {
+    audit: RequestAuditInput;
     input: MarkdownCreateInput;
     reauthorize: () => Promise<{
       collectionId: string | null | undefined;
@@ -677,7 +770,8 @@ export function enforceMarkdownCreate(
   const { documentId } = classification;
   let prepared: PreparedMarkdownCreate;
   let template: Template | null | undefined;
-  return runAttempt(args, {
+  const target = { operation: "create_document" as const, documentId };
+  return runAuditedAttempt(args, target, {
     prepare: () => {
       if (documentId === undefined) {
         throw new WikiLintContractError("A create needs a pre-allocated ID");
@@ -704,7 +798,7 @@ export function enforceMarkdownCreate(
 
 /**
  * Enforces an MCP Markdown update classified under a valid `enforced`
- * policy (AD-20 P2 to P8).
+ * policy (AD-20 P2 to P8), and records its summary.
  *
  * @param args.ctx - the handler's API context.
  * @param args.classification - the enforced classification.
@@ -712,6 +806,7 @@ export function enforceMarkdownCreate(
  * @param args.input - the update arguments, as the handler maps them.
  * @param args.reauthorize - the handler's P0 re-run under the transaction:
  *   the document, loaded with its state, and the post-operation collection.
+ * @param args.audit - the request's audit inputs.
  * @param args.signal - the handler's cancellation signal.
  * @param args.requestId - the request ID, for diagnostics.
  * @param args.instanceOrigin - the origin internal links are recognized
@@ -720,6 +815,7 @@ export function enforceMarkdownCreate(
  */
 export function enforceMarkdownUpdate(
   args: ShellInput & {
+    audit: RequestAuditInput;
     documentId: string;
     input: MarkdownUpdateInput;
     reauthorize: () => Promise<{
@@ -731,7 +827,8 @@ export function enforceMarkdownUpdate(
   const { ctx, classification, documentId, input, reauthorize } = args;
   let prepared: PreparedMarkdownUpdate;
   let document: Document;
-  return runAttempt(args, {
+  const target = { operation: "update_document" as const, documentId };
+  return runAuditedAttempt(args, target, {
     lockDocumentId: documentId,
     prepare: async (media) => {
       // Stages exactly when `documentUpdater` would import.

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { DatabaseError, QueryTypes } from "sequelize";
 import { DocumentPermission, TextEditMode } from "@shared/types";
 import type { ProsemirrorData } from "@shared/types";
+import { sleep } from "@shared/utils/timers";
 import { APIUpdateExtension } from "@server/collaboration/APIUpdateExtension";
 import {
   authorizeDocumentCreate,
@@ -30,6 +31,7 @@ import {
 } from "@server/test/factories";
 import type { APIContext } from "@server/types";
 import { AuthenticationType } from "@server/types";
+import type { AuditEventRow, AuditEventWriter } from "../adapters/auditEvents";
 import { toCanonicalMarkdown } from "../adapters/canonicalSyntax";
 import type {
   MarkdownCreateInput,
@@ -94,6 +96,39 @@ vi.mock("@server/wikiLint/application/deadline", async (importOriginal) => {
 
 /** The generic instance origin of the link fixtures. */
 const ORIGIN = "https://wiki.example.test";
+
+/** A valid `/mcp`-filled `AuthInfo.extra` of the helpers' writes. */
+const EXTRA = {
+  requestId: "00000000-0000-4000-8000-00000000a001",
+  credentialAuthType: "api",
+  ip: "127.0.0.1",
+};
+
+/** The request-path summaries the running test wrote, in order. */
+let summaries: AuditEventRow[] = [];
+
+/**
+ * Stores a summary in memory.
+ *
+ * @param row - the summary row.
+ */
+const storeSummary: AuditEventWriter = async (row) => {
+  summaries.push(row);
+};
+
+/** The audit writer of the helpers' writes; a test may replace it. */
+let auditWrite: AuditEventWriter = storeSummary;
+
+/**
+ * The audit inputs of the helpers' writes. The handler entry is a constant,
+ * so that no clock reading is added before the attempt's own.
+ */
+const audit = {
+  extra: EXTRA,
+  enteredAt: 0,
+  write: (row: AuditEventRow, statementTimeoutMs: number) =>
+    auditWrite(row, statementTimeoutMs),
+};
 
 const sha256Hex = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -240,6 +275,7 @@ function create(
       }
       return { collectionId: collection?.id, template };
     },
+    audit,
     signal,
     requestId: "test-request",
     instanceOrigin: ORIGIN,
@@ -290,6 +326,7 @@ function update(
       }
       return { document, collectionId: postOperation };
     },
+    audit,
     signal,
     requestId: "test-request",
     instanceOrigin: ORIGIN,
@@ -551,6 +588,8 @@ const cleanValidation = (
 afterEach(() => {
   state.clock = undefined;
   activeQueries = undefined;
+  summaries = [];
+  auditWrite = storeSummary;
   vi.restoreAllMocks();
 });
 
@@ -1270,6 +1309,13 @@ describe("runtime failures", () => {
       if (row === 6) {
         const { stored } = await committed(outcome);
         expect(stored.id).toBe(classification.documentId);
+      } else {
+        expect(summaries.map(({ data }) => data)).toEqual([
+          expect.objectContaining({
+            outcome: "rejected",
+            runtimeFailOpenExercised: false,
+          }),
+        ]);
       }
     }
   );
@@ -2052,6 +2098,29 @@ describe("attempt options", () => {
     );
   });
 
+  it("awaits onCommitted and keeps row 6 when its promise rejects", async () => {
+    const order: string[] = [];
+    vi.spyOn(globalEventQueue(), "add").mockImplementation((() => {
+      order.push("callback");
+      return Promise.resolve();
+    }) as never);
+    const onCommitted = vi.fn(async () => {
+      await sleep(20);
+      order.push("committed");
+      throw new Error("summary failed");
+    });
+    const { classification, run } = await attempt({ onCommitted });
+
+    const outcome = await run();
+
+    expect(onCommitted).toHaveBeenCalledTimes(1);
+    expect(order[0]).toBe("committed");
+    expect(order.slice(1).length).toBeGreaterThan(0);
+    expect((await committed(outcome)).outcome.validation).toEqual(
+      cleanValidation(classification)
+    );
+  });
+
   it("discards the callbacks when only the probe established the commit", async () => {
     const enqueue = vi.spyOn(globalEventQueue(), "add");
     const notify = vi.spyOn(APIUpdateExtension, "notifyUpdate");
@@ -2506,5 +2575,472 @@ describe("staged media", () => {
     expect(keys).toHaveLength(1);
     expect(deleteFile).not.toHaveBeenCalled();
     expect(await blobsExist(keys)).toEqual([true]);
+  });
+});
+
+describe("request-path summaries", () => {
+  /** The aggregate fields of an aborted summary. */
+  const ABORTED = {
+    complete: false,
+    evaluatedDocumentCount: 0,
+    evaluatedLinkCount: 0,
+    counts: { errors: 0, warnings: 0, systemFailures: 0, byCode: {} },
+    runtimeFailOpenExercised: false,
+  };
+
+  /** The aggregate fields of a summary rejected by one missing section. */
+  const MISSING_SECTION = {
+    outcome: "rejected",
+    complete: true,
+    evaluatedDocumentCount: 1,
+    evaluatedLinkCount: 0,
+    counts: {
+      errors: 1,
+      warnings: 0,
+      systemFailures: 0,
+      byCode: { REQUIRED_SECTION_MISSING: 1 },
+    },
+  };
+
+  /**
+   * Builds the expected summary row of a write.
+   *
+   * @param input.user - the actor.
+   * @param input.classification - the classification.
+   * @param input.operation - the write operation.
+   * @param input.documentId - the expected document column, if any.
+   * @param input.data - the data fields that differ from a clean commit.
+   * @returns the row matcher.
+   */
+  const summaryRow = (input: {
+    user: User;
+    classification: EnforcedClassification;
+    operation: "create_document" | "update_document";
+    documentId?: string;
+    data?: Record<string, unknown>;
+  }) => ({
+    id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    name: "wikiLint.write_validation",
+    teamId: input.user.teamId,
+    actorId: input.user.id,
+    ip: EXTRA.ip,
+    collectionId: input.classification.entry.collectionId,
+    ...(input.documentId !== undefined && { documentId: input.documentId }),
+    data: {
+      schemaVersion: 1,
+      requestId: EXTRA.requestId,
+      operation: input.operation,
+      outcome: "validated",
+      complete: true,
+      durationMs: expect.any(Number),
+      scopeKind: "collection",
+      policySchemaVersion: 1,
+      policyFingerprint: input.classification.entry.policyFingerprint,
+      evaluatedDocumentCount: 1,
+      evaluatedLinkCount: 0,
+      counts: { errors: 0, warnings: 0, systemFailures: 0, byCode: {} },
+      runtimeFailOpenExercised: false,
+      credentialAuthType: "api",
+      ...input.data,
+    },
+  });
+
+  it("records a committed create under the new document, correlated with its Events", async () => {
+    const { user, collection, ctx } = await fixture();
+    const classification = classify(collection.id, [REQUIRED], {
+      create: true,
+    });
+
+    const { outcome } = await committed(
+      await create(ctx, classification, {
+        title: "Doc",
+        text: VALID_BODY,
+        publish: true,
+        collectionId: collection.id,
+      })
+    );
+
+    expect(summaries).toEqual([
+      summaryRow({
+        user,
+        classification,
+        operation: "create_document",
+        documentId: classification.documentId,
+      }),
+    ]);
+    const events = await Event.findAll({
+      where: { documentId: outcome.document.id },
+    });
+    expect(events.map((event) => event.name)).toContain("documents.create");
+    for (const event of events) {
+      expect(event.data?.validationCorrelationId).toBe(summaries[0].id);
+    }
+  });
+
+  it.each([
+    {
+      name: "validated",
+      rules: [REQUIRED],
+      input: { title: "Renamed" },
+      data: {},
+    },
+    {
+      name: "validated_with_warnings",
+      rules: [REQUIRED, DISCOURAGED],
+      input: { text: "\n\n> quoted", editMode: TextEditMode.Append },
+      data: {
+        outcome: "validated_with_warnings",
+        counts: {
+          errors: 0,
+          warnings: 1,
+          systemFailures: 0,
+          byCode: { DISCOURAGED_MARKDOWN_STRUCTURE: 1 },
+        },
+      },
+    },
+    {
+      name: "degraded_validation",
+      rules: [REQUIRED, LINKS],
+      open: true,
+      failReads: true,
+      input: {
+        text: `\n\n${linkTo(randomUUID())}`,
+        editMode: TextEditMode.Append,
+      },
+      data: {
+        outcome: "degraded_validation",
+        complete: false,
+        evaluatedDocumentCount: 0,
+        counts: {
+          errors: 0,
+          warnings: 0,
+          systemFailures: 1,
+          byCode: { VALIDATION_RUNTIME_FAILED: 1 },
+        },
+        runtimeFailOpenExercised: true,
+      },
+    },
+  ])(
+    "records a committed $name update under its target",
+    async ({ rules, open, failReads, input, data }) => {
+      const { user, collection, ctx } = await fixture();
+      const document = await documentOf(user, collection.id, VALID_BODY);
+      const classification = classify(collection.id, rules, { open });
+      if (failReads) {
+        failSavepointReads(interceptQueries());
+      }
+
+      await committed(
+        await update(ctx, classification, { id: document.id, ...input })
+      );
+
+      expect(summaries).toEqual([
+        summaryRow({
+          user,
+          classification,
+          operation: "update_document",
+          documentId: document.id,
+          data,
+        }),
+      ]);
+    }
+  );
+
+  it("records an Error rejection: a create without its document, an update under its target", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const createClassification = classify(collection.id, [REQUIRED], {
+      create: true,
+    });
+    const updateClassification = classify(collection.id, [REQUIRED]);
+
+    expect(
+      (
+        await create(ctx, createClassification, {
+          title: "Invalid",
+          text: INVALID_BODY,
+          publish: true,
+          collectionId: collection.id,
+        })
+      ).row
+    ).toBe(4);
+    expect(
+      (
+        await update(ctx, updateClassification, {
+          id: document.id,
+          text: INVALID_BODY,
+        })
+      ).row
+    ).toBe(4);
+
+    expect(summaries).toEqual([
+      summaryRow({
+        user,
+        classification: createClassification,
+        operation: "create_document",
+        data: MISSING_SECTION,
+      }),
+      summaryRow({
+        user,
+        classification: updateClassification,
+        operation: "update_document",
+        documentId: document.id,
+        data: MISSING_SECTION,
+      }),
+    ]);
+    expect(summaries[0]).not.toHaveProperty("documentId");
+    expect(summaries[0].id).not.toBe(summaries[1].id);
+  });
+
+  it("records a fail-closed rejection as incomplete", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED, LINKS]);
+    failSavepointReads(interceptQueries());
+
+    const outcome = await update(ctx, classification, {
+      id: document.id,
+      text: `\n\n${linkTo(randomUUID())}`,
+      editMode: TextEditMode.Append,
+    });
+
+    expect(outcome.row).toBe(4);
+    expect(summaries).toEqual([
+      summaryRow({
+        user,
+        classification,
+        operation: "update_document",
+        documentId: document.id,
+        data: {
+          outcome: "rejected",
+          complete: false,
+          evaluatedDocumentCount: 0,
+          counts: {
+            errors: 0,
+            warnings: 0,
+            systemFailures: 1,
+            byCode: { VALIDATION_RUNTIME_FAILED: 1 },
+          },
+        },
+      }),
+    ]);
+  });
+
+  it("records aborts with zero counts: a create without its document, updates under their target", async () => {
+    const { user, collection, ctx } = await fixture();
+    const parent = await documentOf(user, collection.id, VALID_BODY);
+    await documentOf(user, collection.id, VALID_BODY, {
+      parentDocumentId: parent.id,
+    });
+    const createClassification = classify(collection.id, [REQUIRED], {
+      create: true,
+    });
+    const updateClassification = classify(collection.id, [REQUIRED]);
+    const controller = new AbortController();
+    controller.abort();
+
+    expect(
+      (
+        await create(
+          ctx,
+          createClassification,
+          {
+            title: "Cancelled",
+            text: VALID_BODY,
+            publish: true,
+            collectionId: collection.id,
+          },
+          controller.signal
+        )
+      ).row
+    ).toBe(3);
+    expect(
+      (
+        await update(ctx, updateClassification, {
+          id: parent.id,
+          text: "x",
+          editMode: TextEditMode.Patch,
+          findText: "absent text",
+        })
+      ).row
+    ).toBe(3);
+    expect(
+      (
+        await update(ctx, updateClassification, {
+          id: parent.id,
+          publish: false,
+        })
+      ).row
+    ).toBe(5);
+
+    expect(summaries).toEqual([
+      summaryRow({
+        user,
+        classification: createClassification,
+        operation: "create_document",
+        data: { ...ABORTED, outcome: "aborted_before_decision" },
+      }),
+      summaryRow({
+        user,
+        classification: updateClassification,
+        operation: "update_document",
+        documentId: parent.id,
+        data: { ...ABORTED, outcome: "aborted_before_decision" },
+      }),
+      summaryRow({
+        user,
+        classification: updateClassification,
+        operation: "update_document",
+        documentId: parent.id,
+        data: { ...ABORTED, outcome: "aborted_after_decision" },
+      }),
+    ]);
+    expect(summaries[0]).not.toHaveProperty("documentId");
+  });
+
+  it("records a row 3, 4, or 5 summary only after the rollback and the media cleanup", async () => {
+    for (const [input, row] of [
+      [
+        {
+          text: DATA_IMAGE,
+          editMode: TextEditMode.Patch,
+          findText: "absent text",
+        },
+        3,
+      ],
+      [{ text: `${INVALID_BODY}\n\n${DATA_IMAGE}` }, 4],
+      [{ text: `${VALID_BODY}\n\n${DATA_IMAGE}` }, 5],
+    ] as const) {
+      const { user, collection, ctx } = await fixture();
+      const document = await documentOf(user, collection.id, VALID_BODY);
+      const classification = classify(collection.id, [REQUIRED]);
+      const order: string[] = [];
+      const deleteFile = FileStorage.deleteFile.bind(FileStorage);
+      vi.spyOn(FileStorage, "deleteFile").mockImplementation(async (key) => {
+        await deleteFile(key);
+        order.push("cleanup");
+      });
+      const queries = interceptQueries();
+      queries.use(async (sql, _args, next) => {
+        if (row === 5 && sql.startsWith('INSERT INTO "attachments"')) {
+          throw new Error("insert failed");
+        }
+        const result = await next();
+        if (sql === "ROLLBACK;") {
+          order.push("rollback");
+        }
+        return result;
+      });
+      auditWrite = async (summary) => {
+        order.push("summary");
+        summaries.push(summary);
+      };
+
+      expect(
+        (await update(ctx, classification, { id: document.id, ...input })).row
+      ).toBe(row);
+
+      expect(order).toEqual(["rollback", "cleanup", "summary"]);
+      vi.restoreAllMocks();
+      activeQueries = undefined;
+      summaries = [];
+    }
+  });
+
+  it("records nothing for a collection conflict or an unestablished COMMIT", async () => {
+    const { user, collection, ctx } = await fixture();
+    const other = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    const parent = await documentOf(user, collection.id, VALID_BODY);
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    await Document.unscoped().update(
+      { collectionId: other.id },
+      { where: { id: parent.id }, hooks: false }
+    );
+
+    expect(
+      await create(ctx, classify(collection.id, [REQUIRED], { create: true }), {
+        title: "Child",
+        text: VALID_BODY,
+        publish: true,
+        parentDocumentId: parent.id,
+      })
+    ).toEqual({ row: 2 });
+    interceptQueries().use((sql, args, next) => {
+      if (sql === "COMMIT;") {
+        (
+          (args[1] as { transaction: unknown }).transaction as {
+            connection: { connection: { stream: { destroy(): void } } };
+          }
+        ).connection.connection.stream.destroy();
+      }
+      return next();
+    });
+    expect(
+      await update(ctx, classify(collection.id, [REQUIRED]), {
+        id: document.id,
+        title: "Unestablished",
+      })
+    ).toEqual({ row: 7 });
+
+    expect(summaries).toEqual([]);
+  });
+
+  it("writes a committed summary after COMMIT and before the assembly deadline starts", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    const queries = interceptQueries();
+    let enforcement: unknown;
+    let committedAt = Number.NaN;
+    queries.use(async (sql, args, next) => {
+      const { transaction } = (args[1] ?? {}) as { transaction?: unknown };
+      if (sql.startsWith("SET LOCAL lock_timeout")) {
+        enforcement = transaction;
+      }
+      const result = await next();
+      if (sql === "COMMIT;" && transaction === enforcement) {
+        committedAt = performance.now();
+      }
+      return result;
+    });
+    let startedAt = Number.NaN;
+    let writtenAt = Number.NaN;
+    auditWrite = async (row) => {
+      startedAt = performance.now();
+      await sleep(50);
+      summaries.push(row);
+      writtenAt = performance.now();
+    };
+
+    const { outcome } = await committed(
+      await update(ctx, classification, { id: document.id, title: "Renamed" })
+    );
+
+    expect(summaries).toHaveLength(1);
+    expect(startedAt).toBeGreaterThanOrEqual(committedAt);
+    expect(writtenAt - startedAt).toBeGreaterThanOrEqual(45);
+    expect(outcome.assembly.startedAt).toBeGreaterThanOrEqual(writtenAt);
+  });
+
+  it("keeps every row when the summary write fails", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    const classification = classify(collection.id, [REQUIRED]);
+    auditWrite = () => Promise.reject(new Error("audit failed"));
+
+    const { stored } = await committed(
+      await update(ctx, classification, { id: document.id, title: "Kept" })
+    );
+    const rejected = await update(ctx, classification, {
+      id: document.id,
+      text: INVALID_BODY,
+    });
+
+    expect(stored.title).toBe("Kept");
+    expect(rejected.row).toBe(4);
+    expect(summaries).toEqual([]);
   });
 });

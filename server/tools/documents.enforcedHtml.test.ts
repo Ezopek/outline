@@ -968,6 +968,16 @@ describe("selection", () => {
         systemFailures: [{ code: "POLICY_CONFIGURATION_INVALID" }],
       },
     });
-    expect(await wikiLintEvents(user.teamId)).toEqual([]);
+    // The requester records the sentinel's one summary, without policy fields.
+    const [event, ...others] = await wikiLintEvents(user.teamId);
+    expect(others).toEqual([]);
+    const [summary] = await summaries((event as { id: string }).id);
+    expect(summary.documentId).toBeNull();
+    expect(summary.data).toMatchObject({
+      operation: "create_document",
+      outcome: "rejected",
+      counts: { byCode: { POLICY_CONFIGURATION_INVALID: 1 } },
+    });
+    expect(summary.data).not.toHaveProperty("policyFingerprint");
   });
 });

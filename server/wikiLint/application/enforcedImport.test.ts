@@ -1442,6 +1442,73 @@ describe("found rows", () => {
   });
 });
 
+describe("summary replacement", () => {
+  it.each(["aborted_before_decision", "rejected"] as const)(
+    "replaces a stored %s summary with the committed one, keeping createdAt",
+    async (outcome) => {
+      const { user, collection, fingerprint } = await fixture();
+      const intent = await stagedIntent({
+        user,
+        collectionId: collection.id,
+        fingerprint,
+        html: VALID_HTML,
+      });
+      await storeSummary(intent, user, {
+        outcome,
+        complete: outcome === "rejected",
+      });
+      const [seeded] = await summaries(intent.invocationId);
+
+      const result = await runEnforcedImport(intent);
+
+      await expectCommitted(result, intent, "validated");
+      const [summary] = await summaries(intent.invocationId);
+      expect(seeded.documentId).toBeNull();
+      expect(summary).toMatchObject({
+        documentId: intent.documentId,
+        collectionId: collection.id,
+        data: {
+          requestId: intent.requestId,
+          outcome: "validated",
+          complete: true,
+          credentialAuthType: "oauth",
+        },
+      });
+      const createdAt = (seeded as { createdAt?: unknown }).createdAt;
+      expect(createdAt).toBeInstanceOf(Date);
+      expect((summary as { createdAt?: unknown }).createdAt).toEqual(createdAt);
+    }
+  );
+
+  it("keeps a stored committed summary after a run that aborts in row 3", async () => {
+    const { user, collection, fingerprint } = await fixture();
+    const intent = await stagedIntent({
+      user,
+      collectionId: collection.id,
+      fingerprint,
+      html: VALID_HTML,
+    });
+    await storeSummary(intent, user, { outcome: "validated" });
+    const seeded = await summaries(intent.invocationId);
+    await FileStorage.deleteFile(intent.key);
+    const write = vi.fn(insertAuditEvent);
+
+    expect(await runEnforcedImport(intent, { write })).toEqual({
+      kind: "aborted",
+      row: 3,
+      message: OPERATION_FAILED,
+    });
+
+    // The aborted summary was written, and changed nothing.
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0][0].data.outcome).toBe("aborted_before_decision");
+    expect(await summaries(intent.invocationId)).toEqual(seeded);
+    expect(seeded[0].data).toEqual(
+      summaryData(intent, { outcome: "validated" })
+    );
+  });
+});
+
 describe("COMMIT outcomes", () => {
   /**
    * Builds a staged intent with spies on the post-commit effects.
