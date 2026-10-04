@@ -56,7 +56,9 @@ location: server/tools/README.md (Templates and visible metadata)
 source_spec: `spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md`
 severity: low
 reason: server/tools/README.md presents "- Status: Active" / "- Last verified: 2026-09-20" as the shape that survives the Markdown/ProseMirror round trip. Story 1.10's HTTP suite (server/routes/mcp/wikiLint.test.ts, "round trip") shows MCP create_document + fetch return "* Status: Active"; the fields stay valid and lint clean, but agents copying the example as patch findText would miss. The README is a companion of the binding SPEC, so the edit needs a deliberate contract update rather than an unattended story change.
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-decision-dw-7
+resolution-undo: 8a5da897cf69282f4ae77b1da4dd79679c323505c18287f61047c3a377510de0 2026-10-04 7374617475733a206f70656e
 decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* Status: Active` / `* Last verified: 2026-09-20`, and record in the binding SPEC that canonical `* ` bullets round-trip byte-identically while `- ` input lints clean (Story 1.10 AC5 interpretation). No code change.
 decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* Status: Active` / `* Last verified: 2026-09-20`, and record in the binding SPEC that canonical `* ` bullets round-trip byte-identically while `- ` input lints clean (Story 1.10 AC5 interpretation). No code change.
 
@@ -193,4 +195,12 @@ location: server/wikiLint/adapters/documentProjection.test.ts:1557; server/wikiL
 source_spec: `spec-dw-10-html-create-state-content-parity.md`
 severity: medium
 reason: The class B metadata fixture in documentProjection.test.ts shows that the linked image is present in validated content but loses its link in the derived Y.js document. metadataFieldFormats in documentRules.ts compares the field value to configured one_of values. This Y.js conversion also occurs for Markdown creates and predates DW-10; the accepted Decision explicitly retains that behavior.
+status: open
+
+### DW-23: server/tools/README.md does not tell authors that their own `- ` bullets are stored and fetched as `* `, so a patch findText written from their input instead of the fetched Markdown still misses.
+origin: spec-deferred eb7b895ea0db
+location: server/tools/README.md:119-140
+source_spec: `spec-dw-7-readme-metadata-canonical-bullet-marker.md`
+severity: low
+reason: Patch findText is an indexOf over serializeWithPositions output (DocumentHelper.tsx:668-683), and BulletList.toMarkdown always writes `* `. DW-7 fixes only the copied example; metadata an agent writes itself with `- ` behaves as before. Pre-existing, not caused by this change, and outside the 2026-10-04 decision, which covers the example and the SPEC record.
 status: open
