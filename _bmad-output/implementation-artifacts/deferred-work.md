@@ -77,7 +77,9 @@ location: server/wikiLint/application/enforcedWrite.ts:369-497
 source_spec: `spec-2-3-enforce-markdown-creates-and-updates-atomically.md`
 severity: medium
 reason: runAttempt maps every non-application failure to OPERATION_FAILED through abortMessage and logs nothing, and row 7 (a COMMIT whose outcome cannot be established, which the hang fixture shows can still land) is not logged either. An operator investigating a failed enforced write has no requestId/invocationId-correlated trace. This is the same gap as Epic 1 retrospective action item 9 (F-6: log unmodellable lint failures with invocationId and error class only), which the project deferred to Epic 3 hardening; Story 2.7 adds summaries for rows 3, 4, 5, and 6 but none for row 7.
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-enforced-write-operator-log
+resolution-undo: 6ac2b654ba4e9b32525413cad07d1ce761e4b23a2494ef02c82ec9a4e41969d1 2026-10-04 7374617475733a206f70656e
 
 ### DW-10: An enforced HTML create persists the imported Y.js state, built before the Markdown round trip, while validation runs on the content re-parsed from that Markdown, so editor-visible state could hold
 origin: spec-deferred 25158c5d6970
@@ -333,4 +335,12 @@ location: server/storage/files/LocalStorage.ts:92
 source_spec: `spec-dw-27-media-blob-validation-leak.md`
 severity: medium
 reason: LocalStorage.ts catches unlink errors, logs the file path and error, then resolves. MediaStager's deleteLate therefore cannot report that failure by Attachment ID. This adapter behavior predates DW-27 and also affects existing staged-media cleanup and late-landing deletion.
+status: open
+
+### DW-38: Enforced HTML create outcomes decided outside runAttempt (requester row 3 before queue.add, requester row 7, and the worker's pre-attempt and final-catch aborts) still leave no operator log.
+origin: spec-deferred e4dc78f49ace
+location: server/wikiLint/application/enforcedHtmlCreate.ts; server/wikiLint/application/enforcedImport.ts:420-423, :839-845
+source_spec: `spec-dw-9-enforced-write-operator-log.md`
+severity: low
+reason: DW-9 logs only the rows that runAttempt's body returns. enforcedHtmlCreate.ts has no Logger call for its own row 3 before scheduling or for row 7 when the worker returns nothing, a queue.add error, or an unavailable requester probe. enforcedImport.ts returns aborted for an unparseable intent and for its final catch (aborted(decided ? 5 : 3, ...)) without logging. The worker can also turn a logged attempt row 3 or 5 into committed or unestablished after its repeated lookup, so the logged row can differ from the row the client sees. These gaps existed before DW-9; the bundle intent scopes the fix to enforcedWrite.ts.
 status: open

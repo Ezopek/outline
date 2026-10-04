@@ -58,7 +58,7 @@ import type { LinkLookupKey } from "../core/internalLinks";
 import { extractInternalLinks, linkLookupBatches } from "../core/internalLinks";
 import { sortIssues } from "../core/ordering";
 import type { RuleConfig } from "../core/registry";
-import { OPERATION_FAILED, createSystemFailure } from "../core/registry";
+import { createSystemFailure } from "../core/registry";
 import {
   COMMIT_PROBE_BOUND_MS,
   Deadline,
@@ -431,7 +431,10 @@ function runHook<T>(hook: () => T): T | undefined {
  * transaction, bounded by AD-11. The attempt owns one media stager: the plan
  * stages through it in P2, it is sealed before `BEGIN`, and an attempt that
  * ends in row 2, 3, 4, or 5 deletes the blobs it staged once its transaction
- * has ended. Rows 6 and 7, and an unexpected throw, delete nothing.
+ * has ended. Rows 6 and 7, and an unexpected throw, delete nothing. An
+ * attempt that ends in row 3, 5, or 7 logs one operator warning with only its
+ * request ID, invocation ID, row, and, when the failure is an `Error`, its
+ * class name.
  *
  * @param shell - the shared inputs.
  * @param plan - the write-specific steps.
@@ -493,6 +496,37 @@ async function attempt(
   const { entry, readable } = classification;
   const { collectionId } = entry;
   const actor = ctx.state.auth.user;
+  /**
+   * Logs a row 3, 5, or 7 for the operator with the correlation, the row,
+   * and the failure's class name only; a logging failure is ignored.
+   *
+   * @param row - the row.
+   * @param cause - the failure; its class name is logged only for an `Error`.
+   */
+  const warn = (row: 3 | 5 | 7, cause: unknown) => {
+    try {
+      Logger.warn("Enforced write ended without an established commit", {
+        requestId,
+        invocationId,
+        row,
+        ...(cause instanceof Error && { errorClass: cause.constructor.name }),
+      });
+    } catch {
+      // The diagnostic never changes the outcome.
+    }
+  };
+  /**
+   * Ends the attempt in row 3 or 5 with the AD-20 message of its failure,
+   * and logs it.
+   *
+   * @param row - the row.
+   * @param cause - the failure, or undefined when there is none.
+   * @returns the outcome.
+   */
+  const aborted = (row: 3 | 5, cause: unknown): EnforcedWriteOutcome => {
+    warn(row, cause);
+    return { row, message: abortMessage(cause) };
+  };
 
   // P2: preparation, then the transaction, within the bound. The stager is
   // sealed before the transaction opens, so no staging runs inside it.
@@ -506,7 +540,7 @@ async function attempt(
       preparation.remainingMs()
     );
   } catch (error) {
-    return { row: 3, message: abortMessage(error) };
+    return aborted(3, error);
   }
   const { transaction } = enforcement;
   const validationDeadline = new Deadline(
@@ -582,7 +616,7 @@ async function attempt(
       validation = writeValidation({ status, entry, readable, issues });
     } catch (error) {
       await enforcement.rollback();
-      return { row: 3, message: abortMessage(error) };
+      return aborted(3, error);
     }
     if (validation.status === "rejected") {
       await enforcement.rollback();
@@ -593,7 +627,7 @@ async function attempt(
       runHook(() => options.admitPersist!()) === false
     ) {
       await enforcement.rollback();
-      return { row: 5, message: OPERATION_FAILED };
+      return aborted(5, undefined);
     }
 
     // P7: persist exactly the projection, within the persistence budget less
@@ -613,7 +647,7 @@ async function attempt(
       );
     } catch (error) {
       await enforcement.rollback();
-      return { row: 5, message: abortMessage(error) };
+      return aborted(5, error);
     }
 
     // P8: establish the commit. COMMIT's timer leaves the probe reserve.
@@ -627,9 +661,11 @@ async function attempt(
       );
       if (probe !== "present") {
         enforcement.discard();
-        return probe === "absent" && isServerReported(commit.error)
-          ? { row: 5, message: abortMessage(commit.error) }
-          : { row: 7 };
+        if (probe === "absent" && isServerReported(commit.error)) {
+          return aborted(5, commit.error);
+        }
+        warn(7, commit.error);
+        return { row: 7 };
       }
       if (options.callbacksAfterProbe === false) {
         enforcement.discard();

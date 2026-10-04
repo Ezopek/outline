@@ -6,6 +6,7 @@ import { DocumentPermission } from "@shared/types";
 import { APIUpdateExtension } from "@server/collaboration/APIUpdateExtension";
 import attachmentCreator from "@server/commands/attachmentCreator";
 import type * as AttachmentCreator from "@server/commands/attachmentCreator";
+import Logger from "@server/logging/Logger";
 import {
   Attachment,
   Document,
@@ -1105,12 +1106,28 @@ describe("worker outcomes", () => {
       html: VALID_HTML,
       overrides: { deadlineAt: Date.now() + 11000 },
     });
+    const warn = vi.spyOn(Logger, "warn").mockImplementation(() => undefined);
 
     expect(await runEnforcedImport(intent)).toEqual({
       kind: "aborted",
       row: 5,
       message: OPERATION_FAILED,
     });
+    expect(
+      warn.mock.calls.filter(
+        ([message]) =>
+          message === "Enforced write ended without an established commit"
+      )
+    ).toStrictEqual([
+      [
+        "Enforced write ended without an established commit",
+        {
+          requestId: intent.requestId,
+          invocationId: intent.invocationId,
+          row: 5,
+        },
+      ],
+    ]);
     expect(await storedDocument(intent.documentId)).toBeNull();
     const [summary] = await summaries(intent.invocationId);
     expect(summary.data).toMatchObject({

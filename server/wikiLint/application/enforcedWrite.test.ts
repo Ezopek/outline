@@ -9,6 +9,7 @@ import {
   authorizeDocumentPublish,
 } from "@server/commands/documentCreator";
 import { createContext } from "@server/context";
+import Logger from "@server/logging/Logger";
 import {
   Attachment,
   Collection,
@@ -584,6 +585,19 @@ const cleanValidation = (
   warnings: [],
   systemFailures: [],
 });
+
+/** The message of the operator log of rows 3, 5, and 7. */
+const OPERATOR_LOG = "Enforced write ended without an established commit";
+
+/**
+ * Silences `Logger.warn` and records its operator log calls.
+ *
+ * @returns a reader of the calls with the operator log message.
+ */
+function operatorLog() {
+  const warn = vi.spyOn(Logger, "warn").mockImplementation(() => undefined);
+  return () => warn.mock.calls.filter(([message]) => message === OPERATOR_LOG);
+}
 
 afterEach(() => {
   state.clock = undefined;
@@ -2027,6 +2041,36 @@ describe("attempt options", () => {
     expect(admitPersist).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "a refused persist gate without a class",
+      options: { admitPersist: () => false },
+      overrides: {},
+      logged: { row: 5 },
+    },
+    {
+      name: "a rejecting prepare with its class",
+      options: {},
+      overrides: { prepare: () => Promise.reject(new Error("prepare failed")) },
+      logged: { row: 3, errorClass: "Error" },
+    },
+  ])(
+    "logs $name under the given invocation ID",
+    async ({ options, overrides, logged }) => {
+      const invocationId = randomUUID();
+      const { run } = await attempt({ ...options, invocationId }, overrides);
+      const calls = operatorLog();
+
+      expect(await run()).toEqual({
+        row: logged.row,
+        message: OPERATION_FAILED,
+      });
+      expect(calls()).toStrictEqual([
+        [OPERATOR_LOG, { requestId: "test", invocationId, ...logged }],
+      ]);
+    }
+  );
+
   it("passes the decided validation to persist", async () => {
     const seen: unknown[] = [];
     const { classification, run } = await attempt(
@@ -3046,5 +3090,140 @@ describe("request-path summaries", () => {
     expect(stored.title).toBe("Kept");
     expect(rejected.row).toBe(4);
     expect(summaries).toEqual([]);
+  });
+});
+
+describe("operator log", () => {
+  /** The fixture of a write. */
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+
+  it.each([
+    {
+      name: "row 3 when cancelled before the transaction",
+      row: 3,
+      message: OPERATION_FAILED,
+      errorClass: "WriteCancelledError",
+      write: async ({ user, collection, ctx }: Fixture) => {
+        const document = await documentOf(user, collection.id, VALID_BODY);
+        const controller = new AbortController();
+        controller.abort();
+        return update(
+          ctx,
+          classify(collection.id, [REQUIRED]),
+          { id: document.id, title: "Cancelled" },
+          controller.signal
+        );
+      },
+    },
+    {
+      name: "row 3 when the target was deleted",
+      row: 3,
+      message: OPERATION_FAILED,
+      errorClass: "EmptyResultError",
+      write: async ({ user, collection, ctx }: Fixture) => {
+        const document = await documentOf(user, collection.id, VALID_BODY);
+        await document.destroy();
+        return update(ctx, classify(collection.id, [REQUIRED]), {
+          id: document.id,
+          title: "Gone",
+        });
+      },
+    },
+    {
+      name: "row 5 when unpublishing a parent",
+      row: 5,
+      message: "Cannot unpublish document with child documents",
+      errorClass: "BadRequestError",
+      write: async ({ user, collection, ctx }: Fixture) => {
+        const parent = await documentOf(user, collection.id, VALID_BODY);
+        await documentOf(user, collection.id, VALID_BODY, {
+          parentDocumentId: parent.id,
+        });
+        return update(ctx, classify(collection.id, [REQUIRED]), {
+          id: parent.id,
+          publish: false,
+        });
+      },
+    },
+  ])(
+    "logs $name with only its correlation, row, and class",
+    async ({ row, message, errorClass, write }) => {
+      const built = await fixture();
+      const calls = operatorLog();
+
+      const outcome = await write(built);
+
+      expect(outcome).toEqual({ row, message });
+      expect(calls()).toStrictEqual([
+        [
+          OPERATOR_LOG,
+          {
+            requestId: "test-request",
+            invocationId: summaries[0].id,
+            row,
+            errorClass,
+          },
+        ],
+      ]);
+    }
+  );
+
+  it("logs nothing for rows 2, 4, and 6", async () => {
+    const { user, collection, ctx } = await fixture();
+    const other = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    const parent = await documentOf(user, collection.id, VALID_BODY);
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    await Document.unscoped().update(
+      { collectionId: other.id },
+      { where: { id: parent.id }, hooks: false }
+    );
+    const classification = classify(collection.id, [REQUIRED]);
+    const calls = operatorLog();
+
+    expect(
+      await create(ctx, classify(collection.id, [REQUIRED], { create: true }), {
+        title: "Child",
+        text: VALID_BODY,
+        publish: true,
+        parentDocumentId: parent.id,
+      })
+    ).toEqual({ row: 2 });
+    expect(
+      (
+        await update(ctx, classification, {
+          id: document.id,
+          text: INVALID_BODY,
+        })
+      ).row
+    ).toBe(4);
+    expect(
+      (await update(ctx, classification, { id: document.id, title: "Renamed" }))
+        .row
+    ).toBe(6);
+    expect(calls()).toEqual([]);
+  });
+
+  it("keeps the outcome when logging throws", async () => {
+    const { user, collection, ctx } = await fixture();
+    const document = await documentOf(user, collection.id, VALID_BODY);
+    await document.destroy();
+    const warn = vi.spyOn(Logger, "warn").mockImplementation(() => {
+      throw new Error("logging failed");
+    });
+
+    expect(
+      await update(ctx, classify(collection.id, [REQUIRED]), {
+        id: document.id,
+        title: "Gone",
+      })
+    ).toEqual({ row: 3, message: OPERATION_FAILED });
+    expect(warn).toHaveBeenCalledWith(
+      OPERATOR_LOG,
+      expect.objectContaining({ row: 3, errorClass: "EmptyResultError" })
+    );
+    expect(summaries).toHaveLength(1);
   });
 });

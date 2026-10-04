@@ -7,6 +7,7 @@ import {
   authorizeDocumentPublish,
 } from "@server/commands/documentCreator";
 import { createContext } from "@server/context";
+import Logger from "@server/logging/Logger";
 import { Document, Event } from "@server/models";
 import type { User } from "@server/models";
 import { authorize } from "@server/policies";
@@ -25,6 +26,7 @@ import type {
   MarkdownCreateInput,
   MarkdownUpdateInput,
 } from "../adapters/documentProjection";
+import { EnforcementTransaction } from "../adapters/writeTransaction";
 import type { PolicySet } from "../core/policySet";
 import { buildPolicySet } from "../core/policySet";
 import { OPERATION_FAILED } from "../core/registry";
@@ -165,6 +167,7 @@ function create(
       return { collectionId: collection?.id };
     },
     audit,
+    requestId: "test-request",
     instanceOrigin: ORIGIN,
   });
 }
@@ -209,6 +212,7 @@ function update(
       return { document, collectionId };
     },
     audit,
+    requestId: "test-request",
     instanceOrigin: ORIGIN,
   });
 }
@@ -338,6 +342,26 @@ const socketError = () =>
     code: "ECONNRESET",
     syscall: "read",
   });
+
+/** The message of the operator log of rows 3, 5, and 7. */
+const OPERATOR_LOG = "Enforced write ended without an established commit";
+
+/**
+ * Silences `Logger.warn` and spies on the opening of enforcement
+ * transactions.
+ *
+ * @returns readers of the operator log calls and of the attempts'
+ *   invocation IDs.
+ */
+function operatorLog() {
+  const warn = vi.spyOn(Logger, "warn").mockImplementation(() => undefined);
+  const open = vi.spyOn(EnforcementTransaction, "open");
+  return {
+    calls: () =>
+      warn.mock.calls.filter(([message]) => message === OPERATOR_LOG),
+    invocationIds: () => open.mock.calls.map(([invocationId]) => invocationId),
+  };
+}
 
 afterEach(() => {
   state.clock = undefined;
@@ -659,10 +683,23 @@ describe("COMMIT outcomes", () => {
   it("ends in row 7 when COMMIT hangs past its timer and the probe finds no row, and never runs the callbacks", async () => {
     const { classification, enqueue, run } = await commitFixture();
     const hold = holdCommit(false);
+    const log = operatorLog();
 
     try {
       const outcome = await run();
       expect(outcome).toEqual({ row: 7 });
+      const [invocationId] = log.invocationIds();
+      expect(log.calls()).toStrictEqual([
+        [
+          OPERATOR_LOG,
+          {
+            requestId: "test-request",
+            invocationId,
+            row: 7,
+            errorClass: "CommitTimeoutError",
+          },
+        ],
+      ]);
       expect(hold.remainderAtProbeMs()).toBeGreaterThan(
         COMMIT_PROBE_BOUND_MS - SET_LOCAL_FLOOR_MS
       );
@@ -691,10 +728,12 @@ describe("COMMIT outcomes", () => {
   it("ends in row 6 with its callbacks when COMMIT lands but its reply outlives the timer", async () => {
     const { classification, enqueue, run } = await commitFixture();
     const hold = holdCommit(true);
+    const log = operatorLog();
 
     try {
       const outcome = await run();
       expect(outcome.row).toBe(6);
+      expect(log.calls()).toEqual([]);
       expect(hold.remainderAtProbeMs()).toBeGreaterThan(
         COMMIT_PROBE_BOUND_MS - SET_LOCAL_FLOOR_MS
       );
@@ -731,6 +770,7 @@ describe("COMMIT outcomes", () => {
       `CREATE CONSTRAINT TRIGGER ${name} AFTER UPDATE ON documents DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.id = '${document.id}') EXECUTE FUNCTION ${name}()`
     );
     const events = await eventNames(document.id);
+    const log = operatorLog();
     try {
       const outcome = await update(ctx, classify(), {
         id: document.id,
@@ -738,6 +778,18 @@ describe("COMMIT outcomes", () => {
       });
 
       expect(outcome).toEqual({ row: 5, message: OPERATION_FAILED });
+      const [invocationId] = log.invocationIds();
+      expect(log.calls()).toStrictEqual([
+        [
+          OPERATOR_LOG,
+          {
+            requestId: "test-request",
+            invocationId,
+            row: 5,
+            errorClass: "DatabaseError",
+          },
+        ],
+      ]);
     } finally {
       await sequelize.query(`DROP TRIGGER IF EXISTS ${name} ON documents`);
       await sequelize.query(`DROP FUNCTION IF EXISTS ${name}()`);
