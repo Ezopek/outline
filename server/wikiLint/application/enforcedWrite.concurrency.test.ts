@@ -706,6 +706,7 @@ describe("COMMIT outcomes", () => {
       );
       expect(hold.probeTimeoutMs()).toBeLessThanOrEqual(COMMIT_PROBE_BOUND_MS);
       expect(await storedDocument(classification.documentId!)).not.toBeNull();
+      expect(hold.probeRows()).toEqual([{ id: classification.documentId }]);
       expect(enqueue).toHaveBeenCalled();
     } finally {
       hold.release();

@@ -3,7 +3,7 @@ title: 'DW-26: Reserve the commit-probe bound out of the COMMIT timer'
 type: 'bugfix'
 created: '2026-10-04'
 baseline_revision: 821b3c3f5b8b3fbaa1541a4edb28116ecd2fe503
-status: 'done'
+status: 'blocked'
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
@@ -94,38 +94,42 @@ All rows assume a persistence remainder of about 2300 ms at P7 entry, so the COM
   - `[false]` `[reject]` Intent Alignment: the HTML worker and the update paths are not tested. — Same refutation as the Blind Hunter path-coverage row.
   - `[false]` `[reject]` Intent Alignment: the artifact-only receipt does not apply. — This is an observation, not a defect. The deliverables include tracked server code, so the receipt is not asserted.
 
+### 2026-10-04 — Follow-up review pass
+- verdicts: 13 findings — high 0, medium 0, low 4, false 7, maybe-false 2
+- findings:
+  - `[maybe-false]` `[reject]` Blind Hunter: the 100 ms probe-start tolerance may flake under loaded CI. — Carried: the same tolerance claim was rejected in the first pass; four local runs and this pass's targeted suites passed, and a CI delay of at least 100 ms remains unverified. It would be low if observed.
+  - `[low]` `[patch]` Blind Hunter: the late-reply row 6 test records probe rows without asserting them. — Added an assertion that the probe returned the pre-allocated document ID; the COMMIT outcomes tests and all four targeted suites pass.
+  - `[low]` `[reject]` Blind Hunter: the late COMMIT reply is released without a settle-and-callback assertion. — Carried: the first pass rejected this unlikely callback risk; `runCallbacks` drains the buffer before release, and `track()` keeps Sequelize's hook list empty.
+  - `[low]` `[reject]` Blind Hunter: the scenario matrix says 2300 ms and 300 ms while the test uses the reserve plus 500 ms. — The mismatch is real, but its only correction edits this build's spec, which this review workflow rejects as a patch finding; the test helper and assertions use the constants consistently.
+  - `[false]` `[reject]` Blind Hunter: this build edits the deferred-work ledger despite its boundary. — The ledger change was already present, uncommitted, before this run and belongs to the orchestrator. This run did not edit or stage it.
+  - `[false]` `[reject]` Blind Hunter: DW-26's ledger status conflicts with the temporary `in-review` spec status. — The ledger row is orchestrator bookkeeping, and `in-review` is this review pass's temporary status; neither is verification evidence or a defect to repair.
+  - `[low]` `[reject]` Edge Case Hunter: a depleted P7 reserve can make the P8 timer zero and let the probe overrun the persistence budget. — Carried: the first pass rejected this rare, contract-legal outcome because a guard would add a new branch; `within` clamps the timer, and the probe keeps D3's full bound.
+  - `[maybe-false]` `[reject]` Edge Case Hunter: probe connection acquisition beyond 100 ms can make the timeout assertions flaky. — Carried: this is the first pass's tolerance claim. No such delay was observed; it would be low if it occurs.
+  - `[false]` `[reject]` Intent Alignment: the test does not capture the COMMIT timer argument directly. — It checks the remaining budget when the probe starts, and both tests fail when only the timer line is reverted; the claimed verification gap does not remain.
+  - `[false]` `[reject]` Intent Alignment: the test does not explicitly assert a different probe connection. — `probeCommit` calls `boundedRead`, which opens a new Sequelize transaction; the held pre-COMMIT case also cannot complete a same-connection probe. No changed code removed that boundary.
+  - `[false]` `[reject]` Intent Alignment: new tests do not call the HTML worker. — Carried: `enforcedImport` calls the changed shared `runAttempt`, and the worker probe paths already have tests. This diff changes no worker-specific branch.
+  - `[false]` `[reject]` Intent Alignment: the diff includes a deferred-work ledger edit. — The edit is the orchestrator's pre-existing working-tree change, not an edit made or committed by this build; the user explicitly owns its status outside this review.
+  - `[false]` `[reject]` Intent Alignment: adding the spec artifact diverges from the requested code and test surfaces. — The invoked build-auto workflow uses the spec as its required hand-back artifact; the implementation and tests remain on the requested surfaces.
+
 ## Auto Run Result
 
-Status: done
+Status: blocked
+Blocking condition: Finalization requires a clean working tree, but the orchestrator-owned deferred-work ledger has a pre-existing uncommitted change. This run neither edited nor staged that ledger. The orchestrator must resolve its own working-tree change before a clean-tree finalization can be asserted.
 
-- **Summary:** P8 of `runAttempt` now gives COMMIT a wall-clock timer equal to the remaining persistence budget less `COMMIT_PROBE_BOUND_MS`. The probe after a rejected COMMIT runs under its own full `COMMIT_PROBE_BOUND_MS`, as amendment D3 requires (AD-11, Story 2.3 AC9). This resolves DW-26 (Epic 2 retro F-6). The fix lives in the shared `runAttempt`, so the Markdown path and the HTML worker both get it.
-- **Files changed:**
-  - `server/wikiLint/application/enforcedWrite.ts` -- P8 timer argument, probe bound argument, and a one-line comment.
-  - `server/wikiLint/application/enforcedWrite.concurrency.test.ts` -- a `holdCommit` helper, the reworked COMMIT-hang row 7 test, and a new row 6 test (COMMIT landed, reply late). Both tests assert:
-    - the persistence remainder when the probe starts;
-    - the probe's statement timeout;
-    - the row the write ends in;
-    - for row 7 only, that the probe returned no rows.
-  - `_bmad-output/implementation-artifacts/spec-dw-26-commit-timer-probe-reserve.md` -- this spec.
-- **Review findings breakdown:**
-  - **Patches applied:** 3 entries — 1 medium (the COMMIT timer reserve was unasserted), and 2 low (an offset not derived from constants, and probe absent vs unavailable). Each closes a gap that Blind Hunter, Edge Case Hunter, Verification Gap and Intent Alignment found together.
-  - **Deferred:** none.
-  - **Rejected:** 11 rows; each reason is in the triage log above.
-    - "No floor on the P8 timer" group (7 rows): rare, contract-legal outcomes, and a guard fix.
-    - Probe-timeout tolerance flake (2 rows): maybe-false, and low if true.
-    - Late-reply settle in the row 6 test: a low, unlikely case.
-    - False: path coverage (2 rows), row 5 server timeout, artifact receipt.
-- **Follow-up review recommendation:** `false`. This was the first pass. The patched entries were 1 medium and 2 low, with no high; one medium is below the threshold of two.
-- **Verification:**
-  - **Test database:** `scripts/test-db.sh ensure` reported `outline-test ready on 127.0.0.1:5432`.
-  - **Targeted suites:** `TZ=UTC corepack yarn vitest run` on the four targeted files passed 202/202, both before and after the review patches. The "COMMIT outcomes" verbose run showed all three I/O matrix rows passing, with row 3 also covered by `probed: false` at `enforcedWrite.test.ts:2074-2078`.
-  - **Static checks:** `corepack yarn tsc`, `oxlint --type-aware` and `oxfmt --check` on the changed files each exited 0.
-  - **Baseline P8:** both new hold tests failed. The row 7 test recorded no probe; the row 6 test got "expected 7 to be 6".
-  - **Only the timer line reverted:** both hold tests failed, with the remainder at probe start about −4 and −1 ms instead of above 1900.
-- **Residual risks:**
-  - In a narrow case, the final P7 `SET LOCAL` pair takes more than about 100 ms while the remainder is just above the reserve. The COMMIT timer then clamps to 0 and the probe can run up to 2 s past the persistence budget. This was accepted in review because D3 fixes the probe's bound and the outcomes remain contract-legal.
-  - D3 sets both the client timer and the `commit()` statement timeout from the same reserve, so a server-reported COMMIT timeout (row 5) is now rarely reachable; a COMMIT timeout presents as row 7. This is a consequence of the contract.
-  - The timing tolerances in the hold tests (±`SET_LOCAL_FLOOR_MS`) assume connection acquisition and timer latency stay under 100 ms.
+- **Summary:** The committed DW-26 change reserves `COMMIT_PROBE_BOUND_MS` from the COMMIT timer in shared `runAttempt` and probes under the full bound. This follow-up review added one assertion that the late-reply probe returns the pre-allocated document ID.
+- **Files changed in this pass:** `server/wikiLint/application/enforcedWrite.concurrency.test.ts` adds the probe-row assertion; this spec records the follow-up review and blocking condition. The deferred-work ledger was not changed by this run.
+- **Review findings:** 13 total: one low patch, four low findings, seven false findings, and two maybe-false findings; no medium or high findings and no deferred items. The single patched entry was the missing row 6 probe-result assertion. Rejected findings and reasons:
+  - Probe-start and connection-acquisition timing tolerance (two maybe-false): no delay above 100 ms was observed; the earlier review already rejected this low-if-real risk.
+  - Late reply settling (low): callbacks drain before release, and the extra check would cover an unlikely path already rejected in the first review.
+  - Scenario-matrix timing mismatch (low): this only calls for editing the build spec, which the review workflow rejects as a patch finding; the executable fixture uses consistent constants.
+  - Depleted P7 reserve (low): the prior review accepted the rare, contract-legal zero-timer outcome; a guard adds a branch.
+  - Ledger edit and temporary status mismatch (two false): the ledger change predates this run and is orchestrator bookkeeping; `in-review` was temporary during review.
+  - Direct timer capture and explicit fresh-connection assertion (two false): the timing tests detect a reverted timer, while `boundedRead` opens a fresh transaction and the pre-COMMIT hold exercises that boundary.
+  - HTML worker test coverage (false): the changed `runAttempt` is shared and the worker probe paths have existing tests.
+  - Ledger surface divergence and spec artifact (two false): the ledger is orchestrator-owned pre-existing state; the spec is the required build-auto hand-back artifact.
+- **Follow-up review recommendation:** `false`; this follow-up patched one low entry and no high entry.
+- **Verification:** `scripts/test-db.sh ensure` reported the test database ready. The COMMIT outcomes run passed 9/9 selected tests. The four targeted suites passed 202/202 tests. `corepack yarn tsc`, `oxlint --type-aware`, `oxfmt --check`, and `git diff --check` passed.
+- **Residual risks:** The previously recorded narrow zero-timer case and 100 ms timing tolerance remain. The orchestrator-owned dirty ledger blocks the workflow's clean-tree finalization gate.
 
 ## Verification
 
