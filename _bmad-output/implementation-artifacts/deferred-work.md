@@ -103,7 +103,8 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by DW-7 (commit 72e8f2ea6b4e346823f3def86965342b5aa159c4, closed by sweep commit dbc504b2c81b7c28a3bfd5e66188d39343960510); verified at HEAD in spec-dw-12-readme-metadata-bullets-and-spec-ac5.md. Closed by hand: a bundle with no change left cannot pass the sweep proof-of-work gate
 decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* ` bullets and add the Story 1.10 AC5 interpretation (canonical `* ` round-trips byte-identically; `- ` input lints clean) to the binding SPEC. Close DW-7 with the same change.
 decision: 2026-10-04 Apply README and SPEC reconciliation — Change the server/tools/README.md visible-metadata example to `* ` bullets and add the Story 1.10 AC5 interpretation (canonical `* ` round-trips byte-identically; `- ` input lints clean) to the binding SPEC. Close DW-7 with the same change.
 

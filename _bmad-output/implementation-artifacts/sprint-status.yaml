@@ -39,7 +39,7 @@
 #   2.4 AC3 -> 2.5.
 # - This file tracks planning state only; it does not authorize implementation.
 generated: 10-02-2026 01:33
-last_updated: 10-03-2026 03:26
+last_updated: 10-04-2026 06:20
 project: outline
 project_key: NOKEY
 tracking_system: file-system
@@ -89,7 +89,7 @@ action_items:
     action: "Change the README visible-metadata example to `* ` bullets and record
       the AC5 interpretation in the binding SPEC (DW-7)."
     owner: "Operator"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
   - id: "epic-1-retro-item-3-in-readwikisnapshot-re-check-collection"
     epic: 1
