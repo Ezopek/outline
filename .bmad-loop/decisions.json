@@ -71,6 +71,15 @@
     "label": "Add it to CLAUDE.md/AGENTS.md pitfalls",
     "resolution": ""
   },
+  "DW-33": {
+    "answered_at": "2026-10-04",
+    "bundle_name": "",
+    "effect": "build",
+    "intent": "Set epic-1 and epic-2 to done in _bmad-output/implementation-artifacts/sprint-status.yaml, and mark the corresponding sync action items done, with no other change.",
+    "key": "2",
+    "label": "Build: bundle edits sprint-status.yaml",
+    "resolution": ""
+  },
   "DW-7": {
     "answered_at": "2026-10-04",
     "bundle_name": "",
