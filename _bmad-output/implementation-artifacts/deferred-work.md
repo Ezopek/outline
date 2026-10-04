@@ -166,7 +166,9 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Operator; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-story-1-10-spec-change-log
+resolution-undo: b3cf22e4f7e5a9265278bd5f2a35aa9d2eadfb5f252acc93ae4c26b39a141d3c 2026-10-04 7374617475733a206f70656e
 decision: 2026-10-04 Backfill Story 1.10 Spec Change Log — Append dated entries to the Spec Change Log of _bmad-output/implementation-artifacts/spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md recording the AC5 bullet-marker interpretation and the stale Code Map statements (buildDocument/structure, rule-kind list), citing the Auto Run Result. Do not edit sprint-status.yaml; the operator sets epic-1 done with the sprint tooling.
 decision: 2026-10-04 Backfill Story 1.10 Spec Change Log — Append dated entries to the Spec Change Log of _bmad-output/implementation-artifacts/spec-1-10-accept-the-complete-read-only-lint-and-repair-loop.md recording the AC5 bullet-marker interpretation and the stale Code Map statements (buildDocument/structure, rule-kind list), citing the Auto Run Result. Do not edit sprint-status.yaml; the operator sets epic-1 done with the sprint tooling.
 
@@ -398,3 +400,11 @@ severity: medium
 reason: The installed bmad-loop engine.py `_refuse_gated_story` raises the PAUSE_STORY_GATE pause instead of dispatching a story that an unlanded ledger entry gates. It re-reads the ledger on every pick, and `bmad-loop validate` refuses the same story at preflight. No entry in deferred-work.md has a `gate:` line today. The DW-15 intent forbids ledger edits in this session. Adding a gate on DW-39 for Stories 3.3 and 3.4 through the orchestrator's sanctioned path would give the Story preconditions convention a mechanical stop. The gate releases only on `status: done`, which is stricter than the convention's settled-decision test.
 status: done 2026-10-04
 resolution: moot: DW-39 is decided and applied (Story 3.3 criterion 9), so no `gate:` line is needed to pause Stories 3-3 and 3-4
+
+### DW-44: The `publishedIn` JSDoc in the in-memory lint suite still says the built document "is not added to the collection structure", the same false claim the Story 1.10 Code Map carried.
+origin: spec-deferred 486d2a195a41
+location: server/tools/wikiLint.test.ts:2374
+source_spec: `spec-dw-18-story-1-10-spec-change-log.md`
+severity: low
+reason: server/tools/wikiLint.test.ts:2374 reads "@returns the document, which is not added to the collection structure". publishedIn calls buildDocument with a collectionId, so the document is published (server/test/factories.ts:412) and the @AfterCreate hook addDocumentToCollectionStructure adds it to the structure (server/models/Document.ts:520-539). DW-18 forbids code changes, so the comment stays as is; the Story 1.10 Spec Change Log entry records the corrected fact.
+status: open

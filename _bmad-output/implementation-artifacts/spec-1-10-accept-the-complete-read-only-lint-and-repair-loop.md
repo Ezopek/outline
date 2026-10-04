@@ -259,6 +259,46 @@ All rows are observed over HTTP `/mcp/` (`tools/list` or `tools/call`).
 
 ## Spec Change Log
 
+### 2026-10-04 — DW-18 backfill: AC5 bullet-marker interpretation
+- **Trigger:** DW-18, the operator decision of 2026-10-04 "Backfill Story 1.10 Spec Change Log", from Epic 1 retro F-3 and action item 8. The build meets epic AC5 (`epics.md` Story 1.10 AC5, which has no `- ` example and no byte-equality clause) and deviates only from this spec's stricter AC5 restatement, which uses `- ` bullets and requires byte-for-byte equality. This log stayed empty: the review rejected the spec edit, and the Auto Run Result lists "the AC5 marker claim (two findings)" under **Fix is a spec edit**. The deviation is recorded in the Auto Run Result, "Deviations and interpretations", **AC5 bullet markers**, and in these Review Triage Log rows, quoted verbatim:
+  - Edge Case Hunter row 6:
+
+    > `[low]` `[reject]` **Edge Case Hunter (claim):** AC5 promises a byte-for-byte round trip of `- ` bullets, but `fetch` returns `* `. — The only fix is an edit of this build's spec. The code meets epic AC5:
+    > - canonical metadata (`* `, Outline's only serialized bullet marker) round-trips byte-identical, with exact and stable coordinates;
+    > - `- ` input lints clean;
+    > - changing the serializer is forbidden;
+    > - `update_document` tells agents to copy `findText` verbatim from fetched Markdown.
+    >
+    > Grouped with Intent Alignment row 4.
+  - Intent Alignment row 4:
+
+    > `[low]` `[reject]` **Intent Alignment:** spec AC5 and the tests disagree. — Grouped with Edge Case Hunter row 6; rejected because the fix is a spec edit.
+- **Recorded:**
+  - On v1.10.1, a plain bullet list serializes with `* ` markers: the `bullet_list` node has no marker attribute, so `BulletList.toMarkdown` falls back to `*`. The serializer is unchanged, because the production diff is registration only and changing the serializer is forbidden.
+  - The "round trip" test in `server/routes/mcp/wikiLint.test.ts`, "keeps canonical visible metadata byte-identical and its Finding positions exact", shows:
+    - **Clean documents.** The `- ` input is fetched as `METADATA`, one tight list of `* ` bullets. `METADATA` itself is fetched byte-identical. Both lint `complete` and `clean`, so neither has a Finding.
+    - **Invalid-date document.** `INVALID_DATE` is `METADATA` with `Last verified: 2026-13-01`, in the same canonical form. It is fetched byte-identical and yields `METADATA_FIELD_FORMAT_INVALID` at line 4, column 18. Its `update_document` `replace` re-save keeps that location, and the whole lint result, byte-identical.
+  - Canonical `* ` metadata therefore round-trips byte-identical with stable coordinates, and `- ` input lints clean and converges to the canonical `* ` form. AC5's literal byte equality for `- ` input does not hold.
+  - The binding interpretation is the DW-7 bullet in `_bmad-output/specs/spec-outline-mcp-wiki-linting/SPEC.md` `## Constraints` that defines canonical visible metadata and calls itself "the binding interpretation of Story 1.10 AC5 in `epics.md`". This entry supersedes AC5's `- ` example of canonical visible metadata and its byte-equality clause for `- ` input to match that bullet, and adds no rule.
+- **Not amended:** AC5 stays as written, with its `- ` example and byte-for-byte clause; read it through this entry and the `SPEC.md` bullet. The frontmatter, Code Map, Review Triage Log and Auto Run Result are unchanged.
+
+### 2026-10-04 — DW-18 backfill: stale Code Map statements
+- **Trigger:** DW-18, the same operator decision. Two Code Map statements are wrong, and the review rejected their correction as "an edit of this build's spec"; the Auto Run Result lists "stale Spec Change Log and Code Map" under **Fix is a spec edit**. Each correction has its own source:
+  - the Auto Run Result, "Deviations and interpretations", **Code Map correction**, covers only `buildDocument`;
+  - Blind Hunter row 6 is the only review row that names the rule-kind list as stale. Quoted verbatim:
+
+    > `[low]` `[reject]` **Blind Hunter:** the Spec Change Log is empty while deviations reinterpret AC5 and AC6, and Code Map statements are stale (`buildDocument` and the structure; the rule-kind list). — Its fix is an edit of this build's spec. The deviations are recorded in the Auto Run Result.
+
+    Its AC5 part is the preceding entry. Its AC6 part stays out of this backfill, because the DW-18 decision names only AC5 and the Code Map, and the review rows on it (Blind Hunter row 7, Intent Alignment row 5) are `[false]`, AD-14 by design.
+- **Recorded:**
+  - **`buildDocument` and the structure.** The "In-memory suite" bullet's hierarchy fixtures say "`buildDocument` does not add to the structure". That is wrong for a published document in a collection. Source: the Auto Run Result **Code Map correction** note, confirmed in `server/test/factories.ts` and `server/models/Document.ts`, both unchanged from the baseline `877dab7d9ab8abc792d5e679683a7291d98d6088` through `21a4ecafe3ec6e05dbcc0703d30049f6b1fca5e0`, and in the repair-loop test that the story commit `5fc8bb4989b24e390bea7aa4285c950ff06e1cf7` added:
+    - `server/test/factories.ts:412` defaults `publishedAt` to now unless `collectionId` is null. A `publishedAt` override wins, because `...overrides` is spread after it.
+    - When `buildDocument` builds the collection itself (`collectionId` undefined) and `publishedAt` is not overridden to null, `server/test/factories.ts:423-431` also calls `addDocumentToStructure`.
+    - The `@AfterCreate` hook `addDocumentToCollectionStructure` (`server/models/Document.ts:520-539`) adds the repair-loop fixture's published document, which has a collection and no parent, to the structure.
+    - The repair-loop fixture passes `collectionId` (`buildCollectionOf`), so only the hook applies. The test "repairs every Error of its batch within three rounds and keeps the Warning" therefore removes document D explicitly: it calls `removeDocumentInStructure(orphan)` before `restart` and the first lint.
+  - **Rule-kind list.** The "Policy schema v1" bullet names 10 rule kinds and leaves out `section_order`, `allowed_heading_levels` and `unsupported_markdown_structures`. Source: Blind Hunter row 6 and the registry. `ruleKinds` in `server/wikiLint/core/registry.ts` held 13 kinds at the story commit `5fc8bb4989b24e390bea7aa4285c950ff06e1cf7` (`:346`, unchanged from the baseline) and still holds the same 13 at `21a4ecafe3ec6e05dbcc0703d30049f6b1fca5e0` (`:367`). The registry, not that list, is authoritative.
+- **Not amended:** the Code Map stays as written. This entry supersedes its `buildDocument` and rule-kind statements without replacing them. The frontmatter, AC5, Review Triage Log and Auto Run Result are unchanged.
+
 ## Review Triage Log
 
 ### 2026-10-02 — Review pass
