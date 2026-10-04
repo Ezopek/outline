@@ -3,7 +3,9 @@ origin: spec-deferred 07c92c8bfe2c
 location: server/wikiLint/adapters/canonicalSyntax.ts:74
 source_spec: `spec-1-1-establish-the-deterministic-result-contract-and-closed-rule.md`
 reason: server/wikiLint/adapters/canonicalSyntax.ts blockPosition throws CanonicalMarkdownError for a whitespace-only start line, while unmapped blocks degrade to position null. No canonical (serializer-produced) input reaching this path has been found. Settle it by finding a toCanonicalMarkdown output whose block token map starts on a blank line; if one exists, return position null instead of throwing.
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-canonical-block-blank-line-position
+resolution-undo: 9cbb805e46e2013917b77310b2fd2ffaceb169bd9ef92ca30ab62f597b46b5a7 2026-10-04 7374617475733a206f70656e
 
 ### DW-2: Repeated missing-item Findings (REQUIRED_SECTION_MISSING, REQUIRED_METADATA_FIELD_MISSING) are byte-identical, so an agent cannot tell which configured section or field to add.
 origin: spec-deferred d3b4850f196c

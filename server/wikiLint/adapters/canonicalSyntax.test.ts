@@ -1,5 +1,5 @@
 import type Token from "markdown-it/lib/token.mjs";
-import { Node } from "prosemirror-model";
+import { Node, Schema } from "prosemirror-model";
 import type { JSONObject, ProsemirrorData } from "@shared/types";
 import { parser, schema } from "@server/editor";
 import { Document } from "@server/models";
@@ -806,45 +806,104 @@ describe("canonical block start lines", () => {
     ],
   };
 
+  /**
+   * Block types the legacy notice fixtures place inside a notice. Production
+   * loads stored content without `check()`, so notice content the current
+   * schema rejects still reaches the serializer.
+   */
+  const legacyNoticeTypes = [
+    "code_block",
+    "code_fence",
+    "container_notice",
+    "container_toggle",
+    "embed",
+    "math_block",
+    "table",
+    "video",
+  ];
+
+  /** The server schema with the former `block+` notice content. */
+  const legacySchema = new Schema({
+    nodes: schema.spec.nodes.update("container_notice", {
+      ...schema.spec.nodes.get("container_notice"),
+      content: "block+",
+    }),
+    marks: schema.spec.marks,
+  });
+
   it("maps every serialized block to a line with content", async () => {
-    const fixtures: [string, Blocks][] = [];
+    const fixtures: [string, Blocks, boolean][] = [];
     for (const [outer, wrap] of Object.entries(containers)) {
       for (const [first, leaf] of Object.entries(leaves)) {
-        fixtures.push([`${outer}(${first})`, wrap([leaf])]);
+        fixtures.push([`${outer}(${first})`, wrap([leaf]), false]);
         for (const [second, next] of Object.entries(leaves)) {
-          fixtures.push([`${outer}(${first}, ${second})`, wrap([leaf, next])]);
+          fixtures.push([
+            `${outer}(${first}, ${second})`,
+            wrap([leaf, next]),
+            false,
+          ]);
         }
         for (const [inner, wrapInner] of Object.entries(containers)) {
           fixtures.push([
             `${outer}(${inner}(${first}))`,
             wrap(wrapInner([leaf])),
+            false,
           ]);
           fixtures.push([
             `${outer}(${inner}(${first}), after)`,
             wrap([...wrapInner([leaf]), paragraph("after")]),
+            false,
+          ]);
+        }
+        if (legacyNoticeTypes.includes(String(leaf.type))) {
+          fixtures.push([
+            `${outer}(legacy notice(${first}))`,
+            wrap([{ type: "container_notice", content: [leaf] }]),
+            true,
+          ]);
+          fixtures.push([
+            `${outer}(legacy notice(${first}, after))`,
+            wrap([
+              {
+                type: "container_notice",
+                content: [leaf, paragraph("after")],
+              },
+            ]),
+            true,
           ]);
         }
       }
     }
 
     const seen = new Set<string>();
+    const legacySeen = new Set<string>();
     const failures: string[] = [];
-    for (const [name, content] of fixtures) {
+    for (const [name, content, legacy] of fixtures) {
       const data: ProsemirrorData = { type: "doc", content };
       let doc: Node;
       try {
-        doc = Node.fromJSON(schema, data);
+        // Legacy fixtures may break only the current notice content rule;
+        // the serializer loads every fixture with `fromJSON` and no `check()`.
+        doc = Node.fromJSON(legacy ? legacySchema : schema, data);
         doc.check();
       } catch {
-        // The sweep covers only content the current schema accepts.
+        // Any other combination the schema rejects is skipped.
         continue;
       }
-      seen.add(doc.type.name);
-      doc.descendants((node) => {
-        if (!node.isInline) {
-          seen.add(node.type.name);
-        }
-      });
+      if (legacy) {
+        doc.descendants((node) => {
+          if (node.type.name === "container_notice") {
+            node.forEach((child) => legacySeen.add(child.type.name));
+          }
+        });
+      } else {
+        seen.add(doc.type.name);
+        doc.descendants((node) => {
+          if (!node.isInline) {
+            seen.add(node.type.name);
+          }
+        });
+      }
 
       let markdown = "";
       try {
@@ -862,6 +921,7 @@ describe("canonical block start lines", () => {
         .map((type) => type.name)
         .sort()
     );
+    expect([...legacySeen]).toEqual(expect.arrayContaining(legacyNoticeTypes));
   });
 });
 
