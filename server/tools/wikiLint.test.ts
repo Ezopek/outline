@@ -79,6 +79,10 @@ const server = getTestServer();
 
 const OPERATION_FAILED = "The operation could not be completed";
 
+/** A lowercase version 4 UUID, as `randomUUID` returns it. */
+const UUID_V4 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 const sha256Hex = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
 
@@ -185,6 +189,21 @@ async function connect(
   clients.push(client);
   return client;
 }
+
+/**
+ * Builds the context of a direct tool call, as the `/mcp` route fills it.
+ *
+ * @param user - the actor.
+ * @returns the context.
+ */
+const contextOf = (user: User) => ({
+  authInfo: {
+    token: "",
+    clientId: "",
+    scopes: [],
+    extra: { user, requestId: randomUUID(), credentialAuthType: "api" },
+  },
+});
 
 /**
  * Calls `lint_document`.
@@ -3507,21 +3526,6 @@ describe("audit summary", () => {
     return { result, ids };
   }
 
-  /**
-   * Builds the context of a direct tool call, as the `/mcp` route fills it.
-   *
-   * @param user - the actor.
-   * @returns the context.
-   */
-  const contextOf = (user: User) => ({
-    authInfo: {
-      token: "",
-      clientId: "",
-      scopes: [],
-      extra: { user, requestId: randomUUID(), credentialAuthType: "api" },
-    },
-  });
-
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -4510,9 +4514,7 @@ describe("audit summary", () => {
         expect(diagnostics(warn)).toStrictEqual([
           {
             requestId: context.authInfo.extra.requestId,
-            invocationId: expect.stringMatching(
-              /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-            ),
+            invocationId: expect.stringMatching(UUID_V4),
             reason,
           },
         ]);
@@ -4545,5 +4547,374 @@ describe("audit summary", () => {
         String((event as { name?: unknown }).name).startsWith("wikiLint.")
       )
     ).toEqual([]);
+  });
+});
+
+describe("operator log", () => {
+  const DOCUMENT_FAILED = "lint_document failed without a lint result";
+  const WIKI_FAILED = "lint_wiki failed without a lint result";
+  const MARKER = "Wombat failure marker";
+
+  /** A lookup failure only these tests throw. */
+  class LookupFailure extends Error {}
+
+  /** A clock failure only these tests throw. */
+  class ClockFailure extends Error {}
+
+  const FAILED_RESULT = {
+    content: [{ type: "text", text: OPERATION_FAILED }],
+    isError: true,
+  };
+
+  /** A clock whose every reading throws. */
+  const throwingClock: MonotonicClock = () => {
+    throw new ClockFailure(MARKER);
+  };
+
+  /**
+   * Silences `Logger.warn` and spies on it.
+   *
+   * @returns the spy.
+   */
+  const silencedWarn = () =>
+    vi.spyOn(Logger, "warn").mockImplementation(() => undefined);
+
+  /**
+   * Returns the logged failures without a lint result.
+   *
+   * @param warn - the `Logger.warn` spy.
+   * @returns the calls, as message and extra.
+   */
+  const failuresLogged = (warn: { mock: { calls: unknown[][] } }) =>
+    warn.mock.calls.filter(
+      ([message]) => message === DOCUMENT_FAILED || message === WIKI_FAILED
+    );
+
+  /**
+   * Returns the invocation IDs of logged failures.
+   *
+   * @param logged - the logged calls.
+   * @returns the invocation IDs.
+   */
+  const invocationIdsOf = (logged: unknown[][]) =>
+    logged.map(
+      ([, extra]) => (extra as { invocationId: unknown }).invocationId
+    );
+
+  it("logs a document lookup failure with only the correlation and the error class", async () => {
+    const user = await buildUser();
+    const context = contextOf(user);
+    const warn = silencedWarn();
+
+    const result = await lintDocumentTool({ id: randomUUID() }, context, {
+      policySet: policySetFor({}),
+      reader: {
+        ...defaultLintDocumentReader,
+        authorizeLintTarget: () => Promise.reject(new LookupFailure(MARKER)),
+      },
+    });
+
+    expect(result).toStrictEqual(FAILED_RESULT);
+    const logged = failuresLogged(warn);
+    expect(logged).toStrictEqual([
+      [
+        DOCUMENT_FAILED,
+        {
+          requestId: context.authInfo.extra.requestId,
+          invocationId: expect.stringMatching(UUID_V4),
+          errorClass: "LookupFailure",
+        },
+      ],
+    ]);
+    expect(invocationIdsOf(logged)).not.toContain(
+      context.authInfo.extra.requestId
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
+  });
+
+  it("logs a failure caught by the lint_document shell", async () => {
+    const user = await buildUser();
+    const context = contextOf(user);
+    const warn = silencedWarn();
+
+    const result = await lintDocumentTool({ id: randomUUID() }, context, {
+      policySet: policySetFor({}),
+      clock: throwingClock,
+    });
+
+    expect(result).toStrictEqual(FAILED_RESULT);
+    expect(failuresLogged(warn)).toStrictEqual([
+      [
+        DOCUMENT_FAILED,
+        {
+          requestId: context.authInfo.extra.requestId,
+          invocationId: expect.stringMatching(UUID_V4),
+          errorClass: "ClockFailure",
+        },
+      ],
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
+  });
+
+  it("logs no error class for a failure that is not an Error", async () => {
+    const user = await buildUser();
+    const context = contextOf(user);
+    const warn = silencedWarn();
+
+    const result = await lintDocumentTool({ id: randomUUID() }, context, {
+      policySet: policySetFor({}),
+      reader: {
+        ...defaultLintDocumentReader,
+        authorizeLintTarget: () => Promise.reject(MARKER),
+      },
+    });
+
+    expect(result).toStrictEqual(FAILED_RESULT);
+    expect(failuresLogged(warn)).toStrictEqual([
+      [
+        DOCUMENT_FAILED,
+        {
+          requestId: context.authInfo.extra.requestId,
+          invocationId: expect.stringMatching(UUID_V4),
+        },
+      ],
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
+  });
+
+  it("logs a collection lookup failure with only the correlation and the error class", async () => {
+    const user = await buildUser();
+    const context = contextOf(user);
+    const warn = silencedWarn();
+
+    const result = await lintWikiTool({ collectionId: randomUUID() }, context, {
+      policySet: policySetFor({}),
+      reader: {
+        ...defaultLintWikiReader,
+        authorizeLintCollection: () =>
+          Promise.reject(new LookupFailure(MARKER)),
+      },
+    });
+
+    expect(result).toStrictEqual(FAILED_RESULT);
+    const logged = failuresLogged(warn);
+    expect(logged).toStrictEqual([
+      [
+        WIKI_FAILED,
+        {
+          requestId: context.authInfo.extra.requestId,
+          invocationId: expect.stringMatching(UUID_V4),
+          errorClass: "LookupFailure",
+        },
+      ],
+    ]);
+    expect(invocationIdsOf(logged)).not.toContain(
+      context.authInfo.extra.requestId
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
+  });
+
+  it("logs a contract violation by its class name only", async () => {
+    const { user, collection } = await buildFixture({ text: CLEAN_MARKDOWN });
+    const context = contextOf(user);
+    const warn = silencedWarn();
+
+    const result = await lintWikiTool(
+      { collectionId: collection.id },
+      context,
+      {
+        policySet: policySetFor({ [collection.id]: structurePolicy }),
+        reader: {
+          ...defaultLintWikiReader,
+          readWikiSnapshot: async (): Promise<WikiSnapshotRead> => ({
+            ok: true,
+            snapshot: {
+              collections: [
+                { collectionId: randomUUID(), documents: [], graph: null },
+              ],
+              sentinelCollectionIds: [],
+              targets: new Map(),
+            },
+          }),
+        },
+      }
+    );
+
+    expect(result).toStrictEqual(FAILED_RESULT);
+    expect(failuresLogged(warn)).toStrictEqual([
+      [
+        WIKI_FAILED,
+        {
+          requestId: context.authInfo.extra.requestId,
+          invocationId: expect.stringMatching(UUID_V4),
+          errorClass: "WikiLintContractError",
+        },
+      ],
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(collection.id);
+  });
+
+  it.each([
+    ["an invalid", { requestId: "not-a-request-id" }],
+    ["an absent", {}],
+  ])("logs no request ID for %s request ID", async (_name, attribution) => {
+    const user = await buildUser();
+    const context = {
+      authInfo: {
+        token: "",
+        clientId: "",
+        scopes: [],
+        extra: { user, credentialAuthType: "api", ...attribution },
+      },
+    };
+    const dependencies = {
+      policySet: policySetFor({}),
+      clock: throwingClock,
+    };
+    const warn = silencedWarn();
+
+    const results = [
+      await lintDocumentTool({ id: randomUUID() }, context, dependencies),
+      await lintWikiTool({}, context, dependencies),
+    ];
+
+    expect(results).toStrictEqual([FAILED_RESULT, FAILED_RESULT]);
+    expect(failuresLogged(warn)).toStrictEqual(
+      [DOCUMENT_FAILED, WIKI_FAILED].map((message) => [
+        message,
+        {
+          requestId: undefined,
+          invocationId: expect.stringMatching(UUID_V4),
+          errorClass: "ClockFailure",
+        },
+      ])
+    );
+  });
+
+  it("returns the fixed failure message when the log throws", async () => {
+    const user = await buildUser();
+    const dependencies = {
+      policySet: policySetFor({}),
+      clock: throwingClock,
+    };
+    const contexts = [contextOf(user), contextOf(user)];
+    const warn = vi.spyOn(Logger, "warn").mockImplementation(() => {
+      throw new Error("logger failure");
+    });
+
+    const results = [
+      await lintDocumentTool({ id: randomUUID() }, contexts[0], dependencies),
+      await lintWikiTool({}, contexts[1], dependencies),
+    ];
+
+    expect(results).toStrictEqual([FAILED_RESULT, FAILED_RESULT]);
+    expect(failuresLogged(warn)).toStrictEqual(
+      [DOCUMENT_FAILED, WIKI_FAILED].map((message, index) => [
+        message,
+        {
+          requestId: contexts[index].authInfo.extra.requestId,
+          invocationId: expect.stringMatching(UUID_V4),
+          errorClass: "ClockFailure",
+        },
+      ])
+    );
+  });
+
+  it("logs a fresh invocation ID for each failing call", async () => {
+    const user = await buildUser();
+    const context = contextOf(user);
+    const dependencies = {
+      policySet: policySetFor({}),
+      clock: throwingClock,
+    };
+    const id = randomUUID();
+    const warn = silencedWarn();
+
+    const results = [
+      await lintDocumentTool({ id }, context, dependencies),
+      await lintDocumentTool({ id }, context, dependencies),
+    ];
+
+    expect(results).toStrictEqual([FAILED_RESULT, FAILED_RESULT]);
+    const logged = failuresLogged(warn);
+    const extra = {
+      requestId: context.authInfo.extra.requestId,
+      invocationId: expect.stringMatching(UUID_V4),
+      errorClass: "ClockFailure",
+    };
+    expect(logged).toStrictEqual([
+      [DOCUMENT_FAILED, extra],
+      [DOCUMENT_FAILED, extra],
+    ]);
+    expect(
+      new Set([context.authInfo.extra.requestId, ...invocationIdsOf(logged)])
+        .size
+    ).toBe(3);
+  });
+
+  it("logs nothing for a modeled outcome", async () => {
+    const { user, collection, document } = await buildFixture({
+      text: CLEAN_MARKDOWN,
+    });
+    const policySet = policySetFor({ [collection.id]: structurePolicy });
+    const warn = silencedWarn();
+
+    const denied = [
+      await lintDocumentTool({ id: randomUUID() }, contextOf(user), {
+        policySet,
+      }),
+      await lintWikiTool({ collectionId: randomUUID() }, contextOf(user), {
+        policySet,
+      }),
+    ];
+    const runtimeFailure = await lintWikiTool(
+      { collectionId: collection.id },
+      contextOf(user),
+      {
+        policySet,
+        reader: {
+          ...defaultLintWikiReader,
+          readWikiSnapshot: async () => {
+            throw new Error(MARKER);
+          },
+        },
+      }
+    );
+    const documentFailure = await lintDocumentTool(
+      { id: document.id },
+      contextOf(user),
+      {
+        policySet,
+        reader: {
+          ...defaultLintDocumentReader,
+          readDocumentSnapshot: async () => {
+            throw new Error(MARKER);
+          },
+        },
+      }
+    );
+    const clean = await lintDocumentTool({ id: document.id }, contextOf(user), {
+      policySet,
+    });
+
+    expect(denied).toStrictEqual(
+      denied.map(() => ({
+        content: [{ type: "text", text: "Authorization error" }],
+        isError: true,
+      }))
+    );
+    for (const result of [runtimeFailure, documentFailure]) {
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstText(result))).toMatchObject({
+        state: "failed",
+        systemFailures: [{ code: "VALIDATION_RUNTIME_FAILED" }],
+      });
+    }
+    expect(clean.isError).toBeUndefined();
+    expect(JSON.parse(firstText(clean))).toMatchObject({
+      state: "complete",
+      clean: true,
+    });
+    expect(failuresLogged(warn)).toStrictEqual([]);
   });
 });

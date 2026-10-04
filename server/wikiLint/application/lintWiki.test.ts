@@ -525,7 +525,10 @@ describe("collection scope", () => {
   ])("fails when %s", async (_name, error) => {
     const reader = fakeReader(error);
 
-    await expect(run(reader, STRUCTURE)).resolves.toEqual({ kind: "failed" });
+    const outcome = await run(reader, STRUCTURE);
+
+    expect(outcome).toStrictEqual({ kind: "failed", cause: error });
+    expect(outcome.kind === "failed" && outcome.cause).toBe(error);
     expect(reader.readWikiSnapshot).not.toHaveBeenCalled();
   });
 

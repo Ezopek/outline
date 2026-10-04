@@ -326,9 +326,13 @@ describe("lintDocument", () => {
     });
 
     it("fails without a result when the pre-snapshot steps throw", async () => {
-      const reader = fakeReader(new DeadlineFloorError());
+      const cause = new DeadlineFloorError();
+      const reader = fakeReader(cause);
 
-      await expect(lint(reader)).resolves.toEqual({ kind: "failed" });
+      const outcome = await lint(reader);
+
+      expect(outcome).toStrictEqual({ kind: "failed", cause });
+      expect(outcome.kind === "failed" && outcome.cause).toBe(cause);
       expect(reader.readDocumentSnapshot).not.toHaveBeenCalled();
     });
   });

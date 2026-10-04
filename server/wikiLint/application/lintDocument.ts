@@ -80,7 +80,14 @@ export type LintDocumentOutcome =
       auditPolicy?: PolicyIdentity;
     }
   | { kind: "denied" }
-  | { kind: "failed" };
+  | {
+      kind: "failed";
+      /**
+       * The failure that left no lint result. It is for the operator log
+       * only and never enters the tool result.
+       */
+      cause: unknown;
+    };
 
 /**
  * Builds a document scope, with zero counts by default.
@@ -183,8 +190,8 @@ export async function lintDocument(input: {
   let target: LintTarget | null;
   try {
     target = await reader.authorizeLintTarget({ id, actor, deadline });
-  } catch {
-    return { kind: "failed" };
+  } catch (cause) {
+    return { kind: "failed", cause };
   }
   if (!target) {
     return { kind: "denied" };

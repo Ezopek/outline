@@ -178,7 +178,9 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 1; owner Dev agent; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-read-surface-failure-logging
+resolution-undo: 63b400bfd07bf01845c12d58858fa8e38e8e1e60ec66e59199f87fa182e6e07d 2026-10-04 7374617475733a206f70656e
 decision: 2026-10-04 Build read-surface logging now — In the lint_document and lint_wiki shells (server/wikiLint/application/lintDocument.ts, lintWiki.ts, server/tools/wikiLint.ts), log each unmodellable failure that maps to the fixed message or a tool-execution error with only invocationId/requestId and the error class name, never message, stack, content or identifiers; add collocated tests asserting the exact log fields. Write-path rows are left to DW-9 after Story 2.7.
 decision: 2026-10-04 Build read-surface logging now — In the lint_document and lint_wiki shells (server/wikiLint/application/lintDocument.ts, lintWiki.ts, server/tools/wikiLint.ts), log each unmodellable failure that maps to the fixed message or a tool-execution error with only invocationId/requestId and the error class name, never message, stack, content or identifiers; add collocated tests asserting the exact log fields. Write-path rows are left to DW-9 after Story 2.7.
 

@@ -1355,11 +1355,11 @@ describe("results", () => {
   });
 
   it.each([
-    ["a timeout", () => new DeadlineFloorError()],
-    ["any other error", () => new Error("raw detail")],
+    ["a timeout", () => new DeadlineFloorError(), "DeadlineFloorError"],
+    ["any other error", () => new Error("raw detail"), "Error"],
   ])(
     "returns the fixed failure message when the target lookup fails with %s",
-    async (_name, failure) => {
+    async (_name, failure, errorClass) => {
       const user = await buildUser();
       const {
         collection,
@@ -1375,6 +1375,7 @@ describe("results", () => {
         defaultLintWikiReader,
         "authorizeLintCollection"
       ).mockRejectedValue(failure());
+      const warn = vi.spyOn(Logger, "warn").mockImplementation(() => undefined);
 
       for (const [name, args] of [
         ["lint_document", { id: document.id }],
@@ -1387,6 +1388,22 @@ describe("results", () => {
           isError: true,
         });
       }
+      const messages = [
+        "lint_document failed without a lint result",
+        "lint_wiki failed without a lint result",
+      ];
+      expect(
+        warn.mock.calls.filter(([message]) => messages.includes(message))
+      ).toStrictEqual(
+        messages.map((message) => [
+          message,
+          {
+            requestId: expect.stringMatching(UUID_PATTERN),
+            invocationId: expect.stringMatching(UUID_PATTERN),
+            errorClass,
+          },
+        ])
+      );
     }
   );
 

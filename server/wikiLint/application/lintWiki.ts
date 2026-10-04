@@ -248,8 +248,8 @@ export async function lintWiki(input: {
         actor,
         deadline,
       });
-    } catch {
-      return { kind: "failed" };
+    } catch (cause) {
+      return { kind: "failed", cause };
     }
     if (collectionId === null) {
       return { kind: "denied" };

@@ -6,6 +6,7 @@ import { z } from "zod";
 import AuthenticationHelper from "@shared/helpers/AuthenticationHelper";
 import env from "@server/env";
 import { AuthorizationError } from "@server/errors";
+import Logger from "@server/logging/Logger";
 import { getPolicySet } from "@server/wikiLint/adapters/policyConfig";
 import { lintWikiAdmission } from "@server/wikiLint/application/admission";
 import {
@@ -27,8 +28,9 @@ import {
   defaultLintWikiReader,
   lintWiki,
 } from "@server/wikiLint/application/lintWiki";
+import type { ReadOperation } from "@server/wikiLint/application/readAudit";
 import { recordReadAudit } from "@server/wikiLint/application/readAudit";
-import { OPERATION_FAILED } from "@server/wikiLint/core/registry";
+import { OPERATION_FAILED, UUID_PATTERN } from "@server/wikiLint/core/registry";
 import {
   error,
   getActorFromContext,
@@ -54,26 +56,67 @@ export const lintWikiInputSchema = {
 };
 
 /**
+ * Ends a call that failed without a lint result: logs it once for the
+ * operator with only the correlation and the failure's class name, and
+ * returns the fixed failure message. A logging failure is ignored.
+ *
+ * @param operation - the lint operation.
+ * @param context - the MCP request context; only its request ID is logged,
+ *   and only when it is a valid UUID.
+ * @param invocationId - the invocation ID.
+ * @param cause - the failure; its class name is logged only for an `Error`.
+ * @returns the fixed failure message as an `isError` result.
+ */
+function failedWithoutResult(
+  operation: ReadOperation,
+  context: { authInfo?: AuthInfo },
+  invocationId: string,
+  cause: unknown
+): CallToolResult {
+  try {
+    const candidate = context.authInfo?.extra?.requestId;
+    Logger.warn(`${operation} failed without a lint result`, {
+      requestId:
+        typeof candidate === "string" && UUID_PATTERN.test(candidate)
+          ? candidate
+          : undefined,
+      invocationId,
+      ...(cause instanceof Error && { errorClass: cause.constructor.name }),
+    });
+  } catch {
+    // The diagnostic never changes the tool result.
+  }
+  return error(OPERATION_FAILED);
+}
+
+/**
  * Converts a lint outcome to a tool result.
  *
  * @param outcome - the outcome.
+ * @param failed - ends the call for a failure that cannot be modeled as a
+ *   result.
  * @returns the lint result, or an `isError` result for a denied or missing
  *   target and for a failure that cannot be modeled as a result.
  */
-function toolResult(outcome: LintDocumentOutcome): CallToolResult {
+function toolResult(
+  outcome: LintDocumentOutcome,
+  failed: (cause: unknown) => CallToolResult
+): CallToolResult {
   switch (outcome.kind) {
     case "result":
       return success(outcome.result);
     case "denied":
       return error(AuthorizationError());
     default:
-      return error(OPERATION_FAILED);
+      return failed(outcome.cause);
   }
 }
 
 /**
  * Handles a `lint_document` call; `wikiLintTools` registers it. A lint result
- * is audited before it is returned; the audit never changes it.
+ * is audited before it is returned; the audit never changes it. A failure
+ * that cannot be modeled as a result is logged with only the correlation and
+ * the failure's class name.
  *
  * @param input - the validated input.
  * @param context - the MCP request context carrying the authenticated user.
@@ -86,8 +129,10 @@ export async function lintDocumentTool(
   context: { authInfo?: AuthInfo },
   dependencies: LintDocumentDependencies = {}
 ): Promise<CallToolResult> {
+  const invocationId = randomUUID();
+  const failed = (cause: unknown) =>
+    failedWithoutResult("lint_document", context, invocationId, cause);
   try {
-    const invocationId = randomUUID();
     const clock = dependencies.clock ?? monotonicClock;
     // The deadline takes the handler's first clock reading.
     const deadline = new Deadline(LINT_DOCUMENT_DEADLINE_MS, clock);
@@ -114,16 +159,18 @@ export async function lintDocumentTool(
         dependencies.writeAudit
       );
     }
-    return toolResult(outcome);
-  } catch {
-    return error(OPERATION_FAILED);
+    return toolResult(outcome, failed);
+  } catch (cause) {
+    return failed(cause);
   }
 }
 
 /**
  * Handles a `lint_wiki` call; `wikiLintTools` registers it. The call holds
  * the per-process scan slot from its admission until it returns, so also
- * while its lint result is audited; the audit never changes the result.
+ * while its lint result is audited; the audit never changes the result. A
+ * failure that cannot be modeled as a result is logged with only the
+ * correlation and the failure's class name.
  *
  * @param input - the validated input; an omitted collection selects every
  *   readable configured collection.
@@ -137,9 +184,11 @@ export async function lintWikiTool(
   context: { authInfo?: AuthInfo },
   dependencies: LintWikiDependencies = {}
 ): Promise<CallToolResult> {
+  const invocationId = randomUUID();
+  const failed = (cause: unknown) =>
+    failedWithoutResult("lint_wiki", context, invocationId, cause);
   const lease = lintWikiAdmission.lease();
   try {
-    const invocationId = randomUUID();
     const clock = dependencies.clock ?? monotonicClock;
     // The deadline takes the handler's first clock reading.
     const deadline = new Deadline(LINT_WIKI_DEADLINE_MS, clock);
@@ -167,9 +216,9 @@ export async function lintWikiTool(
         dependencies.writeAudit
       );
     }
-    return toolResult(outcome);
-  } catch {
-    return error(OPERATION_FAILED);
+    return toolResult(outcome, failed);
+  } catch (cause) {
+    return failed(cause);
   } finally {
     lease.release();
   }
