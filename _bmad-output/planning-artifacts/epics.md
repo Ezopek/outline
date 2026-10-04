@@ -1186,7 +1186,7 @@ AD: AD-1, AD-2, AD-5–AD-9, AD-11–AD-13, AD-17, AD-18, AD-20
    **And** a fail-open decision followed by such an abort returns no `degraded_validation` and records runtime fail-open as not exercised.
 
 9. **Given** the P8 commit
-   **When** `commit()` runs under a wall-clock timer equal to the remaining persistence budget, with the P7 and `commit()` statement timeouts set from that budget less the 2-second probe reserve, and the shell never reads `transaction.finished`
+   **When** `commit()` runs under a wall-clock timer equal to the remaining persistence budget less the 2-second probe reserve, so a commit timeout still leaves the probe its full bound, with the P7 and `commit()` statement timeouts set from that budget less the same reserve, and the shell never reads `transaction.finished`
    **Then** expiry of the `commit()` timer counts as a connection-level rejection, and any rejection triggers one probe on a fresh connection in a short transaction with `SET LOCAL statement_timeout` at the 2-second probe bound, acquisition included, whose own timer expiry means the probe cannot run: the pre-allocated `documentId` with `paranoid: false` for a create, or the writer's mutation Event by `documentId`, event `name`, and `createdAt` since the transaction started, filtered for this attempt's `validationCorrelationId`, for an update, publication, or unpublication
    **And** a found row is row 6, a missing row after a server-reported error (one produced from a PostgreSQL ErrorResponse whose `parent` carries the server `severity` and SQLSTATE `code`) is row 5, and a missing row after any other, connection-level error, or a probe that cannot run, is row 7: a Tool-Execution Error with the fixed generic message, no `validation`, no claim about persistence, and no request-path summary.
 
@@ -1310,12 +1310,13 @@ AD: AD-1, AD-2, AD-7, AD-8, AD-11–AD-15, AD-18, AD-20
 3. **Given** a requester waiting for an enforced HTML job
    **When** the outcome is determined
    **Then** the requester writes a summary only for an outcome it determines before calling `queue.add` (row 3, deleting the requester-staged source content itself), treats any error from `queue.add` and any result without the `EnforcedImportResult` shape as row 7 with no requester summary, and waits for the job result until `deadlineAt`, stopping earlier only on MCP cancellation or client disconnect, which it reports as row 7 while the job may still commit
-   **And** before reporting `aborted`, `rejected`, `conflict`, or no result, it probes the pre-allocated `documentId` once, and the probe and any summary read it triggers form a single read with no retry under the one 2-second probe bound, reporting a found row as `committed` from a committed summary (criterion 5) or as row 7 when no committed summary exists.
+   **And** before reporting `aborted`, `rejected`, `conflict`, or no result, it probes the pre-allocated `documentId` once, and the probe and any summary read it triggers form a single read with no retry under the one 2-second probe bound, reporting a found row as `committed` from a committed summary (criterion 5) or as row 7 when no committed summary exists, and a probe that cannot run or cannot be bounded as row 7.
 
 4. **Given** an enforced job received by the worker
    **When** processing begins
    **Then** the worker first looks up the pre-allocated `documentId` and returns a row found before the attempt has done any work as `committed` through `committedFromSummary`, without re-authorization, fingerprint comparison, or storage read; otherwise it reloads the actor, re-authorizes the destination, checks the AD-8 collection change (the `conflict` result), compares the current policy fingerprint, where a mismatch for any worker-time state (`read_only`, absent, or invalid) is `POLICY_CONFIGURATION_INVALID` and never fail-open, and only then converts, stages, and opens the AD-8 transaction
-   **And** after acquiring the collection lock, and again before returning or summarizing any non-committed outcome (rows 2, 3, 4, 5), it repeats the lookup, converts a found row to `committedFromSummary`, and writes no summary for a converted attempt.
+   **And** after acquiring the collection lock, and again before returning or summarizing any non-committed outcome (rows 2, 3, 4, 5), it repeats the lookup, converts a found row to `committedFromSummary`, and writes no summary for a converted attempt
+   **And** the first lookup, or a lookup repeated before a non-committed outcome, that cannot run or cannot be bounded means the outcome cannot be established: the attempt ends in row 7 with no committed or failed claim, writes no summary, and retains the staged source.
 
 5. **Given** a found committed row
    **When** `committedFromSummary(invocationId)` resolves it
@@ -1325,7 +1326,7 @@ AD: AD-1, AD-2, AD-7, AD-8, AD-11–AD-15, AD-18, AD-20
 6. **Given** any worker outcome
    **When** the job returns
    **Then** it returns exactly `{ kind: "committed", documentId, validation } | { kind: "rejected", validation } | { kind: "conflict" } | { kind: "aborted", row: 3 | 5, message }`, where `conflict` is row 2 and the requester emits the `collection_conflict` Tool-Execution Error without a summary, and `message` follows the AD-20 message rule
-   **And** the worker catches every exception raised by its own code and returns `aborted` by phase, so only a process crash, stall, queue failure, or a COMMIT whose outcome cannot be established reaches the requester as no result (row 7).
+   **And** the worker catches every exception raised by its own code and returns `aborted` by phase, so only a process crash, stall, queue failure, or a COMMIT or commit-detection lookup whose outcome cannot be established (criterion 4) reaches the requester as no result (row 7).
 
 7. **Given** `deadlineAt`, set at classification to the 30-second preparation bound plus the 9-second validation deadline, the 9-second persistence budget, the 3-second audit bound, and a fixed 5-second grace
    **When** the worker runs
@@ -1335,6 +1336,7 @@ AD: AD-1, AD-2, AD-7, AD-8, AD-11–AD-15, AD-18, AD-20
 8. **Given** the worker transaction
    **When** it persists
    **Then** the AD-8 collection lock serializes the persist steps of two live attempts for one `documentId`, a unique violation of the pre-allocated `documentId` after the attempt's own persist decision returns that attempt's own `validation` as `committed` rather than row 5, and a successful commit persists the exact validated projection and returns `committed` with the document ID and the exact structured `validation`
+   **And** when the commit-detection probe that follows the attempt's own rejected `commit()` finds the pre-allocated `documentId`, the worker may return that attempt's own `validation` as `committed` (row 6) only when the found row's title and `text` equal the title and `text` of this attempt's exact validated projection, and otherwise resolves the row through `committedFromSummary`
    **And** an attempt whose `commit()` rejected discards its buffered `afterCommit` callbacks because its probe cannot distinguish its own row from another attempt's.
 
 9. **Given** the worker as the sole owner of evaluation, the AD-13 decision, the commit, and the audit summary for an enforced HTML create
@@ -1390,7 +1392,7 @@ AD: AD-7, AD-8, AD-11, AD-18, AD-20
 
 5. **Given** requester-staged HTML source content
    **When** the invocation ends
-   **Then** the requester deletes it before `queue.add` on a requester-determined row 3, the worker otherwise deletes it when it returns a terminal outcome (`committed`, `rejected`, `conflict`, or `aborted`) after its repeated lookup, the baseline conversion code's own delete is disabled for the enforced task, and row 7 leaves it
+   **Then** the requester deletes it before `queue.add` on a requester-determined row 3, the worker otherwise deletes it when it returns a terminal outcome (`committed`, `rejected`, `conflict`, or `aborted`) after its repeated lookup, the baseline conversion code's own delete is disabled for the enforced task, and row 7 leaves it, a source so retained that no later attempt consumes being an accepted orphan residual with no cleanup owner
    **And** an attempt whose input is gone is row 3, and the stager refuses new blobs after its phase bound or once cleanup has begun.
 
 6. **Given** worker retry before commit or replay after commit-before-acknowledgement under the same `invocationId`
