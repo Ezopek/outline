@@ -1,0 +1,39 @@
+# Project overlay of bmad-loop's packaged `codex` profile.
+# A project profile REPLACES the packaged one (no field merge), so this is a full copy of
+# bmad_loop/data/profiles/codex.toml (bmad-loop 0.13.1) plus ONE addition: `launch_args`.
+#
+# Why `--no-daemon`: Codex runs sessions through a shared, long-lived app-server. Its
+# environment is frozen at whichever client started it first, so once ANY other Codex
+# (an interactive session, a remote-control, an IDE extension) has started it, the loop's
+# review session attaches to it and its hooks run without BMAD_LOOP_RUN_DIR / BMAD_LOOP_TASK_ID.
+# `bmad-loop relay` then exits silently, no SessionStart/Stop events arrive, and the loop waits
+# on a finished review. `--no-daemon` gives the session its own environment regardless of what
+# else is running. Verified 2026-10-04 with a live shared server: without the flag no event was
+# written, with it SessionStart and Stop were. `launch_args` is used because `validate` rejects
+# any Codex `extra_args` except the bypass flag ("hook trust unverifiable"); `launch_args` is
+# not subject to that check.
+#
+# After a bmad-loop upgrade, diff this file against the packaged profile and re-copy.
+# OpenAI Codex CLI (>= 0.139). Slash commands are NOT expanded when passed as
+# the initial prompt argument; the $skill-name mention syntax attaches the
+# skill instead (skills live in .agents/skills/) — live-verified 2026-06-11.
+# "use subagents as needed" is required or Codex runs the skill's parallel
+# phases (e.g. review layers) without spawning subagents. Codex has no
+# SessionEnd hook event — the adapter's window-death fallback covers crashes.
+name = "codex"
+binary = "codex"
+launch_args = ["--no-daemon"]
+prompt_template = "Use the ${skill} skill now, and use subagents as needed: {args}"
+bypass_args = ["--dangerously-bypass-approvals-and-sandbox"]
+model_flag = "--model"
+usage_parser = "codex-rollout"
+first_run_note = "run `codex` once in the project and accept BOTH prompts: workspace trust, then 'Hooks need review' -> 'Trust all and continue' (untrusted hooks silently never fire); requires Codex >= 0.139"
+skill_tree = ".agents/skills"
+# Project-scoped Codex config (MCP servers under [mcp_servers]) — gitignored, so
+# a worktree checkout omits it and isolated sessions lose their MCP servers.
+seed_files = [".codex/config.toml"]
+
+[hooks]
+dialect = "codex-hooks-json"
+config_path = ".codex/hooks.json"
+events = { SessionStart = "SessionStart", Stop = "Stop" }

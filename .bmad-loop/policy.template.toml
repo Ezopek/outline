@@ -7,7 +7,10 @@
 #   1. cp .bmad-loop/policy.template.toml .bmad-loop/policy.toml
 #   2. Run `codex` once in the repository and accept the workspace-trust and "Hooks need review"
 #      prompts (trust is per machine; the review adapter below is Codex).
-#   3. Run `bmad-loop validate` and fix anything it reports.
+#   3. Run `bmad-loop validate` and fix anything it reports. One FAIL is expected and harmless:
+#      `hooks.trust ... project-owned Codex profile` appears because .bmad-loop/profiles/codex.toml
+#      (tracked) overrides the packaged Codex profile; the engine skips that check for in-place
+#      runs (`scm.isolation = "none"`). A worktree-isolation setup would need a different approach.
 #   4. Adjust [mux] and [tui] for that machine; both are left at their defaults here.
 #
 # Security note: both adapters run unattended without approval prompts. The Claude stages use
@@ -34,6 +37,16 @@
 #   limits                      session_timeout_min 150 (Story 1.1 used 87.7 of 90); token caps raised from
 #                               2M/4M to 10M/8M because every Epic 1 story exceeded the old story cap.
 #   [plugins.tea]               present as a comment only; not enabled.
+#   on_timeout = "defer"        a timeout-like review verdict ends the bundle at once. "retry" re-ran the review
+#                               on a spec the first review had already set to blocked (about 2.4M tokens lost),
+#                               and "salvage-if-done" could commit work without a finished review.
+#   scm.rollback_on_failure     true: a stopped attempt (for example a process killed under memory pressure)
+#                               is reverted automatically instead of leaving manual recovery steps. It discards
+#                               that attempt's uncommitted work.
+#   Codex profile overlay       .bmad-loop/profiles/codex.toml adds `launch_args = ["--no-daemon"]`. Codex runs
+#                               through a shared app-server whose environment is frozen by whichever Codex
+#                               client started it first; if any other Codex is open, the loop's review loses its
+#                               hooks and hangs after it finishes. See the header of that file.
 # Re-measure the limits after the first Epic 2 story.
 
 # bmad-loop orchestration policy. All keys optional; defaults shown.
@@ -98,7 +111,7 @@ trigger = "always"
 #   "salvage-if-done" -> if the dev product is already finalized and verify passes,
 #                        commit it and refile the outstanding follow-up to deferred work.
 #   "defer"           -> give up on the first timeout-like verdict.
-on_timeout = "retry"
+on_timeout = "defer"
 # What a review that writes sprint-status back off `done` (the sign-off the
 # orchestrator recorded at dev time) costs. Nothing in the review loop
 # re-advances the board, so every remaining cycle re-reads the same failure:
@@ -183,7 +196,7 @@ target_branch = ""           # "" = the branch checked out at run start
 merge_strategy = "merge"     # ff | merge | squash (worktree mode merges the unit branch into target locally)
 delete_branch = true         # delete the unit branch after a successful merge
 keep_failed = true           # keep a failed unit's worktree+branch for inspection
-rollback_on_failure = false  # in-place (isolation="none") recovery after a failed attempt. false = never touch the tree; pause with manual recovery steps. true = auto-revert the attempt's tracked changes + remove only the untracked files this run created (WARNING: discards the attempt's uncommitted work; never a blanket git clean). Governs unattended/stopped attempts only: a resolved escalation's re-drive always auto-recovers regardless (reverts the failed source, keeps the corrected spec). Prefer isolation="worktree" to avoid touching your main checkout.
+rollback_on_failure = true  # in-place (isolation="none") recovery after a failed attempt. false = never touch the tree; pause with manual recovery steps. true = auto-revert the attempt's tracked changes + remove only the untracked files this run created (WARNING: discards the attempt's uncommitted work; never a blanket git clean). Governs unattended/stopped attempts only: a resolved escalation's re-drive always auto-recovers regardless (reverts the failed source, keeps the corrected spec). Prefer isolation="worktree" to avoid touching your main checkout.
 preserve_keep = 20           # attempt-preserve/* branches and attempt-preserve-dirty/* snapshots kept at run start (per family), newest by committer date; the tail is deleted (0 = never prune)
 failed_diff_max_mb = 5       # per-file size cap (MB) for untracked files in a kept-failed unit's changes.patch; oversized files are skipped with a marker
 failed_diff_unlimited = false # true = capture the failed-unit diff with no size cap (may produce very large patches; warns when active)
