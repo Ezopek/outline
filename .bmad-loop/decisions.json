@@ -44,6 +44,15 @@
     "label": "Build read-surface logging now",
     "resolution": ""
   },
+  "DW-25": {
+    "answered_at": "2026-10-04",
+    "bundle_name": "",
+    "effect": "keep-open",
+    "intent": "",
+    "key": "3",
+    "label": "Keep open for the Gate 1 review",
+    "resolution": ""
+  },
   "DW-7": {
     "answered_at": "2026-10-04",
     "bundle_name": "",
