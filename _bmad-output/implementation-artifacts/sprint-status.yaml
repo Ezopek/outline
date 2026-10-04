@@ -39,7 +39,7 @@
 #   2.4 AC3 -> 2.5.
 # - This file tracks planning state only; it does not authorize implementation.
 generated: 10-02-2026 01:33
-last_updated: 10-04-2026 06:20
+last_updated: 10-04-2026 12:59
 project: outline
 project_key: NOKEY
 tracking_system: file-system
@@ -67,7 +67,7 @@ development_status:
   2-5-carry-enforced-html-projection-through-a-distinct-trusted-wo: done
   2-6-materialize-staged-media-without-visible-partial-effects: done
   2-7-record-correlated-and-failure-isolated-write-validation-audi: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   epic-3: backlog
   3-1-verify-safe-startup-and-readiness-policy-identity: backlog
@@ -148,3 +148,73 @@ action_items:
     owner: "Dev agent"
     status: open
     ref: "_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md"
+  - id: "epic-2-retro-item-11-decide-the-unavailable-probe-rule-for-th"
+    epic: 2
+    action: "Decide the unavailable-probe rule for the HTML worker finish/first lookup
+      and requester (spine analogue: row 7, source retained), record it in the Story
+      2.5 contract and spine, then implement with tests that fail finish probe (F-1)."
+    owner: "Operator with the architect, then Dev agent"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
+  - id: "epic-2-retro-item-12-restore-the-story-2-5-spec-with-its-bloc"
+    epic: 2
+    action: "Restore the Story 2.5 spec (with its blocked follow-up review) from .bmad-loop/archive/20261003-130833-8009
+      and run one completed independent review of the 2.5 code (F-2)."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
+  - id: "epic-2-retro-item-13-reserve-commit_probe_bound_ms-out-of-the"
+    epic: 2
+    action: "Reserve COMMIT_PROBE_BOUND_MS out of the COMMIT timeout in runAttempt
+      so a commit timeout can still probe; add a commit-timeout test (F-6)."
+    owner: "Dev agent"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
+  - id: "epic-2-retro-item-14-close-staged-blob-leaks-delete-a-late-la"
+    epic: 2
+    action: "Close staged-blob leaks: delete a late-landing requester source and the
+      media blob when Attachment validation fails (F-7)."
+    owner: "Dev agent"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
+  - id: "epic-2-retro-item-15-add-tests-for-worker-row-2-4-5-committed"
+    epic: 2
+    action: "Add tests for worker row 2/4/5 committedFromSummary conversion and HTML-with-media
+      failure rows and summaries (F-12)."
+    owner: "Dev agent"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
+  - id: "epic-2-retro-item-16-pin-one-reproducible-broad-verification"
+    epic: 2
+    action: "Pin one reproducible broad verification command (--maxWorkers=2 or raised
+      test PostgreSQL connection limit) for Epic 3 conformance evidence (F-13)."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
+  - id: "epic-2-retro-item-17-fold-the-worker-post-commit-tail-and-cro"
+    epic: 2
+    action: "Fold the worker post-commit tail and cross-host clock-skew budget into
+      Story 3.3 constant-derivation evidence (F-8, F-9)."
+    owner: "Dev agent"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
+  - id: "epic-2-retro-item-18-reconcile-architecture-spine-md-118-with"
+    epic: 2
+    action: "Reconcile ARCHITECTURE-SPINE.md:118 with the HTML worker probe-established
+      row 6: fix or record an accepted deviation (F-3)."
+    owner: "Operator with the architect"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
+  - id: "epic-2-retro-item-19-never-mark-a-loop-deferred-story-done-by"
+    epic: 2
+    action: "Never mark a loop-deferred story done by hand without moving its open
+      review findings into deferred-work.md (F-2)."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
+  - id: "epic-2-retro-item-20-sync-tracking-set-epic-2-and-epic-1-to-d"
+    epic: 2
+    action: "Sync tracking: set epic-2 (and epic-1) to done in sprint-status.yaml."
+    owner: "Operator"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md"
