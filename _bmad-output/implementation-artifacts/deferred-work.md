@@ -234,7 +234,9 @@ location: n/a
 source_spec: `_bmad-output/implementation-artifacts/epic-2-retro-2026-10-04.md`
 severity: low
 reason: retrospective action item from sprint-status.yaml (epic 2; owner Dev agent; sprint-status status open)
-status: open
+status: done 2026-10-04
+resolution: resolved by sweep bundle dw-commit-timer-probe-reserve
+resolution-undo: ba069c1faf00d707aa94650750c27422aa94ccb5a1e6fdcb182cd39593da5ac3 2026-10-04 7374617475733a206f70656e
 
 ### DW-27: Close staged-blob leaks: delete a late-landing requester source and the media blob when Attachment validation fails (F-7).
 origin: retro action item epic-2-retro-item-14-close-staged-blob-leaks-delete-a-late-la

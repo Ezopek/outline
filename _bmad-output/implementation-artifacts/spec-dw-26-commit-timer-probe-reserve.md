@@ -2,8 +2,8 @@
 title: 'DW-26: Reserve the commit-probe bound out of the COMMIT timer'
 type: 'bugfix'
 created: '2026-10-04'
-baseline_revision: 821b3c3f5b8b3fbaa1541a4edb28116ecd2fe503
-status: 'blocked'
+baseline_revision: a5d069c3236d22f3bc15c018c519d7f567346211
+status: done
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
@@ -27,6 +27,7 @@ deferred: []
 - The COMMIT timer is computed without throwing. `within` clamps a non-positive timer to 0.
 - `CommitTimeoutError` stays connection-level.
 - The new tests follow the file's conventions: `state.clock` offset, `interceptQueries`, and `commitFixture`.
+- The work is already committed on the branch. A modified `deferred-work.md` is the orchestrator's own pending ledger transaction, not this bundle's change; it does not fail the clean-tree gate. Finalize without staging, editing, reverting or committing it.
 
 **Never:**
 - Do not use `persistence.batchTimeoutMs(...)` for the COMMIT timer. A `DeadlineFloorError` thrown at P8 would escape the attempt.
@@ -111,25 +112,54 @@ All rows assume a persistence remainder of about 2300 ms at P7 entry, so the COM
   - `[false]` `[reject]` Intent Alignment: the diff includes a deferred-work ledger edit. — The edit is the orchestrator's pre-existing working-tree change, not an edit made or committed by this build; the user explicitly owns its status outside this review.
   - `[false]` `[reject]` Intent Alignment: adding the spec artifact diverges from the requested code and test surfaces. — The invoked build-auto workflow uses the spec as its required hand-back artifact; the implementation and tests remain on the requested surfaces.
 
+### 2026-10-04 — Review pass
+- verdicts: 23 findings — high 0, medium 0, low 10, false 13, maybe-false 0
+- findings:
+  - `[low]` `[reject]` Blind Hunter: the re-drive baseline `a5d069c32` already contains `f74e992b7` and `d14b2c08e`, so this pass's diff has no code; AC2's "baseline code" and the Verification line's "two changed files" now read against the wrong range. — Real: this pass's diff holds only the spec and the ledger. The code was reviewed in the two logged passes above, and this run re-verified it at HEAD (202/202, matrix audit, and a temporary revert to `821b3c3f5` that failed both hold tests). The only fix is to edit this build's spec, so it is rejected.
+  - `[false]` `[reject]` Blind Hunter: Finalize step 1 commits every reviewed-diff file, so it would commit the ledger the new bullet forbids. — `AGENTS.md:51` (via `CLAUDE.md`) outranks the workflow and carves the orchestrator's ledger out of both the commit and the clean-tree gate. Finalization commits only this spec by path, so neither the commit nor a dirty-tree HALT happens.
+  - `[false]` `[reject]` Blind Hunter: the ledger is already staged, so a plain `git add`/`git commit` would put it into the story commit. — Finalization runs `git commit --only` with this spec's path, which leaves the staged ledger in the index and out of the commit.
+  - `[false]` `[reject]` Blind Hunter: deleting `## Auto Run Result` loses the only record of the earlier verification and residual risks. — That section is committed at `a5d069c32` (line 114 of the spec there), and this pass's Auto Run Result below restates the verification and carries the residual risks forward.
+  - `[low]` `[reject]` Blind Hunter: the resume left no Spec Change Log entry for the status reset, baseline move and new intent-contract bullet. — Real gap in the spec's own trail; the resolution is recorded in the run journal (`story-escalation-resolved`) and commit `a5d069c32`. The only fix edits this build's spec.
+  - `[low]` `[reject]` Blind Hunter: the I/O matrix still says about 2300 ms and a 300 ms timer while the test leaves the reserve plus 500 ms. — Carried: the follow-up pass rejected this because its only fix edits this build's spec; `enforcedWrite.concurrency.test.ts:606` still uses `COMMIT_PROBE_BOUND_MS + 500`.
+  - `[low]` `[reject]` Blind Hunter: the ledger closes DW-26 but `sprint-status.yaml` keeps `epic-2-retro-item-13-…` at `status: open`. — Real (`sprint-status.yaml:166-171`). The intent assigns resolution recording to the orchestrator, and the board is synced by hand (`2be325614`), so it is out of scope for this build.
+  - `[low]` `[reject]` Blind Hunter: the new intent-contract bullet restates the `AGENTS.md:51` rule in different words and can go stale. — The duplication is real, but the only fix edits this build's spec (or agent-context files).
+  - `[low]` `[reject]` Blind Hunter: the ledger resolution names neither the fix commits nor the spec, and says `done` while the spec is in review. — The ledger format and timing belong to the orchestrator's transaction, which the intent excludes from this build; the commits carry `(DW-26)` in their subjects, and the `resolution-undo` line covers a reversal.
+  - `[low]` `[reject]` Edge Case Hunter: recapturing `baseline_revision` at HEAD drops `enforcedWrite.ts` and its test from this pass's diff. — Same root cause and evidence as the first Blind Hunter row; the fix edits this build's spec.
+  - `[false]` `[reject]` Edge Case Hunter: Finalize must commit every reviewed-diff file and the ledger is in the diff, so finalization breaks the bullet or HALTs dirty. — Same refutation as the second Blind Hunter row: the project rule carves the ledger out, and finalization commits only the spec.
+  - `[false]` `[reject]` Edge Case Hunter: the ledger is staged, so a plain commit would include it. — Same refutation as the third Blind Hunter row: the commit is made with `--only` and this spec's path.
+  - `[low]` `[reject]` Edge Case Hunter: the clean-tree exemption would also hide a forbidden ledger edit made by the build itself. — Did not happen here: the ledger's index and working-tree blob `3d7b278e4` equal the pre-run snapshot `refs/attempt-preserve-dirty/20261004-131900-aa0c-a5d069c3-0`. A hash-recording guard adds new workflow state for an unlikely case.
+  - `[false]` `[reject]` Edge Case Hunter: at baseline `a5d069c32` the fix is already present, so AC2's claim that the tests fail on the baseline code looks falsified. — AC2 defines its "baseline code" in the same sentence as the code whose timer equals the whole remainder. This run checked it against `821b3c3f5`'s `enforcedWrite.ts`: row 1 failed with `expected NaN to be greater than 1900` and row 2 returned row 7.
+  - `[false]` `[reject]` Verification Gap (other): the staged ledger would enter the story commit under a plain `git commit`. — Same refutation as the third Blind Hunter row.
+  - `[false]` `[reject]` Intent Alignment: the diff touches only BMAD files, not the code and test surfaces the intent targets. — The intent's P8 change and tests are committed in `f74e992b7` and `d14b2c08e`, before this re-drive's baseline, and were re-verified at HEAD in this run.
+  - `[low]` `[reject]` Intent Alignment: moving `baseline_revision` past the implementation commits leaves it outside the diff's range. — Same root cause and evidence as the first Blind Hunter row.
+  - `[false]` `[reject]` Intent Alignment: the ledger hunk contradicts "Do NOT edit the deferred-work ledger". — Carried: the edit is the orchestrator's pre-existing change; this run's ledger blob equals the pre-run snapshot.
+  - `[false]` `[reject]` Intent Alignment: no timeout ends in row 5, and the server-side COMMIT `statement_timeout` path is untested. — Carried: a wall-clock timer expiry is connection-level (AD-20, Story 2.3 AC9), so its absent-row outcome is row 7.
+  - `[false]` `[reject]` Intent Alignment: the late-reply row 6 test goes beyond the literal "row 5 or row 7". — AD-20 maps a present row after a rejected COMMIT to row 6; the intent's "as AD-20 specifies" includes that outcome, and the row 7 test covers the absent case.
+  - `[false]` `[reject]` Intent Alignment: update, publish, unpublish and the HTML worker are not covered by the new tests. — Carried: the changed lines are path-independent, and those probe paths already have tests.
+  - `[low]` `[reject]` Intent Alignment: the I/O matrix assumes about 2300 ms while the test leaves the reserve plus 500 ms. — Carried: same as the matrix row above.
+  - `[false]` `[reject]` Intent Alignment: "full probe bound" is checked as a range, not equality. — `boundedRead` derives `statement_timeout` from a `Deadline(boundMs)` after connection acquisition, so an exact 2000 ms is not observable; the range (above `COMMIT_PROBE_BOUND_MS - SET_LOCAL_FLOOR_MS`, at most `COMMIT_PROBE_BOUND_MS`) is the AC as written.
+
+### 2026-10-04 — Follow-up review pass
+- verdicts: 7 findings — high 0, medium 0, low 6, false 1, maybe-false 0
+- findings:
+  - `[low]` `[reject]` Blind Hunter: this pass removes the prior Auto Run Result without a replacement in the staged diff. — The removal is real at review time; the Finalize step writes this pass's result below. Its fix edits this build's spec, so it is rejected as a review repair.
+  - `[low]` `[reject]` Blind Hunter: the baseline excludes the two implementation commits, leaving no code or test change in this pass's diff. — Carried: `f74e992b7` and `d14b2c08e` precede `a5d069c32`; the earlier passes reviewed those commits and this pass verifies the committed code. Changing the baseline edits this build's spec.
+  - `[low]` `[reject]` Blind Hunter: the I/O matrix says about 2300 ms and a 300 ms timer, while the test uses the reserve plus 500 ms. — Carried: the helper uses `COMMIT_PROBE_BOUND_MS + 500` consistently; correcting the prose edits this build's spec.
+  - `[low]` `[reject]` Blind Hunter: the DW-26 ledger entry is done while the linked sprint row remains open. — Carried: the two records currently differ, but both are orchestrator-owned bookkeeping. The operator explicitly forbids changing either here, and neither proves verification.
+  - `[low]` `[reject]` Blind Hunter: the Spec Change Log does not record the re-drive's baseline, status and intent-contract changes. — Carried: the gap is real, but the repair edits this build's spec; the run journal and commit `a5d069c32` provide the provenance.
+  - `[low]` `[reject]` Intent Alignment: this diff shows documentation rather than the runtime change and DB-backed tests required by the feature reading. — Carried: the runtime change and tests are committed in `f74e992b7` and `d14b2c08e`, before this pass's baseline; the follow-up reading matches this pass. Changing the review range edits this build's spec.
+  - `[false]` `[reject]` Intent Alignment: the ledger hunk in this diff means this build edited an orchestrator-owned entry. — The ledger change was staged before this run, and this run neither edited nor staged it. The diff alone does not identify its author; the working-tree evidence and the explicit ownership rule do.
+
 ## Auto Run Result
 
-Status: blocked
-Blocking condition: Finalization requires a clean working tree, but the orchestrator-owned deferred-work ledger has a pre-existing uncommitted change. This run neither edited nor staged that ledger. The orchestrator must resolve its own working-tree change before a clean-tree finalization can be asserted.
+Status: done
 
-- **Summary:** The committed DW-26 change reserves `COMMIT_PROBE_BOUND_MS` from the COMMIT timer in shared `runAttempt` and probes under the full bound. This follow-up review added one assertion that the late-reply probe returns the pre-allocated document ID.
-- **Files changed in this pass:** `server/wikiLint/application/enforcedWrite.concurrency.test.ts` adds the probe-row assertion; this spec records the follow-up review and blocking condition. The deferred-work ledger was not changed by this run.
-- **Review findings:** 13 total: one low patch, four low findings, seven false findings, and two maybe-false findings; no medium or high findings and no deferred items. The single patched entry was the missing row 6 probe-result assertion. Rejected findings and reasons:
-  - Probe-start and connection-acquisition timing tolerance (two maybe-false): no delay above 100 ms was observed; the earlier review already rejected this low-if-real risk.
-  - Late reply settling (low): callbacks drain before release, and the extra check would cover an unlikely path already rejected in the first review.
-  - Scenario-matrix timing mismatch (low): this only calls for editing the build spec, which the review workflow rejects as a patch finding; the executable fixture uses consistent constants.
-  - Depleted P7 reserve (low): the prior review accepted the rare, contract-legal zero-timer outcome; a guard adds a branch.
-  - Ledger edit and temporary status mismatch (two false): the ledger change predates this run and is orchestrator bookkeeping; `in-review` was temporary during review.
-  - Direct timer capture and explicit fresh-connection assertion (two false): the timing tests detect a reverted timer, while `boundedRead` opens a fresh transaction and the pre-COMMIT hold exercises that boundary.
-  - HTML worker test coverage (false): the changed `runAttempt` is shared and the worker probe paths have existing tests.
-  - Ledger surface divergence and spec artifact (two false): the ledger is orchestrator-owned pre-existing state; the spec is the required build-auto hand-back artifact.
-- **Follow-up review recommendation:** `false`; this follow-up patched one low entry and no high entry.
-- **Verification:** `scripts/test-db.sh ensure` reported the test database ready. The COMMIT outcomes run passed 9/9 selected tests. The four targeted suites passed 202/202 tests. `corepack yarn tsc`, `oxlint --type-aware`, `oxfmt --check`, and `git diff --check` passed.
-- **Residual risks:** The previously recorded narrow zero-timer case and 100 ms timing tolerance remain. The orchestrator-owned dirty ledger blocks the workflow's clean-tree finalization gate.
+- **Summary:** Follow-up review of the already committed DW-26 fix found no new implementation defect. The shared `runAttempt` reserves `COMMIT_PROBE_BOUND_MS` from COMMIT's timer, then gives the probe its full bound. The absent-row and landed-but-late COMMIT cases are covered by DB-backed tests.
+- **Files changed in this pass:** this spec only, for the follow-up triage and result. The implementation and tests remain in `f74e992b7` and `d14b2c08e`: `server/wikiLint/application/enforcedWrite.ts` changes the P8 timer and probe bound; `server/wikiLint/application/enforcedWrite.concurrency.test.ts` covers both timeout outcomes. The orchestrator-owned ledger and sprint board were not edited or staged by this run.
+- **Review findings:** 7 total: high 0, medium 0, low 6, false 1, maybe-false 0. Patched entries: high 0, medium 0, low 0. Deferred entries: 0. All findings were rejected for the reasons recorded in the triage log above: the missing result is supplied by this Finalize step; the moved baseline and the intent auditor's documentation-only observation describe a follow-up diff after the implementation commits; the matrix timing prose and empty Spec Change Log require edits to this build's spec; the board and ledger statuses are orchestrator bookkeeping; and the ledger hunk predates this run rather than showing a build edit.
+- **Follow-up review recommendation:** `false`; this pass applied no patches.
+- **Verification:** `scripts/test-db.sh ensure` reported `outline-test ready`. The four targeted Vitest files passed 202/202 tests. `corepack yarn tsc`, targeted `oxlint --type-aware`, targeted `oxfmt --check`, and `git diff --check` exited 0. `git fetch --prune` succeeded; HEAD was 78 commits ahead of and 0 behind its upstream before this spec finalization.
+- **Residual risks:** The pre-existing 100 ms tolerance in the probe-start assertions could be sensitive to a heavily loaded CI. The I/O matrix's illustrative timing differs from the test helper's 500 ms timer. A slow final P7 `SET LOCAL` pair can leave a 0 ms COMMIT timer; the resulting outcome remains within the documented contract. The branch's unpushed commits are a portability gap for a fresh clone.
 
 ## Verification
 
