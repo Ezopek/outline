@@ -884,6 +884,78 @@ describe("collection scope", () => {
       scope: { evaluatedDocumentCount: 0, evaluatedLinkCount: 0 },
     });
   });
+
+  /**
+   * Builds a reader of three clean STRUCTURE documents.
+   *
+   * @returns the reader.
+   */
+  const threeDocuments = () =>
+    fakeReader(
+      STRUCTURE,
+      snapshotRead([
+        collectionOf(STRUCTURE, [
+          documentOf(DOC_1, CLEAN),
+          documentOf(DOC_2, CLEAN),
+          documentOf(DOC_3, CLEAN),
+        ]),
+      ])
+    );
+
+  /**
+   * Lets every unit record its document, and the first unit schedule a
+   * macrotask that records its own mark and then runs the given step.
+   *
+   * @param marks - the marks to record into.
+   * @param step - what the macrotask does after recording.
+   */
+  function scheduleDuringFirstUnit(marks: string[], step = () => {}) {
+    const spy = vi.mocked(evaluateDocumentRules);
+    const actual = spy.getMockImplementation() as typeof evaluateDocumentRules;
+    spy.mockImplementation((input) => {
+      marks.push(input.documentId);
+      if (marks.length === 1) {
+        setImmediate(() => {
+          marks.push("callback");
+          step();
+        });
+      }
+      return actual(input);
+    });
+  }
+
+  it("yields to the event loop between units", async () => {
+    const marks: string[] = [];
+    scheduleDuringFirstUnit(marks);
+
+    await resultOf(threeDocuments(), STRUCTURE);
+
+    expect(marks).toEqual([DOC_1, "callback", DOC_2, DOC_3]);
+  });
+
+  it("stops when the margin is crossed while it yields", async () => {
+    scheduleDuringFirstUnit([], () => {
+      now = PAST_MARGIN;
+    });
+
+    await expect(resultOf(threeDocuments(), STRUCTURE)).resolves.toStrictEqual({
+      state: "incomplete",
+      complete: false,
+      clean: false,
+      errors: [],
+      warnings: [],
+      systemFailures: [failure("VALIDATION_TIMEOUT", cs(STRUCTURE))],
+      scope: {
+        kind: "collection",
+        collectionId: STRUCTURE,
+        evaluatedDocumentCount: 1,
+        evaluatedLinkCount: 0,
+        completedChecks: [],
+      },
+      policies: [identityOf(STRUCTURE)],
+    });
+    expect(evaluateDocumentRules).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("default scope", () => {

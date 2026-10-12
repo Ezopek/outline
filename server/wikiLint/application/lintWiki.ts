@@ -192,7 +192,8 @@ export function wikiUnits(
  * with `VALIDATION_RESOURCE_LIMIT_EXCEEDED`, as does a snapshot that exceeds
  * a resource limit. Units run in the AD-11 order, and none starts once less
  * than `LINT_WIKI_STOP_MARGIN_MS` remains: the finished units are kept, and
- * one run-wide `VALIDATION_TIMEOUT` is added.
+ * one run-wide `VALIDATION_TIMEOUT` is added. The loop yields to the event
+ * loop before each unit, so the stop margin is checked after the yield.
  *
  * @param input.collectionId - the requested collection identifier, or
  *   undefined for the default scope.
@@ -455,6 +456,7 @@ export async function lintWiki(input: {
   let completedUnits = 0;
   let stopped = false;
   for (const { collection, check, document } of units) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
     if (deadline.remainingMs() < LINT_WIKI_STOP_MARGIN_MS) {
       stopped = true;
       break;
