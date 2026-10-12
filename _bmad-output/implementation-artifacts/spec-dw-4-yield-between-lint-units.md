@@ -3,7 +3,7 @@ title: 'DW-4: Yield to the event loop between lint_wiki units'
 type: 'bugfix'
 created: '2026-10-12'
 baseline_revision: 'f60c3e6284853cda47a140d2d30e4c2778b9da00'
-status: 'ready-for-dev'
+status: 'in-progress'
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
