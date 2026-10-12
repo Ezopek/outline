@@ -69,7 +69,7 @@ development_status:
   2-7-record-correlated-and-failure-isolated-write-validation-audi: done
   epic-2-retrospective: done
 
-  dw-4-yield-between-lint-units: in-progress
+  dw-4-yield-between-lint-units: done
 
   epic-3: backlog
   3-1-verify-safe-startup-and-readiness-policy-identity: backlog

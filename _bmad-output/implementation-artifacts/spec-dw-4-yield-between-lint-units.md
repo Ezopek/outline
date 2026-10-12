@@ -3,7 +3,7 @@ title: 'DW-4: Yield to the event loop between lint_wiki units'
 type: 'bugfix'
 created: '2026-10-12'
 baseline_revision: 'f60c3e6284853cda47a140d2d30e4c2778b9da00'
-status: 'in-progress'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
@@ -63,3 +63,11 @@ deferred: []
 - Given the margin row, when `lintWiki` runs, then the result has `completedUnits` 1 and `requiredUnits` 3, the issues of unit 1 (if any) and exactly one `VALIDATION_TIMEOUT` System Failure, and `evaluateDocumentRules` was called once.
 - Given the baseline loop (no yield), when the two new tests run, then both fail (the callback's mark comes last; all three units are evaluated), so the tests detect DW-4.
 - Given `corepack yarn tsc`, `node_modules/.bin/oxlint --type-aware server shared`, `node_modules/.bin/oxfmt --check` on the two changed files and `node_modules/.bin/vitest run --project server server/wikiLint/application/lintWiki.test.ts`, when they run, then every one passes.
+
+## Coordinator Result
+
+- acceptance: `3d92a040-d953-48f5-98a9-f1a49abe9d2a`
+- accepted commit: `17b840d5f5b50a16fa5a735926fd064bb687c8e1`
+- review: `09d4c0d0-4918-48c8-a5ea-77b4d91f8a89`
+- verification: tsc: pass, oxlint: pass, oxfmt: pass, vitest: pass
+- decisions: none
