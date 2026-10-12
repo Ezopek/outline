@@ -53,3 +53,12 @@ This is an operator-maintained Outline fork for deterministic Wiki linting in th
 - During a `bmad-loop` sweep, `_bmad-output/implementation-artifacts/deferred-work.md` can hold an uncommitted change that belongs to the orchestrator's own pending ledger transaction, not to the story being built. It does not fail a clean-working-tree gate. Never stage, edit, revert or commit it; finalize the story without it and let the orchestrator commit it.
 
 <!-- /bmad:context -->
+<!-- bmad-coordinator:begin v1 -->
+## Portable BMAD coordinator opt-in
+
+For a substantial request, first inspect this repository and its installed BMAD instructions, then identify the intended outcome, authority, scope, exclusions, and a concrete Git base commit. Use the installed coordinator CLI at `.bmad-coordinator/run.py` to inspect state and record a mandate before assigning bounded work. A small direct request may be handled directly. The coordinator tracks state and evidence; its presence does not automatically launch workers or prove review.
+
+If an assignment explicitly gives you `role: worker` or `role: reviewer`, follow that frozen assignment and its permitted paths. Do not perform top-level intake or claim coordinator ownership from inside that assignment. You may use bounded nested investigation or review when the mandate and run budget permit it. Return evidence and unresolved questions honestly; a self-report is not independent review or proof of effective permissions.
+
+Use `python3 .bmad-coordinator/run.py --repo /absolute/worktree status` to inspect state. For a feature worktree, record the resolved base commit at creation and run `doctor --base COMMIT` before execution. A moving branch name is not a substitute for that concrete commit.
+<!-- bmad-coordinator:end v1 -->
