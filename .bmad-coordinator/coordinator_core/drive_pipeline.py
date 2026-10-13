@@ -162,8 +162,8 @@ def _command(item, what: str) -> None:
 def _project(value) -> None:
     """Design D5: the project block of a story pipeline. `artifacts_dir` is a normalized relative POSIX directory
     without glob characters, so the status files' string-prefix checks (protected, prepare, sync_status) are sound."""
-    _keys(value, ("setup", "verify", "env", "commit_identity", "output_limit_bytes"), ("rules", "artifacts_dir"),
-          "Pipeline project")
+    _keys(value, ("setup", "verify", "env", "commit_identity", "output_limit_bytes"),
+          ("rules", "artifacts_dir", "briefs_dir"), "Pipeline project")
     for name in ("setup", "verify"):
         if not isinstance(value[name], list):
             raise _invalid(f"Project {name} must be a list")
@@ -185,12 +185,22 @@ def _project(value) -> None:
     if not isinstance(rules, list) or any(type(item) is not str or not item or PurePosixPath(item).is_absolute() or
                                           ".." in PurePosixPath(item).parts for item in rules):
         raise _invalid("Project rules must be relative file paths")
-    directory = value.get("artifacts_dir")
-    if directory is not None and (type(directory) is not str or not directory or directory == "." or
-                                  PurePosixPath(directory).as_posix() != directory or
-                                  PurePosixPath(directory).is_absolute() or ".." in PurePosixPath(directory).parts or
-                                  any(char in directory for char in "*?[]")):
-        raise _invalid("Project artifacts_dir must be a normalized relative directory without glob characters")
+    for key in ("artifacts_dir", "briefs_dir"):
+        _directory(value, key)
+
+
+def _directory(project: dict, key: str) -> None:
+    """A normalized relative POSIX directory without glob characters (design D5 for `artifacts_dir`, D22 for
+    `briefs_dir`); `briefs_dir` never lies under `.git` or `.bmad-coordinator`."""
+    directory = project.get(key)
+    if directory is None:
+        return
+    if type(directory) is not str or not directory or directory == "." or \
+       PurePosixPath(directory).as_posix() != directory or PurePosixPath(directory).is_absolute() or \
+       ".." in PurePosixPath(directory).parts or any(char in directory for char in "*?[]"):
+        raise _invalid(f"Project {key} must be a normalized relative directory without glob characters")
+    if key == "briefs_dir" and PurePosixPath(directory).parts[0] in (".git", ".bmad-coordinator"):
+        raise _invalid("Project briefs_dir cannot lie under .git or .bmad-coordinator")
 
 
 def _story_step(step: dict, kinds: dict) -> None:
@@ -277,12 +287,10 @@ def validate(value) -> dict:
             authors.add((step["skill"], step["slug"]))
         elif step["kind"] in ("setup", "implement", "status"):
             _story_step(step, kinds)
-            if "compat" not in kinds.values():
-                raise _invalid("The compat step must precede every other step")
         else:
             _wrapper(step, kinds, roles)
-            if "compat" not in kinds.values():
-                raise _invalid("The compat step must precede every other step")
+            if "compat" not in kinds.values() and "implement" not in kinds.values():
+                raise _invalid("The compat step (planning) or the implement step (story) must precede every other step")
             if "of" in step and any(item.get("of") == step["of"] for item in seen.values()):
                 raise _invalid(f"Step {step['of']} is taken by more than one step")
         kinds[sid] = step["kind"]
@@ -293,6 +301,8 @@ def validate(value) -> dict:
     story = "implement" in kinds.values()
     if story and any(kind == "author" for kind in kinds.values()):
         raise _invalid("A pipeline drives either planning author steps or one story, never both")
+    if story and "compat" in kinds.values():   # design D22: the story path reads no BMAD installation
+        raise _invalid("A story pipeline takes no compat step")
     if story != ("project" in value):
         raise _invalid("A story pipeline needs the project block; a planning pipeline takes none")
     if story:
@@ -452,17 +462,20 @@ class StepState:
 
 
 def gather(repo, store, snapshot: dict, value: dict, generation: int) -> dict:
-    """Read-only facts for derive: discovery, step workspaces, planning, implementation and review bindings, observed
-    profile payloads, the feature's judgments (from anchors and digest-valid receipts only), its bundle manifests
-    (with a code bundle's commit), verify's state of every acceptance, the export pointer with its directory under
-    each export step's `to` and, for a story pipeline, the story receipts (`story_facts`)."""
+    """Read-only facts for derive: discovery (planning pipelines only; a story pipeline gathers no contract facts,
+    design D22), step workspaces, planning, implementation and review bindings, observed profile payloads, the
+    feature's judgments (from anchors and digest-valid receipts only), its bundle manifests (with a code bundle's
+    commit), verify's state of every acceptance, the export pointer with its directory under each export step's `to`
+    and, for a story pipeline, the story receipts (`story_facts`)."""
     feature = next(row for row in snapshot["features"] if row["id"] == value["feature_id"])
     worktree = Path(feature["worktree"])
-    report = contract.discover(worktree, ".agents/skills")
+    story = any(step["kind"] == "implement" for step in value["steps"])
+    report = None if story else contract.discover(worktree, ".agents/skills")   # design D22
     facts = {"generation": generation, "workspaces": {}, "bindings": {}, "unbound": [], "payloads": {},
              "reviews": {}, "bundles": {}, "acceptances": {}, "export": None,
-             "contract": {"supported": report.supported, "fingerprint": report.fingerprint_sha256,
-                          "reasons": list(report.reasons)[:5]},
+             "contract": None if report is None else {"supported": report.supported,
+                                                      "fingerprint": report.fingerprint_sha256,
+                                                      "reasons": list(report.reasons)[:5]},
              "judgments": judgment.facts(store.path.parent, snapshot, feature["id"])}
     kinds = {step["kind"] for step in value["steps"]}
     if "bundle" in kinds:
@@ -491,10 +504,12 @@ def gather(repo, store, snapshot: dict, value: dict, generation: int) -> dict:
         facts["export"] = {"revision": meta["export_revision"], "dir_name": name, "present": {
             step["to"]: bool(name) and os.path.isdir(os.path.join(step["to"], name)) and
             not os.path.islink(os.path.join(step["to"], name)) for step in value["steps"] if step["kind"] == "export"}}
-    try:
-        root = contract.central_path(worktree, "modules.bmm.planning_artifacts")
-    except DomainError:
-        root = None
+    root = None
+    if not story:
+        try:
+            root = contract.central_path(worktree, "modules.bmm.planning_artifacts")
+        except DomainError:
+            root = None
     for step in value["steps"]:
         if step["kind"] == "author" and root is not None:
             facts["workspaces"][step["id"]] = f"{root}/features/{step['slug']}/{SKILLS[step['skill']]}"
@@ -811,7 +826,9 @@ def _review_state(step, sha, snapshot, facts, feature, compat_id, value, done) -
     half = sorted((row for row in live if row["id"] in facts["unbound"] and row["state"] == "prepared" and
                    _own(row["idempotency_key"], prefix)), key=lambda row: prepared[row["id"]])
     spec = {"bundle_id": bundle_id, "reviewer_id": step["reviewer_id"], "key": _next_key(sha, sid, rows),
-            "compat_decision_id": compat_id, "client": value["roles"]["reviewer"]["client"]}
+            "client": value["roles"]["reviewer"]["client"]}
+    if compat_id is not None and not done[step["of"]].subjects.get("code"):   # design D22: planning only
+        spec["compat_decision_id"] = compat_id
     if done[step["of"]].subjects.get("code"):   # ruling R9: a code bundle is reviewed with the code lenses
         spec["lenses"] = list(CODE_LENSES)
     if not bound:
@@ -1008,7 +1025,7 @@ def _status_state(step, facts, done) -> StepState:
     return StepState(sid, "status", "ready", None, action, subjects)
 
 
-def _implement_state(step, sha, snapshot, facts, feature, compat_id, value) -> StepState:
+def _implement_state(step, sha, snapshot, facts, feature, value) -> StepState:
     sid, rev = step["id"], feature["mandate_revision"]
     subjects = {"step_id": sid}
     prepared = {row["subject_id"]: row["revision"] for row in snapshot["events"]
@@ -1022,7 +1039,7 @@ def _implement_state(step, sha, snapshot, facts, feature, compat_id, value) -> S
     key = _next_key(sha, sid, rows)
     half = sorted((row for row in live if row["id"] in facts["unbound"] and row["state"] == "prepared" and
                    _own(row["idempotency_key"], prefix)), key=lambda row: prepared[row["id"]])
-    state = _implement_head(step, sid, snapshot, facts, bound, key, compat_id, value, subjects, feature, sha)
+    state = _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, feature, sha)
     if not half:
         return state
     stale = half[-1]
@@ -1034,7 +1051,7 @@ def _implement_state(step, sha, snapshot, facts, feature, compat_id, value) -> S
                      {**subjects, "assignment_id": stale["id"]})
 
 
-def _implement_head(step, sid, snapshot, facts, bound, key, compat_id, value, subjects, feature, sha) -> StepState:
+def _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, feature, sha) -> StepState:
     client = value["roles"]["worker"]["client"]
     # design D21 (F3): every story prepare carries the chain's resolving decisions, so the brief, the binding, the
     # bundle manifest and the code review brief see a decision that resolved an earlier attempt's question
@@ -1042,8 +1059,7 @@ def _implement_head(step, sid, snapshot, facts, bound, key, compat_id, value, su
 
     def spec(**extra):
         return {"feature_id": feature["id"], "key": key, "author_id": step["author_id"],
-                "compat_decision_id": compat_id, "client": client, "project": value["project"],
-                "decisions": decisions, **extra}
+                "client": client, "project": value["project"], "decisions": decisions, **extra}
 
     def prepare(intent, **extra):
         return StepState(sid, "implement", "ready", None,
@@ -1208,7 +1224,7 @@ def derive(value: dict, pipeline_sha256: str, snapshot: dict, facts: dict) -> li
         elif kind == "status":
             state = _status_state(step, facts, done)
         elif kind == "implement":
-            state = _implement_state(step, pipeline_sha256, snapshot, facts, feature, compat_id, value)
+            state = _implement_state(step, pipeline_sha256, snapshot, facts, feature, value)
         elif kind == "commit":
             state = _commit_state(step, facts, done)
         elif kind == "verify":

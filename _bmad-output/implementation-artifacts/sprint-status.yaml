@@ -70,6 +70,7 @@ development_status:
   epic-2-retrospective: done
 
   dw-4-yield-between-lint-units: done
+  dw-20-bound-structure-read: ready-for-dev
 
   epic-3: backlog
   3-1-verify-safe-startup-and-readiness-policy-identity: backlog

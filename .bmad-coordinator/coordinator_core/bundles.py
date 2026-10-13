@@ -29,7 +29,8 @@ def capture(worktree: Path, bundle_root: Path, feature_id: str, mandate_revision
             decisions: list[dict] | None = None, commit: dict | None = None) -> tuple[str, Path, dict]:
     if not artifact_paths or not isinstance(artifact_paths, list) or not isinstance(dependency_paths, list):
         raise DomainError("INVALID_INPUT", "Bundle requires artifact paths")
-    _files(worktree, contracts, check_current=True)
+    if contracts:   # implementation drive D22: a story bundle seals no contract files
+        _files(worktree, contracts, check_current=True)
     all_paths = artifact_paths + dependency_paths + [entry["path"] for entry in contracts]
     if len(all_paths) != len(set(all_paths)):
         raise DomainError("INVALID_INPUT", "Bundle paths must be distinct")

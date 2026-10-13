@@ -16,7 +16,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from . import bmad_contract as contract
 from . import clients
 from .bmad_planning import KEY, _file_entry, _review_items, _row, _write_brief, refuse_while_running
 from .bmad_planning import read_assignment_binding as _bound_binding
@@ -38,6 +37,7 @@ PROTECTED_FILES = ("AGENTS.md", "CLAUDE.md")
 # File names protected at any depth: they change what Git stages, diffs and checks out (final review I2).
 PROTECTED_NAMES = (".gitignore", ".gitattributes")
 ARTIFACTS_DIR = "_bmad-output/implementation-artifacts"   # the project key `artifacts_dir` overrides it
+BRIEFS_DIR = "_bmad-output/coordinator/briefs"            # the project key `briefs_dir` overrides it (design D22)
 _FRONT = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _FROZEN = re.compile(r"<(" + "|".join(FROZEN_TAGS) + r")(?:\s[^>]*)?>\n?(.*?)\n?</\1>", re.S)
 _HEADING = re.compile(r"^## (.+?)\s*$", re.M)
@@ -211,11 +211,17 @@ def _artifacts_dir(project) -> str:
     return PurePosixPath((project or {}).get("artifacts_dir") or ARTIFACTS_DIR).as_posix()
 
 
+def _briefs_dir(project) -> str:
+    """The briefs directory of a project block, normalized; the default when the block or its key is absent or None
+    (design D22: the story path reads no central BMAD config)."""
+    return PurePosixPath((project or {}).get("briefs_dir") or BRIEFS_DIR).as_posix()
+
+
 def protected(path: str, spec_path: str, project: dict | None = None) -> bool:
     """Design D3. The project block's `artifacts_dir`, relocated or not, is protected too: its status files live
-    there. A `.gitignore` or `.gitattributes` is protected at any depth."""
+    there; so is its `briefs_dir` (D22). A `.gitignore` or `.gitattributes` is protected at any depth."""
     return path == spec_path or path in PROTECTED_FILES or PurePosixPath(path).name in PROTECTED_NAMES or \
-        any(path.startswith(item) for item in (*PROTECTED_DIRS, _artifacts_dir(project) + "/"))
+        any(path.startswith(item) for item in (*PROTECTED_DIRS, _artifacts_dir(project) + "/", _briefs_dir(project) + "/"))
 
 
 def story_add(repo, store, owner, spec: StoryInput) -> dict:
@@ -403,7 +409,6 @@ class ImplementationPrepare:
     feature_id: str
     key: str
     author_id: str
-    compat_decision_id: str
     project: dict
     intent: str = "create"
     update_of: str | None = None
@@ -428,8 +433,8 @@ def read_assignment_binding(store, repo, assignment_id: str) -> dict:
 def _validate(spec: ImplementationPrepare) -> None:
     if type(spec.client) is not str or spec.client not in clients.REGISTRY:
         raise _invalid("Worker client must be a registered client name")
-    if not KEY.match(spec.key or "") or not spec.author_id.strip() or not spec.compat_decision_id:
-        raise _invalid("Key, author and compatibility decision are required")
+    if not KEY.match(spec.key or "") or not spec.author_id.strip():
+        raise _invalid("Key and author are required")
     if spec.intent not in ("create", "update"):
         raise _invalid("Intent must be create or update")
     continuations = [item for item in (spec.continues_request, spec.corrects_review, spec.corrects_verify,
@@ -451,6 +456,14 @@ def _check_status_scopes(scopes, project: dict) -> None:
     for scope in scopes:
         if scope_covers(scope, directory) or scope == directory or scope_covers(directory, scope):
             raise _invalid(f"Writable scope {scope} covers the status files under {directory}")
+
+
+def _check_briefs_scopes(scopes, project: dict) -> None:
+    """No writable scope covers the briefs directory or lies inside it (design D22; the brief is a sealed source)."""
+    directory = _briefs_dir(project) + "/"
+    for scope in scopes:
+        if scope_covers(scope, directory) or scope == directory or scope_covers(directory, scope):
+            raise DomainError("UNSAFE_PATH", f"Writable scope {scope} covers the briefs directory {directory}")
 
 
 def _render_commands(commands) -> list[str]:
@@ -610,7 +623,8 @@ def _claude_commands(spec) -> list[str]:
 
 
 def prepare(repo, store, owner, spec: ImplementationPrepare) -> dict:
-    """discovery + compat -> brief -> create_assignment(required profile) -> seal -> bind; idempotent on key."""
+    """brief -> create_assignment(required profile) -> seal -> bind; idempotent on key. Design D22: no discover, no
+    compatibility decision, no contract files."""
     _validate(spec)
     coordinator = Coordinator(store)
     snapshot = store.read_export_snapshot(owner)
@@ -633,14 +647,6 @@ def prepare(repo, store, owner, spec: ImplementationPrepare) -> dict:
                 raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key was used with a different prepare spec")
             return {"assignment_id": prior_row["id"], "brief_ref": prior_row["brief_ref"],
                     "binding_sha256": bound["payload_digest"]}
-    report = contract.discover(worktree, spec.client_root)
-    if not report.supported:
-        raise DomainError("UNSUPPORTED_CONTRACT", "; ".join(report.reasons))
-    decision = next((row for row in snapshot["decisions"] if row["id"] == spec.compat_decision_id), None)
-    if decision is None or contract.compat_decision({"decisions": [decision]}, feature["id"], feature["mandate_revision"],
-                                                    report.fingerprint_sha256) != decision["id"]:
-        raise DomainError("BLOCKED_EVIDENCE", "Compatibility decision does not judge this fingerprint at the current "
-                          "mandate revision")
     decisions = []
     for item in spec.decisions:
         row = next((entry for entry in snapshot["decisions"] if entry["id"] == item["id"]), None)
@@ -654,11 +660,9 @@ def prepare(repo, store, owner, spec: ImplementationPrepare) -> dict:
             raise _invalid("The earlier assignment belongs to another feature")
         read_assignment_binding(store, repo, earlier["id"])
         continuation = _continuation(spec, snapshot, feature, earlier, store, repo, worktree)
-    brief_ref = f"{contract.central_path(worktree, 'core.output_folder')}/coordinator/briefs/{spec.key}.md"
+    brief_ref = f"{_briefs_dir(spec.project)}/{spec.key}.md"
     scopes = json.loads(feature["writable_paths_json"])
-    if any(scope_covers(scope, item["path"]) for scope in scopes for item in report.contract_files) or \
-       any(scope_covers(scope, brief_ref) for scope in scopes):
-        raise DomainError("UNSAFE_PATH", "A story scope covers a contract or brief file")
+    _check_briefs_scopes(scopes, spec.project)
     _check_status_scopes(scopes, spec.project)
     commands = _claude_commands(spec)
     refuse_while_running(store.read_snapshot(), worktree)
@@ -669,8 +673,8 @@ def prepare(repo, store, owner, spec: ImplementationPrepare) -> dict:
                                                      spec.project))
     from .model import AssignmentInput
     assignment_id = coordinator.create_assignment(owner, AssignmentInput(
-        feature["id"], spec.key, brief_ref, feature["mandate_revision"], [brief, spec_entry], report.contract_files,
-        hashlib.sha256(canonical(report.contract_files)).hexdigest(), list(scopes), "workspace-write", spec.author_id,
+        feature["id"], spec.key, brief_ref, feature["mandate_revision"], [brief, spec_entry], [],
+        hashlib.sha256(canonical([])).hexdigest(), list(scopes), "workspace-write", spec.author_id,
         [], [continuation["request"]] if continuation and continuation.get("request") else []),
         required_profile=IMPLEMENTATION)
     continues = continuation and {key: value for key, value in continuation.items() if key not in ("heading", "lines")}
@@ -678,8 +682,7 @@ def prepare(repo, store, owner, spec: ImplementationPrepare) -> dict:
              "assignment_id": assignment_id,
              "request_fingerprint": coordinator.detail("assignment", assignment_id)["request_fingerprint"],
              "worktree": str(worktree), "common_dir": str(repo.common_dir), "client_root": spec.client_root,
-             "fingerprint_sha256": report.fingerprint_sha256, "contract": report.contract, "spec_sha256": spec_sha256,
-             "compat_decision_id": spec.compat_decision_id, "intent": spec.intent, "story_key": story["story_key"],
+             "spec_sha256": spec_sha256, "intent": spec.intent, "story_key": story["story_key"],
              "spec_path": story["spec_path"], "spec_digest": spec_entry["digest"], "branch": feature["branch"],
              "base_commit": feature["base_commit"], "parent_sha": parent, "scopes": list(scopes),
              "project": spec.project, "continues": continues}

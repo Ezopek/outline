@@ -175,7 +175,7 @@ def _releasable(snapshot: dict) -> str | None:
 
 
 # A story stop whose attempt is final continues only at a new mandate revision (a pipeline is bound once per revision).
-_NEW_REVISION = (f"with the driver's token while no driver runs, revise the mandate and record its compat decision, "
+_NEW_REVISION = (f"with the driver's token while no driver runs, revise the mandate, "
                  f"release --token-file {TOKEN}, then drive start a pipeline bound to the new revision")
 
 
@@ -931,7 +931,12 @@ def status(repo, feature_id: str | None = None) -> dict:
     for feature in snapshot["features"]:
         if feature_id and feature["id"] != feature_id:
             continue
-        bound = drive_pipeline.active(base, snapshot, feature["id"])
+        try:
+            bound = drive_pipeline.active(base, snapshot, feature["id"])
+        except DomainError as exc:   # a sealed pipeline the rules now refuse (a story pipeline from before D22)
+            features.append({"feature_id": feature["id"], "pipeline_sha256": None, "steps": [],
+                             "error": {"code": exc.code, "message": exc.message}})
+            continue
         if bound is None:
             continue
         facts = drive_pipeline.gather(repo, store, snapshot, bound["value"], snapshot["owner"]["generation"])

@@ -45,7 +45,7 @@ class ReviewPrepare:
     bundle_id: str
     reviewer_id: str
     key: str
-    compat_decision_id: str
+    compat_decision_id: str | None = None   # required for a planning bundle, refused for a code bundle (design D22)
     lenses: list[str] = field(default_factory=lambda: list(DEFAULT_LENSES))
     client_root: str = ".agents/skills"
     client: str = clients.DEFAULT                # registered write-free worker client
@@ -203,7 +203,7 @@ def _prove(repo, store, assignment_id: str, evidence: ReviewEvidence, live: bool
         worktree = _resolved_worktree(feature)
         if bundles.source_state(worktree, manifest) != "current":
             raise DomainError("STALE_INPUT", "Live bundle files differ from the sealed manifest")
-        reasons = contract.check_binding(worktree, binding, store, feature)
+        reasons = contract.check_binding(worktree, binding, store, feature) if "fingerprint_sha256" in binding else []
         reasons += Coordinator(store)._gate_reasons(snapshot, "bundle", contributors, None, feature,
                                                     spec=_bundle_spec(bundle, manifest))
         if reasons:
@@ -243,7 +243,8 @@ def gate(stage: str, ctx: dict) -> list[str]:
         return ["feature worktree is unresolved"]
     reasons = []
     try:
-        reasons += contract.check_binding(ctx["worktree"], ctx["binding"], ctx["store"], ctx["feature"])
+        if "fingerprint_sha256" in ctx["binding"]:   # a code review binding seals no contract (design D22)
+            reasons += contract.check_binding(ctx["worktree"], ctx["binding"], ctx["store"], ctx["feature"])
         repo = resolve_repo(ctx["worktree"])
         if stage == "reserve":
             _, manifest = _bundle_row(ctx["store"].read_snapshot(), ctx["binding"])
@@ -282,8 +283,8 @@ def _validate(spec: ReviewPrepare) -> None:
         raise _invalid("Worker client must be a registered client name")
     if not clients.get(spec.client).write_free_readonly:
         raise DomainError("UNSUPPORTED_CLIENT_MODE", f"Worker client {spec.client} has no write-free read-only mode")
-    if not KEY.match(spec.key or "") or not spec.reviewer_id.strip() or not spec.compat_decision_id:
-        raise _invalid("Key, reviewer and compatibility decision are required")
+    if not KEY.match(spec.key or "") or not spec.reviewer_id.strip():
+        raise _invalid("Key and reviewer are required")
     if not spec.lenses or len(set(spec.lenses)) != len(spec.lenses) or any(not LENS.match(item) for item in spec.lenses):
         raise _invalid("Lenses must be distinct lower-case lens codes")
 
@@ -433,7 +434,7 @@ def _brief(spec: ReviewPrepare, worktree: Path, sealed: list[dict], carried: dic
 
 
 def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
-    """verify bundle/sealed copy/live bytes/contract -> brief -> create_assignment(required profile) -> seal -> bind."""
+    """verify bundle/sealed copy/live bytes (and the contract for a planning bundle, design D22) -> brief -> create_assignment(required profile) -> seal -> bind."""
     _validate(spec)
     coordinator = Coordinator(store)
     snapshot = store.read_export_snapshot(owner)  # authenticates the owner first
@@ -472,9 +473,6 @@ def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
         raise DomainError("STALE_INPUT", "Live bundle files differ from the sealed manifest")
     if spec.reviewer_id in manifest["derived_author_ids"]:
         raise _invalid("The reviewer authored or edited this bundle")
-    report = contract.discover(worktree, spec.client_root)
-    if not report.supported:
-        raise DomainError("UNSUPPORTED_CONTRACT", "; ".join(report.reasons))
     contributors = _contributors(snapshot, bundle)
     names = [binding_anchor(snapshot["events"], row["id"])[0] for row in contributors]
     if any(name not in (PLAN, IMPLEMENTATION) for name in names):
@@ -482,45 +480,63 @@ def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
     if any((name == IMPLEMENTATION) != bool(manifest.get("commit")) for name in names):
         raise DomainError("BLOCKED_EVIDENCE", "Implementation contributors need a commit-bound bundle, and a "
                           "commit-bound bundle needs implementation contributors")
-    # Drift since the contributors were bound is STALE_INPUT (design section 9); an unjudged but unchanged
-    # fingerprint stays BLOCKED_EVIDENCE, exactly as in planning prepare.
-    if any(_planning_binding(store, snapshot["events"], row["id"])["fingerprint_sha256"] != report.fingerprint_sha256
-           for row in contributors):
-        raise DomainError("STALE_INPUT", "BMAD contract differs from the one the bundle contributors were bound to")
-    decision = next((row for row in snapshot["decisions"] if row["id"] == spec.compat_decision_id), None)
-    if decision is None or contract.compat_decision({"decisions": [decision]}, feature["id"], feature["mandate_revision"],
-                                                    report.fingerprint_sha256) != decision["id"]:
-        raise DomainError("BLOCKED_EVIDENCE", "Compatibility decision does not judge this fingerprint at the "
-                          "current mandate revision")
+    code = bool(manifest.get("commit"))   # design D22: a code bundle is reviewed without the planning contract
+    if code and spec.compat_decision_id is not None:
+        raise _invalid("A code review takes no compatibility decision")
+    if not code and not spec.compat_decision_id:
+        raise _invalid("A planning review needs a compatibility decision")
+    report = None
+    if not code:
+        report = contract.discover(worktree, spec.client_root)
+        if not report.supported:
+            raise DomainError("UNSUPPORTED_CONTRACT", "; ".join(report.reasons))
+        # Drift since the contributors were bound is STALE_INPUT (design section 9); an unjudged but unchanged
+        # fingerprint stays BLOCKED_EVIDENCE, exactly as in planning prepare.
+        if any(_planning_binding(store, snapshot["events"], row["id"])["fingerprint_sha256"] != report.fingerprint_sha256
+               for row in contributors):
+            raise DomainError("STALE_INPUT", "BMAD contract differs from the one the bundle contributors were bound to")
+        decision = next((row for row in snapshot["decisions"] if row["id"] == spec.compat_decision_id), None)
+        if decision is None or contract.compat_decision({"decisions": [decision]}, feature["id"],
+                                                        feature["mandate_revision"],
+                                                        report.fingerprint_sha256) != decision["id"]:
+            raise DomainError("BLOCKED_EVIDENCE", "Compatibility decision does not judge this fingerprint at the "
+                              "current mandate revision")
     reasons = coordinator._gate_reasons(snapshot, "bundle", contributors, None, feature,
                                         spec=_bundle_spec(bundle, manifest))
     if reasons:
         raise DomainError("BLOCKED_EVIDENCE", "; ".join(reasons))
     carried = _carried(repo, store, contributors)
     sealed = _sealed_files(bundle, manifest)
-    brief_ref = f"{contract.central_path(worktree, 'core.output_folder')}/coordinator/briefs/{spec.key}.md"
+    if code:
+        from . import bmad_implementation as implementation
+        project = _planning_binding(store, snapshot["events"], contributors[0]["id"]).get("project")
+        brief_ref = f"{implementation._briefs_dir(project)}/{spec.key}.md"
+    else:
+        brief_ref = f"{contract.central_path(worktree, 'core.output_folder')}/coordinator/briefs/{spec.key}.md"
     sources = [_file_entry(worktree, item["path"]) for item in sealed]
     refuse_while_running(store.read_snapshot(), worktree)
     own, inherited = _provenance(store, snapshot, manifest["source_assignment_ids"])
-    if manifest.get("commit"):
-        from . import bmad_implementation as implementation
+    if code:
         text = implementation.review_brief(spec, worktree, sealed, bundle, feature, manifest, decisions, carried, store,
                                            repo, snapshot)
     else:
         text = _brief(spec, worktree, sealed, carried, bundle, decisions, own, inherited)
     brief = _write_brief(worktree, brief_ref, text)
+    contract_files = [] if code else report.contract_files
     assignment_id = coordinator.create_assignment(owner, AssignmentInput(
-        feature["id"], spec.key, brief_ref, feature["mandate_revision"], [brief, *sources], report.contract_files,
-        _sha(canonical(report.contract_files)), [], "read-only", spec.reviewer_id, [], []), required_profile=REVIEW)
+        feature["id"], spec.key, brief_ref, feature["mandate_revision"], [brief, *sources], contract_files,
+        _sha(canonical(contract_files)), [], "read-only", spec.reviewer_id, [], []), required_profile=REVIEW)
     value = {"kind": "binding", "format": 1, "profile": REVIEW, "role": "review", "assignment_id": assignment_id,
              "request_fingerprint": coordinator.detail("assignment", assignment_id)["request_fingerprint"],
              "worktree": str(worktree), "common_dir": str(repo.common_dir), "client_root": spec.client_root,
-             "fingerprint_sha256": report.fingerprint_sha256, "contract": report.contract,
-             "spec_sha256": spec_sha256, "compat_decision_id": spec.compat_decision_id, "bundle_id": bundle["id"],
+             "spec_sha256": spec_sha256, "bundle_id": bundle["id"],
              "manifest_digest": bundle["manifest_digest"], "sealed_root": bundle["path"], "sealed_files": sealed,
              "contributor_assignment_ids": [row["id"] for row in contributors],
              "contributor_source_ids": sorted(json.loads(row["return_json"])["source_id"] for row in contributors),
              "lenses": list(spec.lenses), "brief_sha256": brief["digest"], "carried": carried, **client_binding(spec)}
+    if not code:   # a planning review binding seals the contract it was prepared against
+        value.update(fingerprint_sha256=report.fingerprint_sha256, contract=report.contract,
+                     compat_decision_id=spec.compat_decision_id)
     evidence = seal_binding(repo.common_dir / "coordinator", value)
     coordinator.bind_assignment(owner, assignment_id, evidence)
     return {"assignment_id": assignment_id, "brief_ref": brief_ref, "binding_sha256": evidence.payload_digest}

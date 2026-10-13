@@ -508,7 +508,8 @@ class Coordinator:
                 raise DomainError("STALE_INPUT", "Mandate revision changed")
             worktree = _resolved_worktree(feature)
             _files(worktree, spec.source_digests, check_current=True)
-            _files(worktree, spec.contract_files, check_current=True)
+            if spec.contract_files:   # implementation drive D22: a story seals no contract files
+                _files(worktree, spec.contract_files, check_current=True)
             if spec.brief_ref not in {entry["path"] for entry in spec.source_digests}:
                 raise DomainError("INVALID_INPUT", "Brief must be included in source digests")
             if hashlib.sha256(_json(spec.contract_files).encode()).hexdigest() != spec.contract_digest:
@@ -652,7 +653,8 @@ class Coordinator:
                 raise DomainError("BLOCKED_EVIDENCE", f"Worktree is fenced by attempt {holder}")
             _files(worktree, json.loads(row["source_digests_json"]), check_current=True)
             contracts = json.loads(row["contract_files_json"])
-            _files(worktree, contracts, check_current=True)
+            if contracts:   # implementation drive D22: a story seals no contract files
+                _files(worktree, contracts, check_current=True)
             if hashlib.sha256(_json(contracts).encode()).hexdigest() != row["contract_digest"]:
                 raise DomainError("STALE_INPUT", "Contract aggregate digest changed")
             for dependency in json.loads(row["depends_on_json"]):
