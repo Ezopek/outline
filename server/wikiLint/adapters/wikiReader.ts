@@ -1,4 +1,4 @@
-import { Op, Transaction } from "sequelize";
+import { literal, Op, Transaction } from "sequelize";
 import type { NavigationNode } from "@shared/types";
 import { Collection, Document, type User } from "@server/models";
 import { can } from "@server/policies";
@@ -243,6 +243,7 @@ async function readContents(
  * `readDocument`. One meter checks everything the snapshot holds against
  * the AD-16 limits and fails it with `WikiResourceLimitError` as soon as one
  * is exceeded.
+ * Structure columns are size-metered before they are read.
  *
  * @param input.scope - a collection scope, whose identity the pre-admission
  *   lookup fixed, or the default scope of every readable configured collection.
@@ -418,6 +419,21 @@ export async function readWikiSnapshot(input: {
         const readable = new Map<string, Document>();
         const surfaces = new Map<string, WikiGlobalIndexInput["surface"]>();
         if (graphs.length > 0) {
+          await boundBatch(transaction, deadline);
+          const structureSizes = await Collection.unscoped().findAll({
+            attributes: [
+              "id",
+              [
+                literal('COALESCE(octet_length("documentStructure"::text), 0)'),
+                "structureBytes",
+              ],
+            ],
+            where: { id: graphs.map((item) => item.collectionId) },
+            transaction,
+          });
+          for (const row of structureSizes) {
+            meter.addStructureBytes(row.get("structureBytes") as number);
+          }
           await boundBatch(transaction, deadline);
           const structureRows = await Collection.unscoped().findAll({
             attributes: ["id", "documentStructure"],

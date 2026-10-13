@@ -22,6 +22,8 @@ export const WIKI_SNAPSHOT_LIMITS = Object.freeze({
   linkReferences: 100000,
   /** Object nodes, at any depth, of every `documentStructure` read. */
   structureNodes: 10000,
+  /** UTF-8 bytes of the JSON text of every `documentStructure` read together. */
+  structureBytes: 4194304,
 });
 
 /** The snapshot resource limits. */
@@ -48,6 +50,7 @@ export class SnapshotMeter {
     totalMarkdownBytes: 0,
     linkReferences: 0,
     structureNodes: 0,
+    structureBytes: 0,
   };
 
   /**
@@ -102,6 +105,16 @@ export class SnapshotMeter {
    */
   addStructureNodes(count: number): void {
     this.add("structureNodes", count);
+  }
+
+  /**
+   * Adds the JSON text bytes of one collection structure.
+   *
+   * @param bytes - the number of UTF-8 bytes.
+   * @throws WikiResourceLimitError when the bytes exceed their limit.
+   */
+  addStructureBytes(bytes: number): void {
+    this.add("structureBytes", bytes);
   }
 
   /**

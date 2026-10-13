@@ -24,6 +24,11 @@ const summed = [
     (m: SnapshotMeter, n: number) => m.addStructureNodes(n),
     10000,
   ],
+  [
+    "structureBytes",
+    (m: SnapshotMeter, n: number) => m.addStructureBytes(n),
+    4194304,
+  ],
 ] as const;
 
 describe("WIKI_SNAPSHOT_LIMITS", () => {
@@ -34,6 +39,7 @@ describe("WIKI_SNAPSHOT_LIMITS", () => {
       totalMarkdownBytes: 67108864,
       linkReferences: 100000,
       structureNodes: 10000,
+      structureBytes: 4194304,
     });
     expect(Object.isFrozen(WIKI_SNAPSHOT_LIMITS)).toBe(true);
   });

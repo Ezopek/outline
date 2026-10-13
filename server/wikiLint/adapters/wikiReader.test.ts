@@ -27,6 +27,10 @@ import {
   buildUser,
 } from "@server/test/factories";
 import { Deadline, DeadlineFloorError } from "../application/deadline";
+import {
+  WIKI_SNAPSHOT_LIMITS,
+  WikiResourceLimitError,
+} from "../application/snapshotLimits";
 import type { WikiSnapshot } from "../core/contracts";
 import type { PolicySetEntry } from "../core/policySet";
 import { buildPolicySet } from "../core/policySet";
@@ -978,6 +982,83 @@ describe("readWikiSnapshot", () => {
       const document = await publishedIn(owner, collection.id);
       return { admin, owner, collection, document };
     }
+
+    it("meters structure sizes in a bounded batch before reading structure", async () => {
+      const { owner, collection, document } = await buildAdminFixture();
+      await Collection.update(
+        {
+          documentStructure: [
+            { id: document.id, title: "", url: "", children: [] },
+          ],
+        },
+        { where: { id: collection.id }, hooks: false }
+      );
+      const statements = recordStatements();
+
+      const snapshot = await snapshotOf({
+        entries: entriesFor({ [collection.id]: hierarchyPolicy }),
+        actor: owner,
+      });
+
+      const recorded = statements();
+      const sizeIndex = recorded.findIndex(({ sql }) =>
+        sql.includes('octet_length("documentStructure"::text)')
+      );
+      const structureIndex = recorded.findIndex(
+        ({ sql }) => statementOf(sql) === "SELECT structure"
+      );
+      expect(sizeIndex).toBeGreaterThanOrEqual(2);
+      expect(structureIndex).toBeGreaterThan(sizeIndex);
+      expect(reduced(recorded.slice(sizeIndex - 2, sizeIndex))).toEqual(BOUND);
+      expect(
+        reduced(recorded.slice(structureIndex - 2, structureIndex))
+      ).toEqual(BOUND);
+      expect(keysIn(recorded[sizeIndex].sql)).toEqual([collection.id]);
+      expect(keysIn(recorded[structureIndex].sql)).toEqual([collection.id]);
+      expect(recorded[sizeIndex].transaction).toBe(
+        recorded[structureIndex].transaction
+      );
+      expect(snapshot.collections[0].graph).toEqual({
+        authorized: true,
+        structureDocumentIds: [document.id],
+        globalIndex: null,
+      });
+      expectReadOnly(recorded);
+    });
+
+    it("rejects structure one byte above the limit before reading its JSON", async () => {
+      const { owner, collection } = await buildAdminFixture();
+      // JSONB renders this malformed but traversable node as [{"title": "..."}].
+      const overhead = Buffer.byteLength('[{"title": ""}]', "utf8");
+      await Collection.update(
+        {
+          documentStructure: [
+            {
+              title: "a".repeat(
+                WIKI_SNAPSHOT_LIMITS.structureBytes + 1 - overhead
+              ),
+            },
+          ] as NavigationNode[],
+        },
+        { where: { id: collection.id }, hooks: false }
+      );
+      const statements = recordStatements();
+
+      await expect(
+        snapshotOf({
+          entries: entriesFor({ [collection.id]: hierarchyPolicy }),
+          actor: owner,
+        })
+      ).rejects.toThrow(WikiResourceLimitError);
+
+      const recorded = statements();
+      expect(
+        recorded.filter(({ sql }) => sql.includes("octet_length"))
+      ).toHaveLength(1);
+      expect(reduced(recorded)).not.toContain("SELECT structure");
+      expect(reduced(recorded).at(-1)).toBe("ROLLBACK;");
+      expectReadOnly(recorded);
+    });
 
     it("reads no structure where the actor lacks readDocument", async () => {
       const { admin, collection } = await buildAdminFixture();
