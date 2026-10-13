@@ -3,7 +3,7 @@ title: 'DW-20: Bound the documentStructure read before materializing it'
 type: 'bugfix'
 created: '2026-10-13'
 baseline_revision: '33bc749aa1afc270ceadc50cb214772ba99a0e28'
-status: 'in-progress'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
@@ -69,3 +69,11 @@ deferred: []
 - Given the one-byte-above row, when the snapshot is read, then it fails with `WikiResourceLimitError` and no recorded statement selects the `documentStructure` column.
 - Given the baseline reader (no size query), when the two new reader tests run, then both fail (no size SELECT is recorded; the over-limit snapshot succeeds), so the tests detect DW-20.
 - Given `corepack yarn tsc`, `node_modules/.bin/oxlint --type-aware server shared`, `node_modules/.bin/oxfmt --check` on the four changed files, `node_modules/.bin/vitest run --project server server/wikiLint/application/snapshotLimits.test.ts` and `node_modules/.bin/vitest run --project server server/wikiLint/adapters/wikiReader.test.ts`, when they run, then every one passes.
+
+## Coordinator Result
+
+- acceptance: `eae5f942-59c0-48a9-babe-4e20c4ce001e`
+- accepted commit: `94d09cef038079fb048757c6d8352b4a18baeab5`
+- review: `aedf5abc-f0cc-48c5-9145-1a52374d708c`
+- verification: tsc: pass, oxlint: pass, oxfmt: pass, vitest-limits: pass, vitest-reader: pass
+- decisions: none
