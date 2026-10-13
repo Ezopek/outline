@@ -521,6 +521,7 @@ describe("readWikiSnapshot", () => {
       "SELECT documents",
       "SELECT content",
       "SELECT lookup",
+      "SELECT collections", // Structure sizes.
       "SELECT structure",
       "SELECT lookup",
       "SELECT content",
@@ -715,6 +716,8 @@ describe("readWikiSnapshot", () => {
       "SELECT content",
       ...BOUND,
       "SELECT lookup",
+      ...BOUND,
+      "SELECT collections", // Structure sizes.
       ...BOUND,
       "SELECT structure",
       "COMMIT;",
@@ -930,6 +933,8 @@ describe("readWikiSnapshot", () => {
         ...BOUND,
         "SELECT documents",
         ...BOUND,
+        "SELECT collections", // Structure sizes.
+        ...BOUND,
         "SELECT structure",
         ...BOUND,
         "SELECT lookup",
@@ -942,7 +947,7 @@ describe("readWikiSnapshot", () => {
       ).toEqual([]);
       expect(
         recorded.filter(({ sql }) => sql.includes("documentStructure"))
-      ).toHaveLength(1);
+      ).toHaveLength(2);
       expect(snapshot.collections[0]).toEqual({
         collectionId: collection.id,
         documents: [root, child]
@@ -1319,6 +1324,8 @@ describe("readWikiSnapshot", () => {
       "SELECT collections",
       ...BOUND,
       "SELECT documents",
+      ...BOUND,
+      "SELECT collections", // Structure sizes.
       ...BOUND,
       "SELECT structure",
       ...BOUND,
