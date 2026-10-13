@@ -3,7 +3,7 @@ title: 'DW-20: Bound the documentStructure read before materializing it'
 type: 'bugfix'
 created: '2026-10-13'
 baseline_revision: '33bc749aa1afc270ceadc50cb214772ba99a0e28'
-status: 'ready-for-dev'
+status: 'in-progress'
 review_loop_iteration: 0
 followup_review_recommended: false
 context: []
