@@ -131,13 +131,17 @@ INSTRUCTIONS = (_ROLE + "`changed_paths` lists exactly the worktree-relative fil
                 "is `[]` for a read-only role. Listing a Git-ignored file or a file restored to its original bytes, "
                 "deleting, renaming or symlinking a file, or a mode-only change is refused and ends the attempt "
                 "unknown. " + _IMMUTABLE)
-# The bmad-implementation-v1 contract (design D8): Git is the evidence of change, the worker's list a declaration.
-STORY_INSTRUCTIONS = (_ROLE + "`changed_paths` lists the worktree-relative files you created or modified inside "
-                      "`writable_paths`; it is your declaration, the coordinator takes the observed change from Git "
-                      "(the cumulative delta from the story's base commit) and a declaration that differs from it is "
-                      "recorded, not refused. Deleting or renaming a file inside `writable_paths` is allowed and "
-                      "recorded. Symlinking a file, a mode-only change, or touching a protected path or any path "
-                      "outside the granted scopes is refused and ends the attempt unknown. " + _IMMUTABLE)
+# The story profiles' contract (design D8, D24): Git is the evidence of change, the worker's list a declaration.
+_STORY_DELTA = ("`changed_paths` lists the worktree-relative files you created or modified inside `writable_paths`; it "
+                "is your declaration, the coordinator takes the observed change from Git (the cumulative delta from "
+                "the story's base commit) and a declaration that differs from it is recorded, not refused. ")
+_STORY_REFUSED = ("Symlinking a file, a mode-only change, or touching a protected path or any path outside the granted "
+                  "scopes is refused and ends the attempt unknown. ")
+STORY_INSTRUCTIONS = (_ROLE + _STORY_DELTA + "Deleting or renaming a file inside `writable_paths` is allowed and "
+                      "recorded. " + _STORY_REFUSED + _IMMUTABLE)
+# Design D24: the spec author's check refuses a deleted or renamed spec.
+SPEC_INSTRUCTIONS = (_ROLE + _STORY_DELTA + "Deleting or renaming the spec file is refused and ends the attempt "
+                     "unknown. " + _STORY_REFUSED + _IMMUTABLE)
 
 
 # Worker-file clients only (ruling i): the generic envelope names the exact return path, so an unbound author knows
@@ -198,9 +202,17 @@ def return_schema_text(schema: dict, ids: dict | None = None) -> str:
     return RETURN_SCHEMA.format(listing, skeleton)
 
 
+def _story(profile_name) -> bool:
+    """A story profile (design D8, D24); imported lazily, as the story profile module imports this one."""
+    from .bmad_implementation import STORY_PROFILES
+    return profile_name in STORY_PROFILES
+
+
 def _envelope(assignment, feature, inventory_digest, model, timeout_seconds, return_path=None, schema=None, forms=(),
               hint=None, profile_name=None):
-    instructions = STORY_INSTRUCTIONS if profile_name == "bmad-implementation-v1" else INSTRUCTIONS
+    from .bmad_implementation import SPEC_AUTHOR   # lazy: the story profile module imports this one
+    instructions = INSTRUCTIONS if not _story(profile_name) else \
+        SPEC_INSTRUCTIONS if profile_name == SPEC_AUTHOR else STORY_INSTRUCTIONS
     sources = json.loads(assignment["source_digests_json"])
     contracts = json.loads(assignment["contract_files_json"])
     value = {"role": "reviewer" if assignment["permission_mode"] == "read-only" else "worker",
@@ -245,12 +257,14 @@ def _return_evidence(repo, assignment, directory, before, after, final, thread, 
     immutable = _immutable_inputs(assignment)
     if any(not _current_file(repo.worktree, entry) for entry in immutable):
         raise DomainError("UNKNOWN_EVIDENCE", "Immutable source or contract bytes changed")
-    if profile.name == "bmad-implementation-v1" and binding is not None:
+    if _story(profile.name) and binding is not None:
         # Design D8, ruling R2: Git is the evidence of change; the worker's list is a recorded claim. A touched
-        # protected path (the spec, the status files, the package, the skill trees) is still refused.
+        # protected path (the spec, the status files, the package, the skill trees) is still refused, but for the
+        # spec author's own spec path (design D24, ruling R6).
         from . import bmad_implementation as implementation
         touched = [path for path in changed if implementation.protected(path, binding.get("spec_path", ""),
                                                                          binding.get("project"))
+                   and not (binding.get("role") == "spec-author" and path == binding["spec_path"])
                    or path in protected or not any(scope_covers(scope, path) for scope in allowed)
                    or not _scope_allows(path, feature_scopes)]
         found = implementation.git_delta(repo.worktree, binding["base_commit"], allowed)
@@ -390,7 +404,8 @@ def _validated_receipt(repo, store, assignment, directory, historical=False):
        hashlib.sha256(last).hexdigest() != value["last_sha256"] or last != terminal.final or \
        value["exit_code"] != 0:
         raise DomainError("UNKNOWN_EVIDENCE", "Terminal receipt no longer matches raw process output")
-    if clients.client_facts(client, assignment["permission_mode"], terminal) != value.get("client_facts", {}):
+    if clients.client_facts(client, assignment["permission_mode"], terminal, web=launch.get("web") is True) != \
+       value.get("client_facts", {}):
         raise DomainError("UNKNOWN_EVIDENCE", "Client facts differ from the retained client output")
     final = _final(json.loads(last), assignment, profile)
     if any(final[key] != value.get(key) for key in
@@ -526,7 +541,8 @@ def run_assignment(repo: RepoIdentity, store: Store, owner: OwnerRef, assignment
     spec = clients.LaunchSpec(binary, mode, repo.worktree, directory, schema, model,
                               max_turns if max_turns is not None else chosen.max_turns_default, session,
                               (binding["sealed_root"],) if binding and binding.get("sealed_root") else (),
-                              commands, return_path=return_path)
+                              commands, web=bool(binding) and binding.get("web") is True and mode != "read-only",
+                              return_path=return_path)
     argv = chosen.argv(spec)
     run_env = chosen.run_env(spec)
     facts = chosen.launch_facts(spec)  # before the spawn: Copilot's pre_spawn_at and $HOME session check
@@ -631,7 +647,7 @@ def run_assignment(repo: RepoIdentity, store: Store, owner: OwnerRef, assignment
             if last != terminal.final:
                 raise DomainError("UNKNOWN_EVIDENCE", "Final message differs from the client terminal")
             final = _final(json.loads(last), assignment, profile)
-            facts = clients.client_facts(chosen, mode, terminal)
+            facts = clients.client_facts(chosen, mode, terminal, web=spec.web)
             if facts:
                 extras["client_facts"] = facts
             event = _return_evidence(repo, assignment, directory, before, after, final, terminal.thread_id,

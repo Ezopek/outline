@@ -19,7 +19,7 @@ class ReturnProfile:
 
 STAGES = ("reserve", "bundle", "record", "accept", "verify")
 MODULES = {"bmad-planning-v1": "bmad_planning", "bmad-review-v1": "bmad_review",
-           "bmad-implementation-v1": "bmad_implementation"}
+           "bmad-implementation-v1": "bmad_implementation", "bmad-spec-author-v1": "bmad_spec_author"}
 GENERIC = ReturnProfile("generic", {}, {}, lambda *args: {}, lambda stage, ctx: [])
 REGISTRY: dict[str, ReturnProfile] = {}  # tests may inject; production code never does
 

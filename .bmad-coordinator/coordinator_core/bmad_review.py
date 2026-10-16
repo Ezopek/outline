@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import bmad_contract as contract
 from . import bundles, clients
-from .bmad_implementation import IMPLEMENTATION
+from .bmad_implementation import SPEC_AUTHOR, STORY_PROFILES
 from .bmad_planning import (AFFECTED_IDS_RULE, PLAN, REVIEW, _file_entry, _row, _write_brief, client_binding,
                             client_label, effective_dependencies, read_assignment_binding, refuse_while_running,
                             spec_digest)
@@ -28,6 +28,7 @@ SEVERITIES = ("critical", "high", "medium", "low")
 KINDS = ("assumption", "partial")
 DEFAULT_LENSES = ["adversarial", "edge-case-hunter"]
 CODE_LENSES = ("acceptance", "matrix", "scope", "security", "regression")   # plan ruling R9: the code review lens set
+SPEC_LENSES = ("readiness", "scope", "verification", "edges", "fidelity")   # design D24: the spec review lens set
 LENS = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 FINDING_FIELDS = ("lens", "location", "trigger_condition", "guard_snippet", "potential_consequence", "severity")
@@ -297,7 +298,7 @@ def _carried(repo, store, contributors: list[dict]) -> dict:
         ret = json.loads(row["return_json"])
         payload = read_receipt(repo, ret["event_ref"], ret["payload_digest"]).get("profile_payload") or {}
         if "bmad_status" not in payload:
-            if binding_anchor(store.read_snapshot()["events"], row["id"])[0] == IMPLEMENTATION:
+            if binding_anchor(store.read_snapshot()["events"], row["id"])[0] in STORY_PROFILES:
                 continue
             raise DomainError("BLOCKED_EVIDENCE", "A contributor has no planning payload to carry into the review")
         assumptions += [{"contributor_id": row["id"], "kind": "assumption", "index": index,
@@ -349,7 +350,7 @@ SEVERITY_RULES = [
 def _planning_binding(store, events, assignment_id: str) -> dict:
     """The binding of a bundle contributor, whichever profile (planning or implementation) it is bound to."""
     name, bound = binding_anchor(events, assignment_id)
-    if name not in (PLAN, IMPLEMENTATION) or bound is None:
+    if name not in (PLAN, *STORY_PROFILES) or bound is None:
         raise DomainError("BLOCKED_EVIDENCE", "Contributor is not a bound planning or implementation assignment")
     return read_binding(store.path.parent, bound["evidence_ref"], bound["payload_digest"])
 
@@ -461,8 +462,13 @@ def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
     manifest = bundles.read_manifest(Path(bundle["path"]), bundle["manifest_digest"])
     if not bundles.sealed_copy(Path(bundle["path"]), manifest):
         raise DomainError("UNKNOWN_EVIDENCE", "Sealed bundle copy differs from its manifest")
-    if manifest.get("commit") and list(spec.lenses) != list(CODE_LENSES):   # ruling R9: the code review focus is fixed
-        raise _invalid("A code review runs exactly the lenses " + ", ".join(CODE_LENSES))
+    contributors = _contributors(snapshot, bundle)
+    code = bool(manifest.get("commit"))   # design D22: a code bundle is reviewed without the planning contract
+    # design D24: a commit-bound bundle of the spec author is a spec bundle
+    spec_bundle = code and any(binding_anchor(snapshot["events"], row["id"])[0] == SPEC_AUTHOR for row in contributors)
+    lenses, kind = (SPEC_LENSES, "spec") if spec_bundle else (CODE_LENSES, "code")
+    if code and list(spec.lenses) != list(lenses):   # ruling R9, design D24: the review focus is fixed
+        raise _invalid(f"A {kind} review runs exactly the lenses " + ", ".join(lenses))
     decided = sealed_decisions_state(manifest, snapshot["decisions"])
     if decided != "current":
         raise DomainError("STALE_INPUT" if decided == "stale" else "UNKNOWN_EVIDENCE",
@@ -473,14 +479,13 @@ def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
         raise DomainError("STALE_INPUT", "Live bundle files differ from the sealed manifest")
     if spec.reviewer_id in manifest["derived_author_ids"]:
         raise _invalid("The reviewer authored or edited this bundle")
-    contributors = _contributors(snapshot, bundle)
     names = [binding_anchor(snapshot["events"], row["id"])[0] for row in contributors]
-    if any(name not in (PLAN, IMPLEMENTATION) for name in names):
-        raise DomainError("BLOCKED_EVIDENCE", "Review needs bound bmad-planning or bmad-implementation contributors")
-    if any((name == IMPLEMENTATION) != bool(manifest.get("commit")) for name in names):
+    if any(name not in (PLAN, *STORY_PROFILES) for name in names):
+        raise DomainError("BLOCKED_EVIDENCE", "Review needs bound bmad-planning or story (implementation, spec author) "
+                          "contributors")
+    if any((name in STORY_PROFILES) != bool(manifest.get("commit")) for name in names):
         raise DomainError("BLOCKED_EVIDENCE", "Implementation contributors need a commit-bound bundle, and a "
                           "commit-bound bundle needs implementation contributors")
-    code = bool(manifest.get("commit"))   # design D22: a code bundle is reviewed without the planning contract
     if code and spec.compat_decision_id is not None:
         raise _invalid("A code review takes no compatibility decision")
     if not code and not spec.compat_decision_id:
@@ -516,7 +521,11 @@ def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
     sources = [_file_entry(worktree, item["path"]) for item in sealed]
     refuse_while_running(store.read_snapshot(), worktree)
     own, inherited = _provenance(store, snapshot, manifest["source_assignment_ids"])
-    if code:
+    if spec_bundle:
+        from . import bmad_spec_author
+        text = bmad_spec_author.review_brief(spec, worktree, sealed, bundle, feature, manifest, decisions, carried,
+                                             store, repo, snapshot)
+    elif code:
         text = implementation.review_brief(spec, worktree, sealed, bundle, feature, manifest, decisions, carried, store,
                                            repo, snapshot)
     else:

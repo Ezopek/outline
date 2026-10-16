@@ -55,6 +55,7 @@ class LaunchSpec:      # decided by the coordinator; a client only renders it
     commands: tuple[str, ...]                    # exact author Bash prefixes from the binding, else ()
     isolated: bool = False                       # D17: read-only, no Bash, no add-dir
     return_path: str | None = None               # worker-file clients only; also named in the envelope
+    web: bool = False                            # design D23: a story worker may use the network
 
 
 @dataclass(frozen=True)
@@ -149,8 +150,9 @@ def _codex_terminal(run_dir: Path, launch: dict) -> Terminal:
 
 def _codex_argv(spec: LaunchSpec) -> list[str]:
     sandbox = ["--sandbox", "read-only", "--skip-git-repo-check"] if spec.isolated else ["--sandbox", spec.mode]
-    return [spec.binary, "exec", "-", "-C", str(spec.worktree), *sandbox, "-c", "approval_policy=never", "--json",
-            "--output-schema", str(spec.run_dir / "return.schema.json"),
+    network = ["-c", CODEX_NETWORK] if spec.web and not spec.isolated and spec.mode != "read-only" else []
+    return [spec.binary, "exec", "-", "-C", str(spec.worktree), *sandbox, "-c", "approval_policy=never", *network,
+            "--json", "--output-schema", str(spec.run_dir / "return.schema.json"),
             "--output-last-message", str(spec.run_dir / "last.json"), "-m", spec.model]
 
 
@@ -159,7 +161,8 @@ CODEX = Client(
     return_source="client-file", envelope_via="stdin", max_envelope_bytes=None, write_free_readonly=True,
     max_turns_default=None, env={}, env_unset=frozenset(), run_subdirs=(), private_subdirs=(),
     observation_name=None, internal_tools=frozenset(), run_env=lambda spec: {}, allowed_tools=None,
-    argv=_codex_argv, launch_facts=lambda spec: {}, observe=None, terminal=_codex_terminal,
+    argv=_codex_argv, observe=None, terminal=_codex_terminal,
+    launch_facts=lambda spec: {"web": True} if spec.web and not spec.isolated and spec.mode != "read-only" else {},
     session_scrub=PARENT_MARKERS)  # Codex auth (OPENAI_*, CODEX_*) is outside these patterns and passes
 
 
@@ -177,6 +180,9 @@ CODEX = Client(
 ISOLATION = ["--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
              "--disallowedTools", "mcp__*"]
 AUTHOR_TOOLS = "Read,Grep,Glob,Edit,Write,Bash"
+WEB_TOOLS = "WebFetch,WebSearch"                 # design D23: appended to AUTHOR_TOOLS for a web worker
+WEB_RULES = ["WebFetch", "WebSearch"]            # design D23: bare allow rules (WebSearch takes no specifier)
+CODEX_NETWORK = "sandbox_workspace_write.network_access=true"   # design D23: outbound network in workspace-write
 REVIEW_TOOLS = "Read,Grep,Glob,Bash"
 REVIEW_ALLOWED = "Read,Grep,Glob,Bash(sha256sum *)"
 ISOLATED_TOOLS = ISOLATED_ALLOWED = "Read,Grep,Glob"
@@ -378,17 +384,23 @@ def _claude_argv(spec: LaunchSpec) -> list[str]:
             argv += ["--add-dir", directory]
         return argv
     rules = author_rules(spec)  # AUTHOR_DENIED adds values to the `--disallowedTools mcp__*` that ends ISOLATION
-    return argv + [*AUTHOR_DENIED, "--tools", AUTHOR_TOOLS, "--permission-mode", "acceptEdits",
+    tools = AUTHOR_TOOLS + ("," + WEB_TOOLS if spec.web else "")
+    if spec.web:   # design D23
+        rules = rules + WEB_RULES
+    return argv + [*AUTHOR_DENIED, "--tools", tools, "--permission-mode", "acceptEdits",
                    "--permission-prompts", "none", *(["--allowedTools", *rules] if rules else [])]
 
 
 def _claude_launch_facts(spec: LaunchSpec) -> dict:
     removed = removed_env(CLAUDE)
     inherited = sorted(name for name in os.environ if name.startswith(INHERITED) and name not in removed)
-    return {"requested_mode": spec.mode, "confinement": CLAUDE.confinement,
-            "isolation": {"flags": ISOLATION, "env": dict(CLAUDE.env), "inherited_names": inherited,
-                          "removed_names": removed, "kept_names": kept_env(CLAUDE)},
-            "session_id": spec.session_id, "max_turns": spec.max_turns}
+    facts = {"requested_mode": spec.mode, "confinement": CLAUDE.confinement,
+             "isolation": {"flags": ISOLATION, "env": dict(CLAUDE.env), "inherited_names": inherited,
+                           "removed_names": removed, "kept_names": kept_env(CLAUDE)},
+             "session_id": spec.session_id, "max_turns": spec.max_turns}
+    if spec.web and not spec.isolated and spec.mode != "read-only":   # design D23
+        facts["web"] = True
+    return facts
 
 
 def _flag(argv: list, name: str) -> str:
@@ -955,22 +967,24 @@ def doctor_notes(client: Client) -> dict:
             "warnings": [] if "COPILOT_GITHUB_TOKEN" in env else [COPILOT_TOKEN_WARNING]}
 
 
-def tool_check(client: Client, mode: str, facts: dict) -> str:
-    """T5: no declared check is not-checked; a declared check without tool information is blocked."""
+def tool_check(client: Client, mode: str, facts: dict, web: bool = False) -> str:
+    """T5: no declared check is not-checked; a declared check without tool information is blocked. A web writer
+    (design D23, `web` from sealed evidence) may also report the two web tools."""
     if client.allowed_tools is None:
         return "not-checked"
     tools = facts.get("tools")
     if tools is None:
         return "blocked"
-    if not isinstance(tools, list) or any(type(item) is not str for item in tools) or \
-       not set(tools) <= client.allowed_tools(mode):
+    allowed = client.allowed_tools(mode) | (frozenset(WEB_TOOLS.split(",")) if web and mode != "read-only"
+                                            else frozenset())
+    if not isinstance(tools, list) or any(type(item) is not str for item in tools) or not set(tools) <= allowed:
         raise _unknown("Worker reported a tool outside the allowed tools")
     return "passed"
 
 
-def client_facts(client: Client, mode: str, terminal: Terminal) -> dict:
+def client_facts(client: Client, mode: str, terminal: Terminal, web: bool = False) -> dict:
     """Recorded client facts; empty (and so absent from the receipt) for a client without facts or tool check."""
-    check = tool_check(client, mode, terminal.facts)
+    check = tool_check(client, mode, terminal.facts, web)
     facts = dict(terminal.facts)
     if facts or check != "not-checked":
         facts["tool_check"] = check

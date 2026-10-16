@@ -4,7 +4,7 @@ the no-progress rule, R3 stop (a stop outranks every bounds outcome), R1 max-tur
 mandate check (a pending stop therefore also outranks mandate-revised; both exit 11), R4 reconcile, R4j judgment
 classification, R5 inbox, R6 derive, R7 at most one action (prepare, launch, judge, decide, cancel-stale, the
 slice-3 wrappers bundle, review-prepare, review-record, accept and export, and the story actions setup, commit, verify,
-status and decide-form), W record. Outcomes are exactly continue, needs-human, done and failed. Linux only:
+status, decide-form and carry), W record. Outcomes are exactly continue, needs-human, done and failed. Linux only:
 fcntl.flock and /proc."""
 
 import fcntl
@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 
 from . import bmad_implementation as implementation
 from . import bmad_planning, bmad_review, bundles, clients, drive_pipeline, exporter, inbox, judgment, worker
+from . import bmad_spec_author
 from .drive_pipeline import open_high_findings
 from .model import DecisionInput, DomainError, OwnerRef
 from .run_receipt import seal
@@ -35,7 +36,7 @@ MARGIN = 120
 EXIT = {"done": 0, "continue": 10, "needs-human": 11, "failed": 12}
 # Design section 6: the question and judgment codes (update-budget aside) are answered by an inbox decision for R.
 REQUEST_REASONS = ("question-conflict", "judgment-budget", "question-refused", "judgment-unknown",
-                   "judgment-preflight", "product-decision")
+                   "judgment-preflight", "product-decision", "spec-decisions")
 STOP_REASONS = ("operator-stop", "signal-stop")
 GATE_REASONS = {"UNSUPPORTED_CONTRACT": "compat-review"}
 TOKEN = "<driver token>"
@@ -222,6 +223,19 @@ def _operator_action(outcome: str, reason: str | None, subjects: dict) -> str | 
                 "plain drive resume stops here again: fix the condition in the story worktree or the brief inputs; "
                 "then " + _NEW_REVISION + " (its first attempt is a fresh create); or release "
                 f"--token-file {TOKEN} and finish the story attended")
+    if reason == "spec-decisions" and subjects.get("request_id"):   # design D24: one decision answers every question
+        return (f"inbox add decision for request {subjects.get('request_id')} (choice {{\"answer\": <text>}} answering "
+                "every question, or {\"recommendations\": true}), then drive resume")
+    if reason == "spec-decisions":   # rulings P6, P13: the human approves the spec (the mandate) or sends it back
+        bundle = subjects.get("bundle_id")
+        revise = (f'{{"feature_id": "{subjects.get("feature_id")}", '
+                  f'"mandate_revision": {subjects.get("mandate_revision")}, "source_kind": "operator-reported", '
+                  f'"source_ref": "spec-revise:{bundle}", "reason": <why>, "choice": {{"revise": <the changes>}}}}')
+        return ("read the digest and the clauses (they become the story's delegated authority), then bmad accept "
+                f"review {subjects.get('review_id')} of bundle {bundle} with the driver's token while no driver runs, "
+                f"then drive resume; or, to have the author revise it, decision add --token-file {TOKEN} with {revise} "
+                f"while no driver runs, then drive resume; or release --token-file {TOKEN} and revise the spec "
+                "attended (spec_auto_accept: true in the pipeline skips this stop)")
     if reason in REQUEST_REASONS:
         return (f"inbox add decision for request {subjects.get('request_id')}, then drive resume "
                 "(or keep a driver waiting with --human-wait)")
@@ -356,7 +370,7 @@ class Run:
         self.reconciled, self.steps, self.decisions, self.interventions = set(), [], [], []
         self.launches, self.acknowledged = {}, []
         self.corrections = 0
-        self.commits = self.verifications = 0
+        self.commits = self.verifications = self.carries = 0
         self.graceful = self.aborting = self.ending = False
         self.attempt = self.judging = None
         self.run_id, self.restarts = None, 0
@@ -473,8 +487,8 @@ class Run:
         return found
 
     def _loop(self) -> Outcome:
-        sha = self.lease["pipeline_sha256"]
         while True:
+            sha = self.lease["pipeline_sha256"]   # a carry (design D24) moves the run to the carried pipeline
             # R1 no-progress, then R3 stop (ruling I1: a stop request outranks every bounds outcome, so a stopped run
             # never exits continue and the drive-loop never restarts it), then R1 bounds
             if self.no_progress >= 2:
@@ -491,7 +505,12 @@ class Run:
             before = snapshot["revision"]
             feature = next(row for row in snapshot["features"] if row["id"] == self.feature_id)
             if feature["mandate_revision"] != self.pipeline["mandate_revision"]:
-                return Outcome("needs-human", "mandate-revised", {"feature_id": self.feature_id})
+                status_sha = drive_pipeline.carried_from(snapshot, self.pipeline)
+                if status_sha is None:
+                    return Outcome("needs-human", "mandate-revised", {"feature_id": self.feature_id})
+                self._carried(drive_pipeline.carry(self.repo, self.store, self.owner, self.lease, self.pipeline,
+                                                   feature, status_sha, hook=_hook))   # killed after the revise
+                continue
             # R4 reconcile, once per run for each holding attempt of the feature
             for row in snapshot["assignments"]:
                 if row["feature_id"] == self.feature_id and row["state"] in HOLDING_STATES:
@@ -518,7 +537,10 @@ class Run:
                 return Outcome("done")
             if current.state != "ready":
                 outcome = Outcome("needs-human", current.reason, dict(current.subjects))
-                if outcome.reason in REQUEST_REASONS and self.bounds.human_wait_seconds > 0:
+                # ruling P10: the spec approval stop (no request) is not an inbox question, and its accept needs a
+                # stopped driver
+                answerable = outcome.reason != "spec-decisions" or outcome.subjects.get("request_id")
+                if outcome.reason in REQUEST_REASONS and answerable and self.bounds.human_wait_seconds > 0:
                     outcome = self._human_wait(outcome)
                     if outcome is None:
                         continue
@@ -630,12 +652,14 @@ class Run:
             return {"kind": "cancel-stale", "step_id": step.step_id, "assignment_id": action["assignment_id"]}, False
         if action["kind"] in ("prepare", "review-prepare"):
             planned = action["kind"] == "prepare"
-            story = planned and action.get("profile") == implementation.IMPLEMENTATION
+            story = planned and action.get("profile") in implementation.STORY_PROFILES
             cls = implementation.ImplementationPrepare if story else \
                 bmad_planning.PlanningPrepare if planned else bmad_review.ReviewPrepare
             spec = cls(**action["spec"])
+            author = story and action["profile"] == implementation.SPEC_AUTHOR
             try:
-                prepared = (implementation.prepare if story else bmad_planning.prepare if planned else
+                prepared = (bmad_spec_author.prepare if author else implementation.prepare if story else
+                            bmad_planning.prepare if planned else
                             bmad_review.review_prepare)(self.repo, self.store, self.owner, spec)
             except DomainError as exc:
                 if exc.code != "IDEMPOTENCY_CONFLICT" or not action.get("finishes"):
@@ -653,7 +677,8 @@ class Run:
         # the gates. A sealed story receipt or status commit is progress (its `story.*` anchor is a driver event).
         if action["kind"] == "setup":
             feature, project = self._feature(), self.pipeline["project"]
-            found = implementation.setup_worktree(self.repo, self.store, self.owner, feature, project)
+            found = implementation.setup_worktree(self.repo, self.store, self.owner, feature, project,
+                                                  action.get("start"))
             failed = [item["name"] for record in (found["setup"], found["baseline"]) if record
                       for item in record["results"] if item["outcome"] not in ("pass", "skipped")]
             failed += [found["setup"]["reason"]] if found["setup"].get("reason") else []   # the Git preflight
@@ -691,9 +716,15 @@ class Run:
                     "outcome": record["outcome"], "commit_sha": record["commit_sha"]}, True
         if action["kind"] == "status":
             feature = self._feature()
-            result, entries = (None, []) if action["phase"] == "start" else self._story_result(action)
-            # the start commit sits on the base commit (setup ran there), the done commit on the accepted commit
-            expected = feature["base_commit"] if action["phase"] == "start" else result["commit_sha"]
+            if action["phase"] == "spec":   # design D24 (ruling R3): the receipt names the accepted spec commit
+                result, entries = {key: action[key] for key in ("assignment_id", "commit_sha", "bundle_id", "review_id",
+                                                                "acceptance_id")}, []
+            else:
+                result, entries = (None, []) if action["phase"] == "start" else self._story_result(action)
+            # the start commit sits on the base commit (setup ran there; an epic story's spec status commit, design
+            # D24), the spec and done commits on the accepted commit
+            expected = action.get("start", feature["base_commit"]) if action["phase"] == "start" else \
+                result["commit_sha"]
             try:
                 record = implementation.sync_status(self.repo, self.store, self.owner, feature, action["phase"],
                                                     self.pipeline["project"], result, entries, hook=_hook,
@@ -709,6 +740,19 @@ class Run:
                 return _drift(step, exc, expected)
             return {"kind": "status", "step_id": step.step_id, "phase": action["phase"], "status_sha": record["sha"],
                     "entries": len(entries)}, True
+        if action["kind"] == "carry":
+            lease = drive_pipeline.carry(self.repo, self.store, self.owner, self.lease, self.pipeline, self._feature(),
+                                         action["status_sha"], hook=_hook)
+            decision = next(row for row in self.store.read_export_snapshot(self.owner)["decisions"]
+                            if row["feature_id"] == self.feature_id and
+                            row["source_ref"] == drive_pipeline.SPEC_READY + action["status_sha"])
+            self.decisions.append({"id": decision["id"], "source_kind": "coordinator",
+                                   "source_ref": decision["source_ref"], "request_id": None})
+            previous = self.lease["pipeline_sha256"]
+            self._carried(lease)
+            return {"kind": "carry", "step_id": step.step_id, "status_sha": action["status_sha"],
+                    "decision_id": decision["id"], "mandate_revision": self.pipeline["mandate_revision"],
+                    "pipeline_sha256": lease["pipeline_sha256"], "carried_from": previous}, True
         if action["kind"] == "decide-form":
             decided = coordinator.record_decision(self.owner, DecisionInput(
                 self.feature_id, self.pipeline["mandate_revision"], "coordinator", "driver:form",
@@ -769,6 +813,11 @@ class Run:
         return {"kind": "launch", "step_id": step.step_id, "assignment_id": action["assignment_id"], "role": role,
                 "client": self.pipeline["roles"][role]["client"], "state": report.state,
                 "evidence_needs": report.evidence_needs[:5]}, True
+
+    def _carried(self, lease: dict) -> None:
+        """Design D24: the run continues on the carried pipeline under the re-sealed lease."""
+        self.lease, self.pipeline = lease, drive_pipeline.load(self.base, lease["pipeline_sha256"])
+        self.carries += 1
 
     def _feature(self) -> dict:
         return next(row for row in self.store.read_export_snapshot(self.owner)["features"]
@@ -842,7 +891,8 @@ class Run:
             outcome = Outcome("needs-human", "signal-stop", outcome.subjects)
         subjects = outcome.subjects or {}
         counts = {"turns": self.turns, "launches": dict(self.launches), "decisions": {},
-                  "corrections": self.corrections, "commits": self.commits, "verifications": self.verifications}
+                  "corrections": self.corrections, "commits": self.commits, "verifications": self.verifications,
+                  "carries": self.carries}
         for item in self.decisions:
             counts["decisions"][item["source_kind"]] = counts["decisions"].get(item["source_kind"], 0) + 1
         stop = outcome.reason in STOP_REASONS
@@ -907,10 +957,11 @@ def status(repo, feature_id: str | None = None) -> dict:
     base = store.path.parent
     snapshot = store.read_snapshot()
     events = snapshot["events"]
-    leases = []
-    for row in events:
-        if row["kind"] != "drive.leased" or (feature_id and row["source_id"] != feature_id):
-            continue
+    leases, newest = [], {}
+    for row in events:   # a carry re-seals its lease (design D24): the newest record of each lease decides
+        if row["kind"] == "drive.leased" and not (feature_id and row["source_id"] != feature_id):
+            newest[row["subject_id"]] = row
+    for row in newest.values():
         runs = [item["source_id"] for item in events if item["kind"] == "drive.started" and
                 item["subject_id"] == row["subject_id"]]
         ends = {item["source_id"]: item for item in events if item["subject_id"] == row["subject_id"] and

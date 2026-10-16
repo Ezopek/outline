@@ -11,9 +11,9 @@ from pathlib import Path, PurePosixPath
 
 from . import bmad_contract as contract
 from . import bmad_implementation as implementation
-from . import bmad_planning, bundles, clients, judgment
-from .bmad_review import CODE_LENSES
-from .model import DomainError, OwnerRef
+from . import bmad_planning, bmad_spec_author, bundles, clients, judgment
+from .bmad_review import CODE_LENSES, SPEC_LENSES
+from .model import DecisionInput, DomainError, OwnerRef
 from .run_receipt import canonical, private_file, read_binding, read_receipt
 from .service import ANCHOR_TOPS, DRIVE_EVENTS, HOLDING_STATES, TERMINAL_STATES, Coordinator, _anchored_bytes, \
     _scope_allows, binding_anchor, holds_fence, resolving_decisions
@@ -22,10 +22,11 @@ from .store import _require_local_ext4
 FORMAT = 1
 STEP_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 ROLES = ("worker", "reviewer", "judgment")
-KINDS = ("compat", "author", "bundle", "review", "accept", "export", "setup", "implement", "commit", "verify", "status")
-WRAPS = {"bundle": ("author", "verify"), "review": ("bundle",), "accept": ("review",), "commit": ("implement",),
+KINDS = ("compat", "author", "bundle", "review", "accept", "export", "setup", "implement", "commit", "verify", "status",
+         "spec")
+WRAPS = {"bundle": ("author", "verify", "spec"), "review": ("bundle",), "accept": ("review",), "commit": ("implement",),
          "verify": ("commit",)}   # a wrapper step and the kinds it takes
-STORY_KINDS = ("setup", "implement", "commit", "verify", "status")
+STORY_KINDS = ("setup", "implement", "commit", "verify", "status", "spec")
 SKILLS = {"bmad-prd": "prd", "bmad-architecture": "architecture"}
 OUT_OF_SLICE = frozenset({"branch", "branches", "loop", "epics", "sprint_status", "sprint-status", "validate"})
 MAX_UPDATES = 8
@@ -36,6 +37,7 @@ MAX_TIMEOUT = 86400
 COMMAND_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 MAX_OUTPUT = 1 << 24
 COMPLETE = ("OBSERVED_COMPLETE_CLAIM", "OBSERVED_PARTIAL_CLAIM")
+SPEC_READY = "spec-ready:"   # design D24: the source_ref prefix of a carry's decision
 
 
 def _unsupported(message: str) -> DomainError:
@@ -67,7 +69,7 @@ def _integer(value, low: int, high: int, what: str) -> None:
 
 
 def _role(name: str, value) -> None:
-    _keys(value, ("client", "model", "timeout"), (), f"Role {name}")
+    _keys(value, ("client", "model", "timeout"), ("web",), f"Role {name}")
     if type(value["client"]) is not str:
         raise _invalid(f"Role {name} client must be a registered client name")
     if value["client"] not in clients.REGISTRY:
@@ -76,13 +78,28 @@ def _role(name: str, value) -> None:
     if value["model"].startswith("-"):
         raise _invalid(f"Role {name} model must not look like a flag")
     _integer(value["timeout"], 1, MAX_TIMEOUT, f"Role {name} timeout")
+    if "web" in value:   # design D23: web access for a story worker
+        if name != "worker":
+            raise _invalid("Only the worker role takes web")
+        if value["web"] is False:
+            raise _invalid("Omit web instead of false")
+        if value["web"] is not True:
+            raise _invalid("web must be true")
+        if value["client"] == clients.COPILOT.name:
+            raise _invalid("A copilot worker takes no web")
+
+
+def _head(step_id: str, steps: dict) -> dict:
+    """The step a chain of wrapper steps (accept -> review -> bundle -> author, verify -> commit -> implement, or
+    spec) starts from."""
+    while steps[step_id]["kind"] in WRAPS:
+        step_id = steps[step_id]["of"]
+    return steps[step_id]
 
 
 def _source(step_id: str, steps: dict) -> str | None:
-    """The skill of the author step that a chain of wrapper steps (accept -> review -> bundle -> author) starts from."""
-    while steps[step_id]["kind"] in WRAPS:
-        step_id = steps[step_id]["of"]
-    return steps[step_id].get("skill")
+    """The skill of the author step that a chain of wrapper steps starts from."""
+    return _head(step_id, steps).get("skill")
 
 
 def _wrapper(step: dict, kinds: dict, roles: dict) -> None:
@@ -161,9 +178,10 @@ def _command(item, what: str) -> None:
 
 def _project(value) -> None:
     """Design D5: the project block of a story pipeline. `artifacts_dir` is a normalized relative POSIX directory
-    without glob characters, so the status files' string-prefix checks (protected, prepare, sync_status) are sound."""
+    without glob characters, so the status files' string-prefix checks (protected, prepare, sync_status) are sound.
+    `context` (design D24) lists the relative files a spec author reads first."""
     _keys(value, ("setup", "verify", "env", "commit_identity", "output_limit_bytes"),
-          ("rules", "artifacts_dir", "briefs_dir"), "Pipeline project")
+          ("rules", "artifacts_dir", "briefs_dir", "context"), "Pipeline project")
     for name in ("setup", "verify"):
         if not isinstance(value[name], list):
             raise _invalid(f"Project {name} must be a list")
@@ -181,10 +199,11 @@ def _project(value) -> None:
            for key in ("name", "email")):
         raise _invalid("Project commit identity needs a name and an email")
     _integer(value["output_limit_bytes"], 1024, MAX_OUTPUT, "output_limit_bytes")
-    rules = value.get("rules", [])
-    if not isinstance(rules, list) or any(type(item) is not str or not item or PurePosixPath(item).is_absolute() or
-                                          ".." in PurePosixPath(item).parts for item in rules):
-        raise _invalid("Project rules must be relative file paths")
+    for key in ("rules", "context"):
+        paths = value.get(key, [])
+        if not isinstance(paths, list) or any(type(item) is not str or not item or PurePosixPath(item).is_absolute() or
+                                              ".." in PurePosixPath(item).parts for item in paths):
+            raise _invalid(f"Project {key} must be relative file paths")
     for key in ("artifacts_dir", "briefs_dir"):
         _directory(value, key)
 
@@ -203,31 +222,41 @@ def _directory(project: dict, key: str) -> None:
         raise _invalid("Project briefs_dir cannot lie under .git or .bmad-coordinator")
 
 
-def _story_step(step: dict, kinds: dict) -> None:
+def _story_step(step: dict, kinds: dict, steps: dict) -> None:
     sid, kind = step["id"], step["kind"]
     if kind == "setup":
         _keys(step, ("id", "kind"), (), f"Step {sid}")
         if "setup" in kinds.values():
             raise _invalid("A pipeline has one setup step")
-    elif kind == "implement":
+        if "spec" in kinds.values() and not any(item["kind"] == "status" and item["phase"] == "spec"
+                                                for item in steps.values()):
+            raise _invalid("The setup step follows the spec chain")
+    elif kind in ("spec", "implement"):   # design D24: the spec step takes the implement step's fields
         _keys(step, ("id", "kind", "author_id", "story"), (), f"Step {sid}")
         _text(step["author_id"], f"Step {sid} author")
         _keys(step["story"], ("spec_path", "story_key"), (), f"Step {sid} story")
         if any(type(step["story"][key]) is not str or not step["story"][key] for key in ("spec_path", "story_key")):
             raise _invalid(f"Step {sid} story needs spec_path and story_key")
-        if "implement" in kinds.values():
-            raise _invalid("A pipeline has one implement step")
-        if "setup" not in kinds.values() or "status" not in kinds.values():
+        if kind in kinds.values():
+            raise _invalid("A story pipeline has one spec step" if kind == "spec" else
+                           "A pipeline has one implement step")
+        if kind == "spec" and kinds:
+            raise _invalid("The spec step must be the first step")
+        if kind == "implement" and ("setup" not in kinds.values() or "status" not in kinds.values()):
             raise _invalid("The setup step and the start status step precede the implement step")
     else:  # status
         _keys(step, ("id", "kind", "phase"), ("of",), f"Step {sid}")
-        if step["phase"] not in ("start", "done"):
-            raise _invalid(f"Step {sid} phase must be start or done")
+        if step["phase"] not in ("spec", "start", "done"):
+            raise _invalid(f"Step {sid} phase must be spec, start or done")
         if step["phase"] == "start" and ("of" in step or "implement" in kinds.values()):
             raise _invalid("The start status step takes no `of` and precedes the implement step")
         if step["phase"] == "start" and "setup" not in kinds.values():   # the baseline runs on the base commit
             raise _invalid("The start status step follows the setup step")
-        if step["phase"] == "done" and (type(step.get("of")) is not str or kinds.get(step["of"]) != "accept"):
+        if step["phase"] == "spec" and (type(step.get("of")) is not str or kinds.get(step["of"]) != "accept" or
+                                        _head(step["of"], steps)["kind"] != "spec"):
+            raise _invalid("The spec status step takes the spec accept step")
+        if step["phase"] == "done" and (type(step.get("of")) is not str or kinds.get(step["of"]) != "accept" or
+                                        _head(step["of"], steps)["kind"] != "implement"):
             raise _invalid("The done status step takes an earlier accept step")
 
 
@@ -235,9 +264,10 @@ def validate(value) -> dict:
     """The canonical pipeline, or UNSUPPORTED_STEP (exit 4) for a kind, skill, intent or client outside the slice
     and INVALID_INPUT (exit 2) for shape, type, reference or budget errors. Pure; writes nothing."""
     _keys(value, ("kind", "format", "feature_id", "mandate_revision", "roles", "budgets", "steps"),
-          ("accept_on_high", "project"), "Pipeline")
-    if type(value.get("accept_on_high", False)) is not bool:
-        raise _invalid("accept_on_high must be true or false")
+          ("accept_on_high", "project", "spec_auto_accept"), "Pipeline")
+    for key in ("accept_on_high", "spec_auto_accept"):
+        if type(value.get(key, False)) is not bool:
+            raise _invalid(f"{key} must be true or false")
     if value["kind"] != "drive-pipeline" or type(value["format"]) is not int or value["format"] != FORMAT:
         raise _invalid("Pipeline kind or format is not supported")
     _text(value["feature_id"], "Pipeline feature")
@@ -285,29 +315,39 @@ def validate(value) -> dict:
             if (step["skill"], step["slug"]) in authors:
                 raise _invalid("A pipeline has one author step per skill and slug")
             authors.add((step["skill"], step["slug"]))
-        elif step["kind"] in ("setup", "implement", "status"):
-            _story_step(step, kinds)
+        elif step["kind"] in ("setup", "implement", "status", "spec"):
+            _story_step(step, kinds, seen)
         else:
             _wrapper(step, kinds, roles)
-            if "compat" not in kinds.values() and "implement" not in kinds.values():
-                raise _invalid("The compat step (planning) or the implement step (story) must precede every other step")
+            if not {"compat", "spec", "implement"} & set(kinds.values()):
+                raise _invalid("The compat step (planning) or the spec or implement step (story) must precede every "
+                               "other step")
             if "of" in step and any(item.get("of") == step["of"] for item in seen.values()):
                 raise _invalid(f"Step {step['of']} is taken by more than one step")
         kinds[sid] = step["kind"]
         seen[sid] = step
-    named = {step["author_id"] for step in steps if step["kind"] in ("author", "implement")}
+    named = {step["author_id"] for step in steps if step["kind"] in ("author", "spec", "implement")}
     if any(step["kind"] == "review" and step["reviewer_id"] in named for step in steps):
         raise _invalid("A reviewer must differ from every author of the pipeline")
     story = "implement" in kinds.values()
+    if roles["worker"].get("web") and not story:
+        raise _invalid("web needs a story pipeline")
+    if "spec_auto_accept" in value and not story:
+        raise _invalid("spec_auto_accept needs a story pipeline")
     if story and any(kind == "author" for kind in kinds.values()):
         raise _invalid("A pipeline drives either planning author steps or one story, never both")
     if story and "compat" in kinds.values():   # design D22: the story path reads no BMAD installation
         raise _invalid("A story pipeline takes no compat step")
     if story != ("project" in value):
         raise _invalid("A story pipeline needs the project block; a planning pipeline takes none")
+    # `story add` from an epic reads the default artifacts directory (design D24)
+    if story and "spec" in kinds.values() and \
+       implementation._artifacts_dir(value["project"]) != implementation.ARTIFACTS_DIR:
+        raise _invalid("A story added from an epic keeps the default artifacts_dir")
     if story:
         phases = [step["phase"] for step in steps if step["kind"] == "status"]
-        if phases != ["start", "done"] or "commit" not in kinds.values() or "verify" not in kinds.values() or \
+        expected = ["spec", "start", "done"] if "spec" in kinds.values() else ["start", "done"]
+        if phases != expected or "commit" not in kinds.values() or "verify" not in kinds.values() or \
            "accept" not in kinds.values():
             raise _invalid("A story pipeline runs status start, implement, commit, verify, bundle, review, accept, "
                            "status done")
@@ -380,7 +420,9 @@ def check_bindable(snapshot: dict, value: dict) -> bool:
     """Read-only pre-claim check; True when this exact pipeline is already bound at the current revision. Judgments
     (max_judgments > 0) need the mandate authority list `authority.delegated: [{id, text}]` (UNSUPPORTED_STEP); an
     export directory must exist outside every feature writable scope (INVALID_INPUT) on local ext4
-    (UNSUPPORTED_FILESYSTEM)."""
+    (UNSUPPORTED_FILESYSTEM). Design D24: a `spec` step binds only for a feature added from an epic (`provisional`),
+    which needs one, or carried past its spec (a `spec` status receipt), and names the implement step's story
+    (STALE_INPUT)."""
     value = validate(value)
     feature = next((row for row in snapshot["features"] if row["id"] == value["feature_id"]), None)
     if feature is None:
@@ -395,6 +437,16 @@ def check_bindable(snapshot: dict, value: dict) -> bool:
     implement = next((step for step in value["steps"] if step["kind"] == "implement"), None)
     if implement is not None:
         constraints = json.loads(feature["constraints_json"])
+        spec = next((step for step in value["steps"] if step["kind"] == "spec"), None)
+        provisional = isinstance(constraints, dict) and constraints.get("provisional") is True
+        carried = any(row["kind"] == "story.status" and row["subject_id"] == feature["id"] and
+                      row["source_id"] == "spec" for row in snapshot["events"])
+        if spec is not None and not provisional and not carried:
+            raise DomainError("STALE_INPUT", "A spec step needs a story added from an epic")
+        if provisional and spec is None:
+            raise DomainError("STALE_INPUT", "A story added from an epic needs a spec step")
+        if spec is not None and spec["story"] != implement["story"]:
+            raise DomainError("STALE_INPUT", "The spec and implement steps name different stories")
         if not isinstance(constraints, dict) or (constraints.get("story_key"), constraints.get("spec_path")) != \
            (implement["story"]["story_key"], implement["story"]["spec_path"]):
             raise DomainError("STALE_INPUT", "The implement step names another story than the feature")
@@ -466,7 +518,9 @@ def gather(repo, store, snapshot: dict, value: dict, generation: int) -> dict:
     design D22), step workspaces, planning, implementation and review bindings, observed profile payloads, the
     feature's judgments (from anchors and digest-valid receipts only), its bundle manifests (with a code bundle's
     commit), verify's state of every acceptance, the export pointer with its directory under each export step's `to`
-    and, for a story pipeline, the story receipts (`story_facts`)."""
+    and, for a story pipeline, the story receipts (`story_facts`); with a `spec` status receipt (design D24) also
+    whether its commit is on the branch, and with a spec step the digest and the clauses of each spec attempt's spec
+    at its commit."""
     feature = next(row for row in snapshot["features"] if row["id"] == value["feature_id"])
     worktree = Path(feature["worktree"])
     story = any(step["kind"] == "implement" for step in value["steps"])
@@ -528,7 +582,7 @@ def gather(repo, store, snapshot: dict, value: dict, generation: int) -> dict:
             except (DomainError, KeyError, TypeError, ValueError):
                 pass
             continue
-        if name not in (bmad_planning.PLAN, implementation.IMPLEMENTATION):
+        if name not in (bmad_planning.PLAN, *implementation.STORY_PROFILES):
             continue
         try:
             facts["bindings"][row["id"]] = read_binding(base, bound["evidence_ref"], bound["payload_digest"])
@@ -540,9 +594,39 @@ def gather(repo, store, snapshot: dict, value: dict, generation: int) -> dict:
             facts["payloads"].pop(row["id"], None)
     if "implement" in kinds:
         facts["story"] = {**implementation.story_facts(base, snapshot, feature["id"]), "acceptance_gates": gates}
+        if "spec" in facts["story"]["status"]:
+            facts["story"]["spec_on_branch"] = _spec_on_branch(worktree, facts["story"])
+        if "spec" in kinds:
+            facts["story"]["specs"] = _specs(repo, facts)
     else:
         facts["story"] = None
     return facts
+
+
+def _spec_on_branch(worktree: Path, story: dict) -> bool:
+    """Ruling R5: the `spec` status commit is HEAD or an ancestor of HEAD (the status currency's Git call)."""
+    sha = (story["status"].get("spec") or {}).get("sha")
+    return bool(sha) and implementation._git_run(worktree, ["merge-base", "--is-ancestor", sha, "HEAD"],
+                                                 check=False).returncode == 0
+
+
+def _specs(repo, facts: dict) -> dict:
+    """Design D24: for the spec at the commit of each spec attempt, `{digest, clauses}`: `bmad_spec_author.digest`
+    and the `S<n>: <text>` clauses the carry would delegate (`implementation.clauses`, I1), which the `spec-decisions`
+    stops render (a question, or the approval of a reviewed spec); both None when the spec does not parse."""
+    found = {}
+    for assignment_id, binding in facts["bindings"].items():
+        commit = facts["story"]["commits"].get(assignment_id) or {}
+        if binding.get("profile") != implementation.SPEC_AUTHOR or not commit.get("sha"):
+            continue
+        try:
+            text = implementation._read_at(repo, commit["sha"], binding["spec_path"], "Story spec")
+            clauses = implementation.clauses(implementation.parse_spec(text), [])
+            found[assignment_id] = {"digest": bmad_spec_author.digest(text),
+                                    "clauses": [f"{item['id']}: {item['text']}" for item in clauses]}
+        except DomainError:
+            found[assignment_id] = {"digest": None, "clauses": None}
+    return found
 
 
 def fence_holder(snapshot: dict, feature_id: str, exclude: str | None = None) -> tuple[str, str] | None:
@@ -632,12 +716,13 @@ def _author_state(step, sha, snapshot, facts, feature, compat_id, value, prd_acc
                      {**subjects, "assignment_id": stale["id"]})
 
 
-def _judgment_state(sid, sha, request, facts, value, subjects, story=False) -> StepState:
+def _judgment_state(sid, sha, request, facts, value, subjects, kind="author", stop=None) -> StepState:
     """An open request without conflicts: judge it (budget left, never judged), decide from a valid in-mandate answer,
     or a needs-human reason. The latest judgment of the request decides; an unknown or failed-preflight judgment is
     never replaced, and an observed verdict is final (a restart never re-asks). For a story an observed refusal is a
-    product decision (design D16) and carries the question and options."""
-    kind = "implement" if story else "author"
+    product decision (design D16) and carries the question and options; for a spec attempt (`stop`, design D24) it
+    is the `spec-decisions` stop with the given subjects."""
+    story = kind != "author"
     judged = facts.get("judgments", {})
     mine = [item for item in judged.values() if item["request_id"] == request["id"]]
     if not mine:
@@ -660,6 +745,8 @@ def _judgment_state(sid, sha, request, facts, value, subjects, story=False) -> S
         if last["verdict"] in ("answer", "defer") and last["valid"]:
             return StepState(sid, kind, "ready", None,
                              {"kind": "decide", "request_id": request["id"], "key": last["key"]}, subjects)
+        if stop is not None:
+            return StepState(sid, kind, "needs-human", "spec-decisions", None, stop)
         refused = {**subjects, "defects": last["defects"][:8], "refusal": (last.get("refusal") or "")[:400]}
         if story:
             question = json.loads(request["question_json"])
@@ -777,13 +864,15 @@ def _head_state(step, sid, snapshot, facts, bound, key, compat_id, client, value
 
 def _bundle_state(step, snapshot, facts, feature, done) -> StepState:
     """Satisfied when a bundle of the author step's workspace at the current revision names its head (by binding
-    content, whoever captured it); otherwise ready to bundle the workspace. A code bundle (of a verify step) is
-    satisfied by a bundle at the current revision naming the verified head whose manifest carries its commit."""
+    content, whoever captured it); otherwise ready to bundle the workspace. A code bundle (of a verify step, or the
+    spec bundle of the spec step: design D24) is satisfied by a bundle at the current revision naming the step's head
+    whose manifest carries its commit."""
     sid = step["id"]
-    if done[step["of"]].kind == "verify":
-        verify = done[step["of"]].subjects
-        head, sha = verify["assignment_id"], verify["commit_sha"]
-        subjects = {"step_id": sid, "assignment_id": head, "commit_sha": sha, "code": True}
+    if done[step["of"]].kind in ("verify", "spec"):
+        wrapped = done[step["of"]]
+        head, sha = wrapped.subjects["assignment_id"], wrapped.subjects["commit_sha"]
+        subjects = {"step_id": sid, "assignment_id": head, "commit_sha": sha, "code": True,
+                    **({"spec": True} if wrapped.kind == "spec" else {})}
         found = sorted((item["revision"], bundle_id) for bundle_id, item in facts["bundles"].items()
                        if item["mandate_revision"] == feature["mandate_revision"] and head in item["sources"] and
                        (item.get("commit") or {}).get("sha") == sha)
@@ -829,8 +918,8 @@ def _review_state(step, sha, snapshot, facts, feature, compat_id, value, done) -
             "client": value["roles"]["reviewer"]["client"]}
     if compat_id is not None and not done[step["of"]].subjects.get("code"):   # design D22: planning only
         spec["compat_decision_id"] = compat_id
-    if done[step["of"]].subjects.get("code"):   # ruling R9: a code bundle is reviewed with the code lenses
-        spec["lenses"] = list(CODE_LENSES)
+    if done[step["of"]].subjects.get("code"):   # ruling R9: the code lenses; design D24: a spec bundle's own
+        spec["lenses"] = list(SPEC_LENSES if done[step["of"]].subjects.get("spec") else CODE_LENSES)
     if not bound:
         if half:  # a half-finished prepare: the same key finishes an identical spec, otherwise it is re-keyed
             stale = half[-1]
@@ -899,9 +988,12 @@ def _accept_state(step, snapshot, facts, done, value) -> StepState:
     """Satisfied when an acceptance of the bundle exists and verify reports it current; a non-current one needs a
     human and is never redone. An open critical finding on the bundle needs a human once the correction budget is
     spent (design D6; the author step prepares corrections while it lasts), and so do open `high` findings of the
-    review unless the pipeline sets `accept_on_high`; the stop carries `corrections: {used, max}`. Otherwise ready to
-    accept the review. A story acceptance that is not current only because of an unrecorded commit above its commit,
-    while the done status has no record, stays satisfied (`status_pending`): the done status step re-adopts it."""
+    review unless the pipeline sets `accept_on_high`; the stop carries `corrections: {used, max}`. A spec bundle
+    (design D24, ruling P6) is the human's to accept unless the pipeline sets `spec_auto_accept`: `spec-decisions`
+    without questions, with the digest and the clauses of the spec the human approves (or sends back with a revise
+    decision, ruling P13). Otherwise ready to accept the review. A story acceptance that is not current only because
+    of an unrecorded commit above its commit, while the done status has no record, stays satisfied
+    (`status_pending`): the status step re-adopts it."""
     sid, review = step["id"], done[step["of"]]
     bundle_id, review_id = review.subjects["bundle_id"], review.subjects["review_id"]
     subjects = {"step_id": sid, "bundle_id": bundle_id, "review_id": review_id}
@@ -919,11 +1011,12 @@ def _accept_state(step, snapshot, facts, done, value) -> StepState:
     sources = facts["bundles"].get(bundle_id, {}).get("sources", [])
     bindings = [facts["bindings"].get(item, {}) for item in sources]
     workspace = next((item["workspace"] for item in bindings if item.get("workspace")), None)
-    if bundle_row is not None and any(item.get("profile") == implementation.IMPLEMENTATION for item in bindings):
+    profiles = {item.get("profile") for item in bindings} & set(implementation.STORY_PROFILES)
+    if bundle_row is not None and profiles:   # ruling P5: the corrections of the bundle's kind (spec or implement)
         rev = bundle_row["mandate_revision"]
         bound = [row for row in snapshot["assignments"] if row["feature_id"] == bundle_row["feature_id"] and
                  row["state"] != "cancelled-before-launch" and row["mandate_revision"] == rev and
-                 facts["bindings"].get(row["id"], {}).get("profile") == implementation.IMPLEMENTATION]
+                 facts["bindings"].get(row["id"], {}).get("profile") in profiles]
         used = _story_corrections(bound, facts)
     else:
         used = corrections_used(snapshot, facts, bundle_row["feature_id"], workspace, bundle_row["mandate_revision"]) \
@@ -940,14 +1033,22 @@ def _accept_state(step, snapshot, facts, done, value) -> StepState:
         if high:
             return StepState(sid, "accept", "needs-human", "open-high-findings", None,
                              {**subjects, "finding_ids": high})
+    if profiles == {implementation.SPEC_AUTHOR} and not value.get("spec_auto_accept", False):
+        head = facts["bundles"][bundle_id]["commit"]["assignment_id"]
+        spec = facts["story"]["specs"].get(head) or {}
+        return StepState(sid, "accept", "needs-human", "spec-decisions", None, {
+            **subjects, "feature_id": bundle_row["feature_id"], "mandate_revision": bundle_row["mandate_revision"],
+            "assignment_id": head, "spec_path": facts["bindings"][head].get("spec_path"), "questions": [],
+            "digest": spec.get("digest"), "clauses": spec.get("clauses")})
     return StepState(sid, "accept", "ready", None, {"kind": "accept", "bundle_id": bundle_id, "review_id": review_id},
                      subjects)
 
 
 def _status_pending(facts: dict, acceptance_id: str) -> bool:
     """A story's accepted bundle commit whose only verify reason is an unrecorded commit above it while the `done`
-    status has no record: the commit of a status step killed before its seal. The status step re-adopts it (or
-    refuses) before currency applies again; a story pipeline has one accept step, wrapped by the done status step."""
+    status has no record: the commit of a status step killed before its seal. That status step re-adopts it (or
+    refuses) before currency applies again: each accept step of a story pipeline (the spec chain's, design D24, and
+    the code chain's) is wrapped by its own status step (`spec`, `done`)."""
     story = facts.get("story")
     if story is None or "done" in story["status"]:
         return False
@@ -998,17 +1099,27 @@ def _story_updates(bound, facts) -> int:
                        for key in ("corrects_review", "corrects_verify")))
 
 
+def _start(facts) -> dict:
+    """Design D24: an epic story starts on its spec status commit (the spec chain moved HEAD past the base commit),
+    so its baseline and its start status commit sit there while that commit is on the branch; `{}` for any other
+    story."""
+    sha = (facts["story"]["status"].get("spec") or {}).get("sha")
+    return {"start": sha} if sha and facts["story"].get("spec_on_branch") else {}
+
+
 def _setup_state(step, facts, feature) -> StepState:
     sid, story = step["id"], facts["story"]
     subjects = {"step_id": sid}
     setup, baseline = story["setup"], story["baseline"]
+    start = _start(facts)
     fine = (setup and setup.get("outcome") == "pass" and setup.get("base_commit") == feature["base_commit"] and
-            baseline and baseline.get("outcome") == "pass" and baseline.get("commit_sha") == feature["base_commit"])
+            baseline and baseline.get("outcome") == "pass" and
+            baseline.get("commit_sha") == start.get("start", feature["base_commit"]))
     if fine:
         return StepState(sid, "setup", "satisfied", None, None, {**subjects, "setup_ref": setup["ref"],
                                                                  "baseline_ref": baseline["ref"]})
     previous = {"setup": setup and setup.get("outcome"), "baseline": baseline and baseline.get("outcome")}
-    return StepState(sid, "setup", "ready", None, {"kind": "setup"}, {**subjects, "previous": previous})
+    return StepState(sid, "setup", "ready", None, {"kind": "setup", **start}, {**subjects, "previous": previous})
 
 
 def _status_state(step, facts, done) -> StepState:
@@ -1017,54 +1128,68 @@ def _status_state(step, facts, done) -> StepState:
     subjects = {"step_id": sid, "phase": phase}
     if record and record.get("sha"):
         return StepState(sid, "status", "satisfied", None, None, {**subjects, "status_sha": record["sha"]})
-    action = {"kind": "status", "phase": phase}
-    if phase == "done":
+    action = {"kind": "status", "phase": phase, **(_start(facts) if phase == "start" else {})}
+    if phase in ("spec", "done"):
         accept = done[step["of"]].subjects
         action.update(acceptance_id=accept["acceptance_id"], bundle_id=accept["bundle_id"],
                       review_id=accept["review_id"])
+    if phase == "spec":   # design D24 (ruling R3): the status commit sits on the accepted spec commit
+        commit = facts["bundles"][accept["bundle_id"]]["commit"]
+        action.update(assignment_id=commit["assignment_id"], commit_sha=commit["sha"])
     return StepState(sid, "status", "ready", None, action, subjects)
 
 
-def _implement_state(step, sha, snapshot, facts, feature, value) -> StepState:
+def _implement_state(step, sha, snapshot, facts, feature, value, kind="implement") -> StepState:
+    """The head of an implement step, or of a spec step (`kind` "spec", design D24): its bound attempts are those of
+    the kind's profile (ruling P5), so each kind keeps its own chain, updates and corrections."""
     sid, rev = step["id"], feature["mandate_revision"]
     subjects = {"step_id": sid}
+    profile = implementation.SPEC_AUTHOR if kind == "spec" else implementation.IMPLEMENTATION
     prepared = {row["subject_id"]: row["revision"] for row in snapshot["events"]
                 if row["kind"] == "assignment.prepared"}
     rows = [row for row in snapshot["assignments"] if row["feature_id"] == feature["id"]]
     live = [row for row in rows if row["state"] != "cancelled-before-launch" and row["mandate_revision"] == rev]
-    bound = sorted((row for row in live
-                    if facts["bindings"].get(row["id"], {}).get("profile") == implementation.IMPLEMENTATION),
+    bound = sorted((row for row in live if facts["bindings"].get(row["id"], {}).get("profile") == profile),
                    key=lambda row: prepared[row["id"]])
     prefix = f"drv-{sha[:12]}-{sid}-"
     key = _next_key(sha, sid, rows)
     half = sorted((row for row in live if row["id"] in facts["unbound"] and row["state"] == "prepared" and
                    _own(row["idempotency_key"], prefix)), key=lambda row: prepared[row["id"]])
-    state = _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, feature, sha)
+    state = _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, feature, sha, kind)
     if not half:
         return state
     stale = half[-1]
     if state.state == "ready" and state.action["kind"] == "prepare":
         spec = {**state.action["spec"], "key": stale["idempotency_key"]}
-        return StepState(sid, "implement", "ready", None, {**state.action, "spec": spec, "finishes": stale["id"]},
+        return StepState(sid, kind, "ready", None, {**state.action, "spec": spec, "finishes": stale["id"]},
                          {**state.subjects, "assignment_id": stale["id"]})
-    return StepState(sid, "implement", "ready", None, {"kind": "cancel-stale", "assignment_id": stale["id"]},
+    return StepState(sid, kind, "ready", None, {"kind": "cancel-stale", "assignment_id": stale["id"]},
                      {**subjects, "assignment_id": stale["id"]})
 
 
-def _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, feature, sha) -> StepState:
+def _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, feature, sha,
+                    kind="implement") -> StepState:
+    """Design D24: a spec attempt (`kind` "spec") has no verify; its completed commit is corrected after a recorded
+    review as code is, an empty one is final, and an open request may ask several questions (ruling R1) whose
+    refused judgment stops `spec-decisions`."""
     client = value["roles"]["worker"]["client"]
+    author = kind == "spec"
     # design D21 (F3): every story prepare carries the chain's resolving decisions, so the brief, the binding, the
     # bundle manifest and the code review brief see a decision that resolved an earlier attempt's question
     decisions = [{"id": item["id"]} for item in resolving_decisions(snapshot, {row["id"] for row in bound})]
 
-    def spec(**extra):
-        return {"feature_id": feature["id"], "key": key, "author_id": step["author_id"],
-                "client": client, "project": value["project"], "decisions": decisions, **extra}
+    def spec(**extra):   # an operator's revise decision joins the update's decisions (ruling P13)
+        return {"feature_id": feature["id"], "key": key, "author_id": step["author_id"], "client": client,
+                "project": value["project"],
+                "decisions": decisions + ([{"id": extra["revises"]}] if "revises" in extra else []),
+                **({"web": True} if value["roles"]["worker"].get("web") is True else {}),
+                **({"kind": "spec"} if author else {}), **extra}
 
     def prepare(intent, **extra):
-        return StepState(sid, "implement", "ready", None,
-                         {"kind": "prepare", "profile": implementation.IMPLEMENTATION, "intent": intent,
-                          "spec": spec(intent=intent, **extra)}, subjects)
+        return StepState(sid, kind, "ready", None,
+                         {"kind": "prepare", "profile": implementation.SPEC_AUTHOR if author else
+                          implementation.IMPLEMENTATION, "intent": intent, "spec": spec(intent=intent, **extra)},
+                         subjects)
 
     if not bound:
         return prepare("create")
@@ -1073,65 +1198,98 @@ def _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, fea
     state = head["state"]
     if state == "prepared":
         if head["owner_generation"] != facts["generation"]:
-            return StepState(sid, "implement", "ready", None, {"kind": "cancel-stale", "assignment_id": head["id"]},
+            return StepState(sid, kind, "ready", None, {"kind": "cancel-stale", "assignment_id": head["id"]},
                              subjects)
-        return StepState(sid, "implement", "ready", None,
+        return StepState(sid, kind, "ready", None,
                          {"kind": "launch", "assignment_id": head["id"], "role": "worker"}, subjects)
     if state in HOLDING_STATES:
-        return StepState(sid, "implement", "in-flight", "attempt-unknown", None, {**subjects, "holder": head["id"]})
+        return StepState(sid, kind, "in-flight", "attempt-unknown", None, {**subjects, "holder": head["id"]})
     if state == "resolved-unknown":
-        return StepState(sid, "implement", "needs-human", "attempt-resolved", None, subjects)
+        return StepState(sid, kind, "needs-human", "attempt-resolved", None, subjects)
     ret = json.loads(head["return_json"]) if head["return_json"] else {}
     payload = facts["payloads"].get(head["id"])
     if state not in TERMINAL_STATES or ret.get("provenance_class") != "observed" or not isinstance(payload, dict):
-        return StepState(sid, "implement", "needs-human", "unobserved-return", None, {**subjects, "holder": head["id"]})
+        return StepState(sid, kind, "needs-human", "unobserved-return", None, {**subjects, "holder": head["id"]})
     commit = facts["story"]["commits"].get(head["id"])
     if commit is None:  # design D9: every terminal attempt is committed before anything else is derived
-        return StepState(sid, "implement", "ready", None, {"kind": "commit", "assignment_id": head["id"]}, subjects)
+        return StepState(sid, kind, "ready", None, {"kind": "commit", "assignment_id": head["id"]}, subjects)
     subjects = {**subjects, "commit_sha": commit.get("sha"), "empty": bool(commit.get("empty"))}
     binding = facts["bindings"][head["id"]]
     continues = binding.get("continues") or {}
     budgets = value["budgets"]
     if state == "blocked":
-        return StepState(sid, "implement", "needs-human", "worker-blocked", None,
+        return StepState(sid, kind, "needs-human", "worker-blocked", None,
                          {**subjects, "condition": "returned blocked"})
     if state == "completed-claim":
         if commit.get("empty"):
-            if continues.get("empty_attempt"):
-                return StepState(sid, "implement", "needs-human", "worker-blocked", None,
+            if continues.get("empty_attempt") or author:
+                return StepState(sid, kind, "needs-human", "worker-blocked", None,
                                  {**subjects, "condition": "no change produced"})
             if _story_updates(bound, facts) >= budgets["max_updates"]:
-                return StepState(sid, "implement", "needs-human", "update-budget", None, subjects)
+                return StepState(sid, kind, "needs-human", "update-budget", None, subjects)
             return prepare("update", update_of=head["id"], empty_attempt=True)
-        verify = facts["story"]["verifies"].get(head["id"])
-        if verify is None:
-            return StepState(sid, "implement", "ready", None, {"kind": "verify", "assignment_id": head["id"]}, subjects)
-        subjects = {**subjects, "verify_ref": verify["ref"], "verify_outcome": verify["outcome"]}
-        if verify["outcome"] != "pass":
-            if _story_corrections(bound, facts) >= budgets.get("max_corrections", 0):
-                return StepState(sid, "implement", "satisfied", None, None, subjects)   # the verify step stops
-            return prepare("update", update_of=head["id"], corrects_verify=verify["ref"])
-        correction = _code_correction(sid, snapshot, facts, bound, head, commit, value, subjects, feature, prepare)
-        return correction or StepState(sid, "implement", "satisfied", None, None, subjects)
+        if not author:   # a spec attempt runs no verification (design D24)
+            verify = facts["story"]["verifies"].get(head["id"])
+            if verify is None:
+                return StepState(sid, kind, "ready", None, {"kind": "verify", "assignment_id": head["id"]}, subjects)
+            subjects = {**subjects, "verify_ref": verify["ref"], "verify_outcome": verify["outcome"]}
+            if verify["outcome"] != "pass":
+                if _story_corrections(bound, facts) >= budgets.get("max_corrections", 0):
+                    return StepState(sid, kind, "satisfied", None, None, subjects)   # the verify step stops
+                return prepare("update", update_of=head["id"], corrects_verify=verify["ref"])
+        correction = _code_correction(sid, snapshot, facts, bound, head, commit, value, subjects, feature, prepare) or \
+            (author and _spec_revision(sid, snapshot, facts, bound, head, commit, value, subjects, prepare))
+        return correction or StepState(sid, kind, "satisfied", None, None, subjects)
     requests = [row for row in snapshot["decision_requests"] if row["assignment_id"] == head["id"]]
     if not requests:
-        return StepState(sid, "implement", "needs-human", "unobserved-return", None, subjects)
+        return StepState(sid, kind, "needs-human", "unobserved-return", None, subjects)
     request = requests[0]
     subjects["request_id"] = request["id"]
     if request["state"] == "open":
         if payload.get("conflicts"):
-            return StepState(sid, "implement", "needs-human", "question-conflict", None, subjects)
-        if len(payload.get("questions") or []) > 1:   # ruling R6: re-asked without a model
-            return StepState(sid, "implement", "ready", None, {"kind": "decide-form", "request_id": request["id"]},
+            return StepState(sid, kind, "needs-human", "question-conflict", None, subjects)
+        if not author and len(payload.get("questions") or []) > 1:   # ruling R6: re-asked without a model
+            return StepState(sid, kind, "ready", None, {"kind": "decide-form", "request_id": request["id"]},
                              subjects)
-        return _judgment_state(sid, sha, request, facts, value, subjects, story=True)
+        stop = {"step_id": sid, "assignment_id": head["id"], "request_id": request["id"],
+                "spec_path": binding.get("spec_path"), "questions": payload.get("open_questions") or [],
+                "digest": (facts["story"]["specs"].get(head["id"]) or {}).get("digest")} if author else None
+        return _judgment_state(sid, sha, request, facts, value, subjects, kind, stop)
     resolver = next((row for row in snapshot["decisions"] if row["id"] == request["resolution_decision_id"]), None)
     if resolver is None or resolver["mandate_revision"] != head["mandate_revision"]:
-        return StepState(sid, "implement", "needs-human", "stale-input", None,
+        return StepState(sid, kind, "needs-human", "stale-input", None,
                          {**subjects, "detail": "request resolved at another mandate revision"})
     if _story_updates(bound, facts) >= budgets["max_updates"]:
-        return StepState(sid, "implement", "needs-human", "update-budget", None, subjects)
+        return StepState(sid, kind, "needs-human", "update-budget", None, subjects)
     return prepare("update", update_of=head["id"], continues_request=request["id"])
+
+
+def _open_bundle(snapshot, facts, head, commit) -> str | None:
+    """The newest bundle of the head's commit at its revision, unless it is accepted."""
+    found = sorted((item["revision"], bundle_id) for bundle_id, item in facts["bundles"].items()
+                   if item["mandate_revision"] == head["mandate_revision"] and head["id"] in item["sources"] and
+                   (item.get("commit") or {}).get("sha") == commit["sha"])
+    if not found or any(row["bundle_id"] == found[-1][1] for row in snapshot["acceptances"]):
+        return None
+    return found[-1][1]
+
+
+def _spec_revision(sid, snapshot, facts, bound, head, commit, value, subjects, prepare) -> StepState | None:
+    """Ruling P13: the operator's `spec-revise:<bundle>` decision (`{"revise": <text>}`, operator-reported, at the
+    head's revision) for the newest unaccepted bundle of the head's commit prepares a spec-author update carrying it,
+    counted against max_updates; any other decision is ignored."""
+    bundle_id = _open_bundle(snapshot, facts, head, commit)
+    decision = bundle_id and next((row for row in snapshot["decisions"] if row["feature_id"] == head["feature_id"] and
+                                   row["mandate_revision"] == head["mandate_revision"] and
+                                   row["source_ref"] == implementation.REVISE + bundle_id and
+                                   implementation.revise_text(row) is not None), None)
+    if not decision:
+        return None
+    subjects = {**subjects, "bundle_id": bundle_id, "decision_id": decision["id"]}
+    if _story_updates(bound, facts) >= value["budgets"]["max_updates"]:
+        return StepState(sid, "spec", "needs-human", "update-budget", None, subjects)
+    return StepState(sid, "spec", "ready", None,
+                     prepare("update", update_of=head["id"], revises=decision["id"]).action, subjects)
 
 
 def _code_correction(sid, snapshot, facts, bound, head, commit, value, subjects, feature, prepare) -> StepState | None:
@@ -1140,13 +1298,8 @@ def _code_correction(sid, snapshot, facts, bound, head, commit, value, subjects,
     budget = value["budgets"].get("max_corrections", 0)
     if budget <= 0:
         return None
-    found = sorted((item["revision"], bundle_id) for bundle_id, item in facts["bundles"].items()
-                   if item["mandate_revision"] == head["mandate_revision"] and head["id"] in item["sources"] and
-                   (item.get("commit") or {}).get("sha") == commit["sha"])
-    if not found:
-        return None
-    bundle_id = found[-1][1]
-    if any(row["bundle_id"] == bundle_id for row in snapshot["acceptances"]):
+    bundle_id = _open_bundle(snapshot, facts, head, commit)
+    if bundle_id is None:
         return None
     recorded = {row["subject_id"]: row["revision"] for row in snapshot["events"] if row["kind"] == "review.recorded"}
     observed = sorted((recorded.get(row["id"], 0), row["id"], row["finding_json"]) for row in snapshot["reviews"]
@@ -1158,7 +1311,7 @@ def _code_correction(sid, snapshot, facts, bound, head, commit, value, subjects,
     if not blocking or "/" in blocking or _story_corrections(bound, facts) >= budget:
         return None
     state = prepare("update", update_of=head["id"], corrects_review=review_id, finding_ids=blocking)
-    return StepState(sid, "implement", "ready", None, state.action,
+    return StepState(sid, state.kind, "ready", None, state.action,
                      {**subjects, "bundle_id": bundle_id, "review_id": review_id, "finding_ids": blocking})
 
 
@@ -1186,19 +1339,46 @@ def _verify_state(step, facts, done, value, snapshot, feature) -> StepState:
     rev = feature["mandate_revision"]
     bound = [row for row in snapshot["assignments"] if row["feature_id"] == feature["id"] and
              row["state"] != "cancelled-before-launch" and row["mandate_revision"] == rev and
-             facts["bindings"].get(row["id"], {}).get("profile") == implementation.IMPLEMENTATION]
+             facts["bindings"].get(row["id"], {}).get("profile") == implementation.IMPLEMENTATION]   # ruling P5
     used = {"used": _story_corrections(bound, facts), "max": value["budgets"].get("max_corrections", 0)}
     return StepState(sid, "verify", "needs-human", "correction-budget", None, {
         **subjects, "corrections": used,
         "failed": [item["name"] for item in verify.get("results", []) if item["outcome"] not in ("pass", "skipped")]})
 
 
+def _spec_chain(steps) -> set:
+    """The ids of the spec step and of its bundle, review, accept and `status spec` steps (design D24)."""
+    found = {step["id"]: step for step in steps}
+    return {sid for sid, step in found.items() if step["kind"] == "spec" or
+            (step["kind"] == "status" and step["phase"] == "spec") or
+            (step["kind"] in ("bundle", "review", "accept") and _head(sid, found)["kind"] == "spec")}
+
+
+def _spec_receipt(step, receipt: dict, feature: dict) -> StepState:
+    """Ruling R5: a spec-chain step satisfied by the sealed `spec` status receipt whose commit is on the branch, with
+    the receipt's subjects; its status step is the `carry` (ruling R4) while the feature is still provisional."""
+    result = receipt.get("result") or {}
+    subjects = {"step_id": step["id"], **{key: result.get(key) for key in (
+        "assignment_id", "commit_sha", "bundle_id", "review_id", "acceptance_id")}, "status_sha": receipt["sha"]}
+    if step["kind"] == "status" and json.loads(feature["constraints_json"]).get("provisional") is True:
+        return StepState(step["id"], "status", "ready", None, {
+            "kind": "carry", "status_sha": receipt["sha"], "bundle_id": result.get("bundle_id"),
+            "acceptance_id": result.get("acceptance_id")}, subjects)
+    return StepState(step["id"], step["kind"], "satisfied", None, None, subjects)
+
+
 def derive(value: dict, pipeline_sha256: str, snapshot: dict, facts: dict) -> list[StepState]:
     """Pure: the state of every step from the snapshot rows and the gathered facts. Steps after the first
     unsatisfied one are pending. An author step's head is the newest non-cancelled bound planning assignment with
     the step's skill and workspace at the current revision, ordered by its prepared-event revision; wrapper steps
-    match their bundle, review and acceptance by binding content the same way."""
+    match their bundle, review and acceptance by binding content the same way. Ruling R5: once the `spec` status
+    receipt's commit is on the branch, the spec chain is satisfied by that receipt, never derived again; a receipt
+    off the branch stops the spec step `worktree-drift`."""
     feature = next(row for row in snapshot["features"] if row["id"] == value["feature_id"])
+    story = facts.get("story") or {}
+    written = (story.get("status") or {}).get("spec")
+    receipt = written if story.get("spec_on_branch") else None
+    chain = _spec_chain(value["steps"]) if receipt else set()
     states, compat_id, blocked, done = [], None, False, {}
     for step in value["steps"]:
         if blocked:
@@ -1207,6 +1387,12 @@ def derive(value: dict, pipeline_sha256: str, snapshot: dict, facts: dict) -> li
         kind = step["kind"]
         if feature["mandate_revision"] != value["mandate_revision"]:
             state = StepState(step["id"], kind, "needs-human", "mandate-revised", None, {"step_id": step["id"]})
+        elif step["id"] in chain:
+            state = _spec_receipt(step, receipt, feature)
+        elif kind == "spec" and written:
+            state = StepState(step["id"], kind, "needs-human", "worktree-drift", None, {
+                "step_id": step["id"], "expected": written["sha"],
+                "detail": f"worktree-drift: the spec status commit {written['sha'][:12]} is not on the story branch"})
         elif kind == "compat":
             state = _compat(step, snapshot, facts, feature)
             compat_id = state.subjects.get("compat_decision_id")
@@ -1223,8 +1409,8 @@ def derive(value: dict, pipeline_sha256: str, snapshot: dict, facts: dict) -> li
             state = _setup_state(step, facts, feature)
         elif kind == "status":
             state = _status_state(step, facts, done)
-        elif kind == "implement":
-            state = _implement_state(step, pipeline_sha256, snapshot, facts, feature, value)
+        elif kind in ("spec", "implement"):
+            state = _implement_state(step, pipeline_sha256, snapshot, facts, feature, value, kind)
         elif kind == "commit":
             state = _commit_state(step, facts, done)
         elif kind == "verify":
@@ -1235,3 +1421,64 @@ def derive(value: dict, pipeline_sha256: str, snapshot: dict, facts: dict) -> li
         done[step["id"]] = state
         blocked = state.state != "satisfied"
     return states
+
+
+def carried_from(snapshot: dict, value: dict) -> str | None:
+    """Ruling R4: the spec-ready commit of this pipeline's own carry when a driver stopped after its revise (the
+    feature one revision on and no longer provisional, the carry's decision at the pipeline's revision), else None:
+    the run finishes that carry instead of stopping `mandate-revised`."""
+    feature = next(row for row in snapshot["features"] if row["id"] == value["feature_id"])
+    if feature["mandate_revision"] != value["mandate_revision"] + 1 or \
+       "provisional" in json.loads(feature["constraints_json"]) or \
+       all(step["kind"] != "spec" for step in value["steps"]):
+        return None
+    found = [row for row in snapshot["decisions"] if row["feature_id"] == feature["id"] and
+             row["mandate_revision"] == value["mandate_revision"] and row["source_ref"].startswith(SPEC_READY)]
+    return json.loads(found[-1]["choice_json"])["spec_ready"] if found else None
+
+
+def carry(repo, store, owner: OwnerRef, lease: dict, value: dict, feature: dict, status_sha: str, hook=None) -> dict:
+    """Design D24 (ruling R4): after the `spec` status receipt, (a) a coordinator decision `spec-ready:<sha>` at the
+    pipeline's revision, (b) the mandate revised from the spec at that commit (`spec_mandate`), (c) the pipeline
+    carried to the new revision, sealed and bound, (d) the lease re-sealed with the carried digest (`carried_from`
+    the old one) and anchored as a second `drive.leased` of the lease id. Returns the new lease. Idempotent after a
+    kill: a recorded decision is reused, a feature already one revision on whose mandate is exactly the spec's (M5) is
+    not revised again, an identical binding is a no-op and an identical lease file is anchored as it is. The patch is
+    read at the status commit and must hold the frozen section of the accepted spec commit the receipt names (M5).
+    `hook` (a test seam) runs at `after-carry-revise`."""
+    from .drive import _seal   # the driver's sealed-file writer (drive imports this module)
+    hook = hook or (lambda point, **info: None)
+    coordinator, revision = Coordinator(store), value["mandate_revision"]
+    snapshot = store.read_export_snapshot(owner)
+    receipt = implementation.story_facts(store.path.parent, snapshot, feature["id"])["status"].get("spec") or {}
+    if receipt.get("sha") != status_sha:
+        raise DomainError("STALE_INPUT", "The carry's status commit is not the spec status receipt's")
+    patch = implementation.spec_mandate(repo, feature, status_sha, (receipt.get("result") or {}).get("commit_sha"))
+    if feature["mandate_revision"] == revision and json.loads(feature["constraints_json"]).get("provisional") is True:
+        source = SPEC_READY + status_sha
+        decision = next((row["id"] for row in snapshot["decisions"]
+                         if row["feature_id"] == feature["id"] and row["mandate_revision"] == revision and
+                         row["source_ref"] == source), None)
+        if decision is None:
+            decision = coordinator.record_decision(owner, DecisionInput(
+                feature["id"], revision, "coordinator", source,
+                "the accepted spec becomes the story's mandate (design D24)", {"spec_ready": status_sha}))
+        coordinator.revise_mandate(owner, feature["id"], revision, patch, decision)
+        hook("after-carry-revise")
+    elif carried_from(snapshot, value) != status_sha or \
+            {key: json.loads(feature[f"{key}_json"]) for key in patch} != patch:
+        raise DomainError("STALE_INPUT", "The feature's mandate moved other than by this pipeline's carry")
+    bound = bind(repo, store, owner, {**value, "mandate_revision": revision + 1})
+    if lease["pipeline_sha256"] == bound["sha256"]:   # the newest lease names the carried pipeline already
+        return lease
+    carried = {**lease, "pipeline_sha256": bound["sha256"], "pipeline_ref": bound["ref"],
+               "carried_from": lease["pipeline_sha256"]}
+    base = store.path.parent
+    path = base / "drives" / lease["lease_id"] / f"lease-r{revision + 1}.json"
+    try:
+        ref, digest = _seal(base, path, carried)
+    except FileExistsError:   # sealed before a kill, never anchored: the same bytes are anchored now
+        ref, digest = path.relative_to(base).as_posix(), hashlib.sha256(canonical(carried)).hexdigest()
+        _read_sealed(base, ref, digest)
+    coordinator.anchor_event(owner, "drive.leased", lease["lease_id"], (feature["id"], ref, digest))
+    return carried
