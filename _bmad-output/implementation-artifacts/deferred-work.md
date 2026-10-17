@@ -410,3 +410,12 @@ source_spec: `spec-dw-18-story-1-10-spec-change-log.md`
 severity: low
 reason: server/tools/wikiLint.test.ts:2374 reads "@returns the document, which is not added to the collection structure". publishedIn calls buildDocument with a collectionId, so the document is published (server/test/factories.ts:412) and the @AfterCreate hook addDocumentToCollectionStructure adds it to the structure (server/models/Document.ts:520-539). DW-18 forbids code changes, so the comment stays as is; the Story 1.10 Spec Change Log entry records the corrected fact.
 status: open
+
+### DW-45: Story 3.1 could not document WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT in `.env.sample` (clause S8): the file was outside the story's writable scopes, so the operator added the block by hand.
+origin: operator decision 2026-10-17 (coordinator inbox decision for Story 3.1, request 9ca80e17)
+location: .env.sample:51
+source_spec: `spec-3-1-verify-safe-startup-and-readiness-policy-identity.md`
+severity: low
+reason: The spec's task "`.env.sample` -- document WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT" and Always-clause S8 needed an edit outside the writable scopes granted at story add (server/wikiLint/, server/index.ts, server/index.test.ts, server/main.ts, server/routes/mcp/, server/tools/, server/utils/). The worker reported the conflict instead of writing outside its scope; the operator deferred the edit to a hand change on the working branch and the story finished without it. The block states when the variable is required, the byte-for-byte sha256 form, the 503 and HEALTHCHECK consequence (AD-19) and the mount-change-and-restart rule.
+status: done 2026-10-17
+resolution: resolved by the operator's hand edit of .env.sample in the commit that adds this entry
