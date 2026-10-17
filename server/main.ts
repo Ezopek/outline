@@ -7,7 +7,6 @@ import helmet from "koa-helmet";
 import logger from "koa-logger";
 import Router from "koa-router";
 import stoppable from "stoppable";
-import { toError } from "@shared/utils/error";
 import env from "./env";
 import Metrics from "@server/logging/Metrics";
 import Redis from "@server/storage/redis";
@@ -25,7 +24,11 @@ import { RedisPrefixHelper } from "./utils/RedisPrefixHelper";
 import ShutdownHelper, { ShutdownOrder } from "./utils/ShutdownHelper";
 import { getSSLOptions } from "./utils/ssl";
 import { checkUpdates } from "./utils/updates";
-import { getPolicySet } from "./wikiLint/adapters/policyConfig";
+import { createHealthHandler } from "./wikiLint/adapters/healthCheck";
+import {
+  getPolicyReadiness,
+  getPolicySet,
+} from "./wikiLint/adapters/policyConfig";
 
 /**
  * Starts a single forked service process. This is where the heavy dependency
@@ -39,8 +42,10 @@ export async function start(id: number, disconnect: () => void) {
   // Ensure plugins are loaded
   PluginManager.loadPlugins();
 
-  // Build the lint policy set from the bytes exported by the master
+  // Build the lint policy set from the bytes exported by the master, and fix
+  // its readiness against the operator-confirmed fingerprint
   getPolicySet();
+  const policyReadiness = getPolicyReadiness();
 
   // Clear unfurl cache in development so code changes take effect immediately
   if (env.isDevelopment) {
@@ -79,25 +84,14 @@ export async function start(id: number, disconnect: () => void) {
   app.context.redirectOnClient = redirectOnClient;
 
   // Add a health check endpoint to all services
-  router.get("/_health", async (ctx) => {
-    try {
-      await sequelize.query("SELECT 1");
-    } catch (err) {
-      Logger.error("Database connection failed", toError(err));
-      ctx.status = 500;
-      return;
-    }
-
-    try {
-      await Redis.defaultClient.ping();
-    } catch (err) {
-      Logger.error("Redis ping failed", toError(err));
-      ctx.status = 500;
-      return;
-    }
-
-    ctx.body = "OK";
-  });
+  router.get(
+    "/_health",
+    createHealthHandler({
+      readiness: policyReadiness,
+      checkDatabase: () => sequelize.query("SELECT 1"),
+      checkRedis: () => Redis.defaultClient.ping(),
+    })
+  );
 
   app.use(router.routes());
 

@@ -2,7 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Logger from "@server/logging/Logger";
+import type * as PolicyConfig from "./policyConfig";
 import {
+  applyPolicyReadiness,
   getPolicySet,
   initializePolicyConfiguration,
   policySetFromEnvironment,
@@ -359,6 +361,7 @@ describe("policySetFromEnvironment", () => {
     });
 
     expect(workerSet).toEqual(masterSet);
+    expect(workerSet.policySetFingerprint).toBe(masterSet.policySetFingerprint);
     expect(workerSet.entries).toHaveLength(2);
     expect(openSync).not.toHaveBeenCalled();
     expect(readFileSync).not.toHaveBeenCalled();
@@ -411,6 +414,242 @@ describe("getPolicySet", () => {
       } else {
         process.env.WIKI_LINT_CONFIG_BASE64 = previous;
       }
+    }
+  });
+});
+
+describe("policy readiness", () => {
+  const examplePath = path.join(__dirname, "..", "policy.example.json");
+  const repositoryRoot = path.join(__dirname, "..", "..", "..");
+  const enforced = `{"activation":"enforced","rules":[{"kind":"required_sections","headingLevel":2,"headings":["${PLANTED}"]}]}`;
+  const sentinel = `{"activation":"read_only","rules":[],"severity":"${PLANTED}"}`;
+  const plantedConfig = `{"schemaVersion":1,"collections":{"${A}":${enforced},"${B}":${sentinel}}}`;
+
+  /**
+   * Imports a fresh adapter, as a newly started worker would, with the given
+   * inherited environment, and restores the environment afterwards.
+   *
+   * @param env - the worker's policy variables.
+   * @param run - receives the fresh adapter.
+   */
+  async function inWorker(
+    env: {
+      WIKI_LINT_CONFIG_BASE64?: string;
+      WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT?: string;
+    },
+    run: (adapter: typeof PolicyConfig) => void
+  ) {
+    const names = [
+      "WIKI_LINT_CONFIG_BASE64",
+      "WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT",
+    ] as const;
+    const previous = names.map((name) => process.env[name]);
+    for (const name of names) {
+      if (env[name] === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = env[name];
+      }
+    }
+    try {
+      vi.resetModules();
+      run(await import("./policyConfig"));
+    } finally {
+      names.forEach((name, index) => {
+        if (previous[index] === undefined) {
+          delete process.env[name];
+        } else {
+          process.env[name] = previous[index];
+        }
+      });
+    }
+  }
+
+  /**
+   * Exports a configuration as a master would.
+   *
+   * @param contents - the configuration text.
+   * @returns the bytes exported to workers.
+   */
+  function exported(contents: string): string {
+    const env: NodeJS.ProcessEnv = {
+      WIKI_LINT_CONFIG_PATH: writePolicyFile(contents),
+    };
+    initializePolicyConfiguration(env);
+    return env.WIKI_LINT_CONFIG_BASE64 ?? "";
+  }
+
+  /**
+   * A response context that records everything written to it.
+   *
+   * @returns the context and its recorded headers.
+   */
+  function fakeContext() {
+    const headers: Record<string, string> = {};
+    const ctx = {
+      status: 404,
+      set: (name: string, value: string) => {
+        headers[name] = value;
+      },
+    };
+    return { ctx, headers };
+  }
+
+  it("is ready without an expected value for the absent configuration", async () => {
+    await inWorker({}, ({ getPolicyReadiness }) => {
+      expect(getPolicyReadiness()).toEqual({
+        ready: true,
+        policySetFingerprint: EMPTY_FINGERPRINT,
+      });
+    });
+  });
+
+  it("is ready without an expected value for the shipped example", async () => {
+    const encoded = exported(fs.readFileSync(examplePath, "utf8"));
+
+    await inWorker(
+      { WIKI_LINT_CONFIG_BASE64: encoded },
+      ({ getPolicyReadiness, getPolicySet }) => {
+        expect(getPolicyReadiness()).toEqual({
+          ready: true,
+          policySetFingerprint: getPolicySet().policySetFingerprint,
+        });
+      }
+    );
+  });
+
+  it.each([
+    ["unset", undefined],
+    ["empty", ""],
+  ])(
+    "is not ready for enforced or invalid policy when the expected value is %s",
+    async (_name, expected) => {
+      await inWorker(
+        {
+          WIKI_LINT_CONFIG_BASE64: exported(plantedConfig),
+          WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT: expected,
+        },
+        ({ getPolicyReadiness }) => {
+          expect(getPolicyReadiness().ready).toBe(false);
+        }
+      );
+    }
+  );
+
+  it("is ready when the expected value matches, and computes it once", async () => {
+    const encoded = exported(plantedConfig);
+    const fingerprint = policySetFromEnvironment({
+      WIKI_LINT_CONFIG_BASE64: encoded,
+    }).policySetFingerprint;
+
+    await inWorker(
+      {
+        WIKI_LINT_CONFIG_BASE64: encoded,
+        WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT: fingerprint,
+      },
+      ({ getPolicyReadiness }) => {
+        const readiness = getPolicyReadiness();
+        process.env.WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT = "changed";
+
+        expect(readiness).toEqual({
+          ready: true,
+          policySetFingerprint: fingerprint,
+        });
+        expect(getPolicyReadiness()).toBe(readiness);
+      }
+    );
+  });
+
+  it("leaves the policy set unchanged when not ready", async () => {
+    const encoded = exported(plantedConfig);
+    const expected = policySetFromEnvironment({
+      WIKI_LINT_CONFIG_BASE64: encoded,
+    });
+
+    await inWorker(
+      {
+        WIKI_LINT_CONFIG_BASE64: encoded,
+        WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT: EMPTY_FINGERPRINT,
+      },
+      ({ getPolicyReadiness, getPolicySet }) => {
+        const policySet = getPolicySet();
+
+        expect(getPolicyReadiness().ready).toBe(false);
+        expect(getPolicySet()).toBe(policySet);
+        expect(policySet).toEqual(expected);
+        expect(policySet.entries.map((entry) => entry.status)).toEqual([
+          "valid",
+          "invalid",
+        ]);
+      }
+    );
+  });
+
+  it("writes only the status and the fingerprint header to a response", async () => {
+    await inWorker(
+      { WIKI_LINT_CONFIG_BASE64: exported(plantedConfig) },
+      ({
+        applyPolicyReadiness,
+        getPolicySet,
+        POLICY_SET_FINGERPRINT_HEADER,
+      }) => {
+        const { ctx, headers } = fakeContext();
+
+        expect(applyPolicyReadiness(ctx)).toBe(false);
+
+        expect(ctx).toEqual({ status: 503, set: expect.any(Function) });
+        expect(headers).toEqual({
+          [POLICY_SET_FINGERPRINT_HEADER]: getPolicySet().policySetFingerprint,
+        });
+        const written = JSON.stringify({ ctx, headers });
+        for (const planted of [
+          PLANTED,
+          A,
+          B,
+          "/collections",
+          "required_sections",
+        ]) {
+          expect(written).not.toContain(planted);
+        }
+      }
+    );
+  });
+
+  it("leaves the status of a ready response to the caller", () => {
+    const { ctx, headers } = fakeContext();
+
+    expect(
+      applyPolicyReadiness(ctx, {
+        ready: true,
+        policySetFingerprint: EMPTY_FINGERPRINT,
+      })
+    ).toBe(true);
+
+    expect(ctx.status).toBe(404);
+    expect(headers).toEqual({
+      "X-Wiki-Lint-Policy-Set-Fingerprint": EMPTY_FINGERPRINT,
+    });
+  });
+
+  it("ships no non-empty configuration path in the image or the sample", () => {
+    for (const file of ["Dockerfile", ".env.sample"]) {
+      const contents = fs.readFileSync(path.join(repositoryRoot, file), "utf8");
+
+      expect(contents).not.toMatch(
+        /^[ \t]*(?:(?:ENV|ARG)[ \t]+)?WIKI_LINT_CONFIG_PATH[ \t]*[= \t][ \t]*\S/m
+      );
+    }
+  });
+
+  it("keys the shipped example only by zero-filled placeholder UUIDs", () => {
+    const example = JSON.parse(fs.readFileSync(examplePath, "utf8")) as {
+      collections: Record<string, unknown>;
+    };
+    const keys = Object.keys(example.collections);
+
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) {
+      expect(key).toMatch(/^00000000-0000-4000-8000-0{10}\d{2}$/);
     }
   });
 });

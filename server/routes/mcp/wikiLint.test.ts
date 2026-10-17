@@ -2840,6 +2840,15 @@ describe("without configuration and without enforcement", () => {
     const names = (await listTools(token)).map((tool) => tool.name);
 
     expect(names).toEqual(expect.arrayContaining(LINT_TOOLS));
+    // Discovery activates no policy: the worker's own set is still empty.
+    const actual = await vi.importActual<typeof PolicyConfig>(
+      "@server/wikiLint/adapters/policyConfig"
+    );
+    expect(actual.getPolicySet()).toEqual({
+      policySetFingerprint:
+        "sha256:25d4e8ec86646fe465b938d352ab3973a46bef099e8ec712c5535c1a2609ecc2",
+      entries: [],
+    });
     for (const [name, args] of [
       ["lint_document", { id: document.id }],
       ["lint_wiki", { collectionId: collection.id }],

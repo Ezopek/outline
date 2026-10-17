@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { PolicySetResult } from "./policySet";
-import { POLICY_CONFIG_MAX_BYTES, buildPolicySet } from "./policySet";
+import {
+  POLICY_CONFIG_MAX_BYTES,
+  buildPolicySet,
+  isPolicySetReady,
+} from "./policySet";
 
 const sha256Hex = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -749,5 +753,95 @@ describe("buildPolicySet", () => {
       }
       expect(example).not.toContain('"open"');
     });
+  });
+});
+
+describe("isPolicySetReady", () => {
+  const enforcedPolicy =
+    '{"activation":"enforced","rules":[{"kind":"internal_links"}]}';
+  const empty = loadOk(envelope("")).policySet;
+  const readOnly = loadOk(
+    envelope(`"${A}":${minimalPolicy},"${B}":${minimalPolicy}`)
+  ).policySet;
+  const enforced = loadOk(
+    envelope(`"${A}":${minimalPolicy},"${B}":${enforcedPolicy}`)
+  ).policySet;
+  const sentinel = loadOk(
+    envelope(`"${A}":${minimalPolicy},"${C}":{}`)
+  ).policySet;
+
+  it("is ready for the empty set without an expected fingerprint", () => {
+    expect(empty.policySetFingerprint).toBe(EMPTY_FINGERPRINT);
+    expect(isPolicySetReady(empty, undefined)).toBe(true);
+    expect(isPolicySetReady(empty, "")).toBe(true);
+  });
+
+  it("is ready for read-only entries without an expected fingerprint", () => {
+    expect(isPolicySetReady(readOnly, undefined)).toBe(true);
+    expect(isPolicySetReady(readOnly, "")).toBe(true);
+  });
+
+  it.each([
+    ["unset", undefined],
+    ["empty", ""],
+  ])(
+    "is not ready for an enforced entry or a sentinel when the expected fingerprint is %s",
+    (_name, expected) => {
+      expect(sentinel.entries[1].status).toBe("invalid");
+      expect(isPolicySetReady(enforced, expected)).toBe(false);
+      expect(isPolicySetReady(sentinel, expected)).toBe(false);
+    }
+  );
+
+  it("is ready on an exact match for every set", () => {
+    for (const policySet of [empty, readOnly, enforced, sentinel]) {
+      expect(isPolicySetReady(policySet, policySet.policySetFingerprint)).toBe(
+        true
+      );
+    }
+  });
+
+  it("is not ready on a near match", () => {
+    for (const policySet of [empty, readOnly, enforced, sentinel]) {
+      const fingerprint = policySet.policySetFingerprint;
+      for (const nearMatch of [
+        ` ${fingerprint}`,
+        `${fingerprint}\n`,
+        `\t${fingerprint} `,
+        fingerprint.toUpperCase(),
+        `sha256:${fingerprint.slice("sha256:".length).toUpperCase()}`,
+        fingerprint.slice("sha256:".length),
+      ]) {
+        expect(isPolicySetReady(policySet, nearMatch)).toBe(false);
+      }
+    }
+  });
+
+  it("is not ready on a mismatch, including the empty set", () => {
+    expect(isPolicySetReady(empty, readOnly.policySetFingerprint)).toBe(false);
+    expect(isPolicySetReady(readOnly, EMPTY_FINGERPRINT)).toBe(false);
+    expect(isPolicySetReady(enforced, readOnly.policySetFingerprint)).toBe(
+      false
+    );
+    expect(isPolicySetReady(sentinel, "not-a-fingerprint")).toBe(false);
+  });
+
+  it("makes only the instance whose set matches one expected value ready", () => {
+    const expected = enforced.policySetFingerprint;
+
+    expect(enforced.policySetFingerprint).not.toBe(
+      sentinel.policySetFingerprint
+    );
+    expect(isPolicySetReady(enforced, expected)).toBe(true);
+    expect(isPolicySetReady(sentinel, expected)).toBe(false);
+  });
+
+  it("leaves the policy set unchanged", () => {
+    const before = JSON.stringify(enforced);
+
+    isPolicySetReady(enforced, undefined);
+    isPolicySetReady(enforced, "mismatch");
+
+    expect(JSON.stringify(enforced)).toBe(before);
   });
 });

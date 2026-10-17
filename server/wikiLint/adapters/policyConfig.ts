@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import Logger from "@server/logging/Logger";
 import type { PolicySet, Sha256Hex } from "../core/policySet";
-import { POLICY_CONFIG_MAX_BYTES, buildPolicySet } from "../core/policySet";
+import {
+  POLICY_CONFIG_MAX_BYTES,
+  buildPolicySet,
+  isPolicySetReady,
+} from "../core/policySet";
 
 /**
  * Computes the lowercase hexadecimal SHA-256 digest of some bytes.
@@ -149,4 +153,55 @@ export function getPolicySet(): PolicySet {
     workerPolicySet = policySetFromEnvironment(process.env);
   }
   return workerPolicySet;
+}
+
+/** The response header that names a worker's startup policy set. */
+export const POLICY_SET_FINGERPRINT_HEADER =
+  "X-Wiki-Lint-Policy-Set-Fingerprint";
+
+/** A worker's AD-19 policy readiness, fixed at startup. */
+export interface PolicyReadiness {
+  readonly ready: boolean;
+  readonly policySetFingerprint: string;
+}
+
+let workerPolicyReadiness: PolicyReadiness | undefined;
+
+/**
+ * Returns this process's policy readiness, computed once from its policy set
+ * and its inherited `WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT`.
+ *
+ * @returns the readiness.
+ */
+export function getPolicyReadiness(): PolicyReadiness {
+  if (!workerPolicyReadiness) {
+    const policySet = getPolicySet();
+    workerPolicyReadiness = Object.freeze({
+      ready: isPolicySetReady(
+        policySet,
+        process.env.WIKI_LINT_EXPECTED_CONFIG_FINGERPRINT
+      ),
+      policySetFingerprint: policySet.policySetFingerprint,
+    });
+  }
+  return workerPolicyReadiness;
+}
+
+/**
+ * Reports policy readiness on a response: it always names the policy set in a
+ * header and, when not ready, sets status 503 without any body detail.
+ *
+ * @param ctx - the response context.
+ * @param readiness - the readiness to report.
+ * @returns whether the worker is ready.
+ */
+export function applyPolicyReadiness(
+  ctx: { set(field: string, value: string): void; status: number },
+  readiness: PolicyReadiness = getPolicyReadiness()
+): boolean {
+  ctx.set(POLICY_SET_FINGERPRINT_HEADER, readiness.policySetFingerprint);
+  if (!readiness.ready) {
+    ctx.status = 503;
+  }
+  return readiness.ready;
 }

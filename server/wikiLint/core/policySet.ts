@@ -596,3 +596,27 @@ export function buildPolicySet(
     sentinels,
   });
 }
+
+/**
+ * Decides whether a worker may report ready for its startup policy set
+ * (AD-19). A supplied expected fingerprint must equal the set's fingerprint
+ * byte for byte; without one, only a set that enforces nothing and holds no
+ * invalid-policy sentinel is ready.
+ *
+ * @param policySet - the startup policy set.
+ * @param expectedFingerprint - the operator-confirmed fingerprint; an empty
+ * value counts as absent.
+ * @returns whether the worker is ready.
+ */
+export function isPolicySetReady(
+  policySet: PolicySet,
+  expectedFingerprint: string | undefined
+): boolean {
+  if (expectedFingerprint !== undefined && expectedFingerprint !== "") {
+    return expectedFingerprint === policySet.policySetFingerprint;
+  }
+  return policySet.entries.every(
+    (entry) =>
+      entry.status === "valid" && entry.policy.activation === "read_only"
+  );
+}
