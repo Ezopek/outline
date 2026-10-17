@@ -72,8 +72,8 @@ development_status:
   dw-4-yield-between-lint-units: done
   dw-20-bound-structure-read: done
 
-  epic-3: backlog
-  3-1-verify-safe-startup-and-readiness-policy-identity: ready-for-dev
+  epic-3: in-progress
+  3-1-verify-safe-startup-and-readiness-policy-identity: in-progress
   3-2-close-layered-conformance-and-source-provenance-evidence: backlog
   3-3-produce-reproducible-performance-growth-and-constant-derivat: backlog
   3-4-assemble-the-gate-1-evidence-index-and-decision-record: backlog

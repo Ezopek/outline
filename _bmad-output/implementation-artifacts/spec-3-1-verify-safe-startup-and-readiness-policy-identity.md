@@ -1,7 +1,7 @@
 ---
 title: 'Story 3.1: Verify Safe Startup and Readiness Policy Identity'
 type: 'feature'
-status: 'ready-for-dev'
+status: 'in-progress'
 context: []
 ---
 
