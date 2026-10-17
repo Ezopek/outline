@@ -1,7 +1,7 @@
 ---
 title: 'Story 3.1: Verify Safe Startup and Readiness Policy Identity'
 type: 'feature'
-status: 'in-progress'
+status: 'done'
 context: []
 ---
 
@@ -78,3 +78,11 @@ context: []
 - `oxlint`: `node_modules/.bin/oxlint --type-aware server shared`
 - `oxfmt`: `node_modules/.bin/oxfmt --check {changed_files}`
 - `vitest`: `node_modules/.bin/vitest run --project server --maxWorkers=2 server/wikiLint server/index.test.ts server/routes/mcp server/tools`
+
+## Coordinator Result
+
+- acceptance: `41cf11a9-a335-4d81-a2e2-1fa6d5b28773`
+- accepted commit: `58a3b2824222d8deb0f91222ebdf1940cb8e7415`
+- review: `4a655b81-1fda-4283-9d2c-8f6e53bc146b`
+- verification: tsc: pass, oxlint: pass, oxfmt: pass, vitest: pass
+- decisions: none
