@@ -1,7 +1,7 @@
 ---
 title: 'Story 3.3: Produce Reproducible Performance, Growth, and Constant-Derivation Evidence'
 type: 'feature'
-status: 'ready-for-dev'
+status: 'in-progress'
 context: []
 ---
 
