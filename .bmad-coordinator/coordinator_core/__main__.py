@@ -13,7 +13,7 @@ from pathlib import Path
 from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
-from . import bmad_contract, bmad_planning, bmad_review, clients, drive, drive_pipeline, inbox
+from . import bmad_contract, bmad_planning, bmad_review, clients, drive, drive_epic, drive_pipeline, inbox
 from .exporter import export_checkpoint, import_checkpoint
 from .installation import doctor
 from .model import (AssignmentInput, BundleInput, DecisionInput, DomainError, FeatureInput,
@@ -149,6 +149,19 @@ def _parser():
     resolved.add_argument("--confirm-unknown", action="store_true")
     story = leaf("story").add_subparsers(dest="action", required=True, parser_class=Parser)
     leaf("add", parent=story, token=True, stdin=True)
+    epic = leaf("epic").add_subparsers(dest="action", required=True, parser_class=Parser)
+    epic_start = leaf("start", parent=epic, token=True, stdin=True)
+    epic_start.add_argument("--pipeline", type=Path, required=True,
+                            help="a story pipeline with __FEATURE__ and __KEY__")
+    epic_resume = leaf("resume", parent=epic, token=True)
+    epic_resume.add_argument("--epic", help="the epic to continue after a release (with a token file to create)")
+    epic_resume.add_argument("--skip", help="the story the last stop named, left to the operator")
+    leaf("status", parent=epic).add_argument("--epic")
+    for item in (epic_start, epic_resume):
+        item.add_argument("--max-turns", type=int)
+        item.add_argument("--deadline", type=float)
+        item.add_argument("--human-wait", type=float)
+        item.add_argument("--judgment-root", type=Path)
     return parser
 
 
@@ -250,6 +263,20 @@ def _drive(repo, args):
     return _Exit(summary, code)
 
 
+def _epic(repo, args):
+    bounds = {"max_turns": args.max_turns, "deadline_seconds": args.deadline, "human_wait_seconds": args.human_wait}
+    bounds = {key: value for key, value in bounds.items() if value is not None}
+    if args.action == "start":
+        summary, code = drive_epic.start(repo, _record(drive_epic.EpicInput, _object()), _pipeline(args.pipeline),
+                                         args.token_file, drive.RunBounds(**{**DRIVE_DEFAULTS, **bounds}),
+                                         args.judgment_root)
+    else:  # exempt from the shared lock: resume takes only the exclusive one; no token file yet is E12's re-claim
+        owner = _owner(args.token_file) if args.token_file.exists() else None
+        summary, code = drive_epic.resume(repo, owner, bounds or None, args.judgment_root, skip=args.skip,
+                                          epic_id=args.epic, token_path=args.token_file)
+    return _Exit(summary, code)
+
+
 def _attempt_resolve(repo, store, args):
     """Operator only (D15): refuse unless every liveness check passes, seal the evidence, then resolve_unknown_attempt
     in one owner-fenced transaction. The driver never calls this."""
@@ -300,6 +327,8 @@ def _run(args):
     repo = resolve_repo(args.repo)
     if args.command == "drive" and args.action == "status":
         return drive.status(repo, args.feature)
+    if args.command == "epic" and args.action == "status":   # read only, before the store opens (epic-drive E13)
+        return drive_epic.status(repo, args.epic)
     if args.command == "inbox":
         if args.action == "add":
             return inbox.add(repo, args.type, _object())
@@ -338,6 +367,8 @@ def _run(args):
     coordinator = Coordinator(store)
     if args.command == "drive":
         return _drive(repo, args)
+    if args.command == "epic":
+        return _epic(repo, args)
     if args.command == "attempt":
         return _attempt_resolve(repo, store, args)
     if args.command == "worker":

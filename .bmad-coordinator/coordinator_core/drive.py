@@ -8,6 +8,7 @@ status, decide-form and carry), W record. Outcomes are exactly continue, needs-h
 fcntl.flock and /proc."""
 
 import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -25,13 +26,14 @@ from . import bmad_planning, bmad_review, bundles, clients, drive_pipeline, expo
 from . import bmad_spec_author
 from .drive_pipeline import open_high_findings
 from .model import DecisionInput, DomainError, OwnerRef
-from .run_receipt import seal
+from .run_receipt import canonical, seal
 from .service import DRIVE_EVENTS, HOLDING_STATES, Coordinator, releasable
 from .store import open_store
 
 HOOK = None   # test seam: callable(point, **info) at named points; production leaves it None
 LOCK = "drive.lock"
 SESSION = "drive:"
+EPIC_SESSION = "epic:"   # design epic-drive E1: the owner session of an epic run
 MARGIN = 120
 EXIT = {"done": 0, "continue": 10, "needs-human": 11, "failed": 12}
 # Design section 6: the question and judgment codes (update-budget aside) are answered by an inbox decision for R.
@@ -180,7 +182,7 @@ _NEW_REVISION = (f"with the driver's token while no driver runs, revise the mand
                  f"release --token-file {TOKEN}, then drive start a pipeline bound to the new revision")
 
 
-def _operator_action(outcome: str, reason: str | None, subjects: dict) -> str | None:
+def _drive_action(outcome: str, reason: str | None, subjects: dict) -> str | None:
     if outcome == "done":
         return None
     if outcome == "continue":
@@ -261,6 +263,13 @@ def _operator_action(outcome: str, reason: str | None, subjects: dict) -> str | 
     return f"release --token-file {TOKEN}, attended repair, then drive start"
 
 
+def _operator_action(outcome: str, reason: str | None, subjects: dict, command: str = "drive") -> str | None:
+    """The story drive's operator action; inside an epic (design epic-drive E10, ruling R3) every `drive resume` reads
+    `epic resume` and the rest of the story's text stands."""
+    text = _drive_action(outcome, reason, subjects)
+    return text if text is None or command == "drive" else text.replace("drive resume", f"{command} resume")
+
+
 def _drifted(exc: DomainError) -> bool:
     """The module's refusal when HEAD moved under the driver (design catalogue: `worktree-drift`)."""
     return exc.code == "STALE_INPUT" and exc.message.startswith("worktree-drift")
@@ -290,26 +299,54 @@ def start(repo, feature_id: str, value: dict, token_path: Path, bounds: RunBound
         lease_id = uuid.uuid4().hex
         owner = Coordinator(store).claim(SESSION + lease_id, token_path)
         _hook("after-claim", lease_id=lease_id)
-        bound = drive_pipeline.bind(repo, store, owner, pipeline, sealed=lambda: _hook("after-pipeline-seal"))
-        _hook("after-bind", sha256=bound["sha256"])
-        base = store.path.parent
-        lease = {"kind": "drive-lease", "format": 1, "lease_id": lease_id, "repository_id": store.repository_id,
-                 "feature_id": feature_id, "pipeline_sha256": bound["sha256"], "pipeline_ref": bound["ref"],
-                 "generation": owner.generation, "session_id": SESSION + lease_id, "bounds": asdict(bounds),
-                 "judgment_root": root, "accept_on_high": pipeline.get("accept_on_high", False),
-                 "created_at": _now()}
-        ref, digest = _seal(base, base / "drives" / lease_id / "lease.json", lease)
-        Coordinator(store).anchor_event(owner, "drive.leased", lease_id, (feature_id, ref, digest))
-        _hook("after-lease", lease_id=lease_id)
+        lease = bind_and_lease(repo, store, owner, pipeline, bounds, root, SESSION + lease_id, lease_id=lease_id)
         return Run(repo, store, owner, lease, pipeline, bounds, clock, "start").execute()
     finally:
         os.close(fd)
+
+
+def bind_and_lease(repo, store, owner: OwnerRef, pipeline: dict, bounds: RunBounds, judgment_root, session_id: str, *,
+                   lease_id: str | None = None, epic_id: str | None = None) -> dict:
+    """P2 of a start: bind the pipeline, then seal and anchor the lease of this run's session (`drive:<lease>` for a
+    story drive; `epic:<id>` for a story inside an epic, design epic-drive E1/E7, which also records `epic_id`)."""
+    lease_id = lease_id or uuid.uuid4().hex
+    bound = drive_pipeline.bind(repo, store, owner, pipeline, sealed=lambda: _hook("after-pipeline-seal"))
+    _hook("after-bind", sha256=bound["sha256"])
+    base = store.path.parent
+    lease = {"kind": "drive-lease", "format": 1, "lease_id": lease_id, "repository_id": store.repository_id,
+             "feature_id": pipeline["feature_id"], "pipeline_sha256": bound["sha256"], "pipeline_ref": bound["ref"],
+             "generation": owner.generation, "session_id": session_id, "bounds": asdict(bounds),
+             "judgment_root": judgment_root, "accept_on_high": pipeline.get("accept_on_high", False),
+             "created_at": _now(), **({"epic_id": epic_id} if epic_id else {})}
+    ref, digest = _seal(base, base / "drives" / lease_id / "lease.json", lease)
+    Coordinator(store).anchor_event(owner, "drive.leased", lease_id, (pipeline["feature_id"], ref, digest))
+    _hook("after-lease", lease_id=lease_id)
+    return lease
+
+
+def reseal_lease(store, owner: OwnerRef, lease: dict, name: str) -> dict:
+    """Design epic-drive E12: the lease under the owner's generation (after a re-claim), sealed as
+    drives/<lease>/<name>.json and anchored as a further `drive.leased` of the lease id; identical bytes sealed before a
+    kill are anchored as they are (the carry's rule)."""
+    resealed = {**lease, "generation": owner.generation}
+    base = store.path.parent
+    path = base / "drives" / lease["lease_id"] / f"{name}.json"
+    try:
+        ref, digest = _seal(base, path, resealed)
+    except FileExistsError:
+        ref, digest = path.relative_to(base).as_posix(), hashlib.sha256(canonical(resealed)).hexdigest()
+        drive_pipeline._read_sealed(base, ref, digest)
+    Coordinator(store).anchor_event(owner, "drive.leased", lease["lease_id"], (lease["feature_id"], ref, digest))
+    return resealed
 
 
 def find_lease(store, owner: OwnerRef) -> dict:
     """The lease of the owner session drive:<lease-id>, read from its anchored lease.json, or run-unbound."""
     action = f"release --token-file {TOKEN}, then drive start"
     session = store.read_snapshot()["owner"]["session_id"] or ""
+    if session.startswith(EPIC_SESSION):   # design epic-drive E11: an epic's session continues through `epic resume`
+        raise Refusal("INVALID_INPUT", "The owner session is an epic run", "epic-session",
+                      f"epic resume --token-file {TOKEN}")
     events = store.read_export_snapshot(owner)["events"]
     lease_id = session[len(SESSION):] if session.startswith(SESSION) else None
     rows = [row for row in events if row["kind"] == "drive.leased" and row["subject_id"] == lease_id]
@@ -360,7 +397,7 @@ class Outcome:
 
 
 class Run:
-    def __init__(self, repo, store, owner, lease, pipeline, bounds, clock, mode):
+    def __init__(self, repo, store, owner, lease, pipeline, bounds, clock, mode, *, release_on_done=True):
         self.repo, self.store, self.owner, self.lease = repo, store, owner, lease
         self.pipeline, self.bounds, self.clock, self.mode = pipeline, bounds, clock, mode
         self.base = store.path.parent
@@ -374,6 +411,7 @@ class Run:
         self.graceful = self.aborting = self.ending = False
         self.attempt = self.judging = None
         self.run_id, self.restarts = None, 0
+        self.release_on_done = release_on_done
 
     # Signals ---------------------------------------------------------------------------------------------------
     def _on_signal(self, signum, frame):
@@ -912,9 +950,13 @@ class Run:
         try:
             if outcome.outcome == "done":
                 blocked = _releasable(self.store.read_export_snapshot(self.owner))
-                summary["ownership"], summary["ownership_reason"] = ("retained", blocked) if blocked else \
-                    ("released", None)
-                release = blocked is None
+                if not self.release_on_done:   # design epic-drive E7: the epic, not the story, releases the session
+                    summary["ownership"] = "retained"
+                    summary["ownership_reason"] = "epic run" if blocked is None else f"epic run; {blocked}"
+                else:
+                    summary["ownership"], summary["ownership_reason"] = ("retained", blocked) if blocked else \
+                        ("released", None)
+                release = blocked is None and self.release_on_done
             self._anchor("drive.stop-acknowledged" if stop else "drive.ended", self.dir / "summary.json", summary)
             _hook("after-ended", run_id=self.run_id)
             if release:

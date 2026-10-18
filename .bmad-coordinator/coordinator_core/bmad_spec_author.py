@@ -204,10 +204,11 @@ PROFILE = ReturnProfile(
 
 # Prepare and brief (design D24 "The brief") ---------------------------------------------------------------------------
 
-def sources(repo, feature: dict, story: dict, project: dict) -> tuple[str, list[str], list[str]]:
+def sources(repo, feature: dict, story: dict, project: dict) -> tuple[str, list[str], list[str], list[str]]:
     """The brief's repository inputs: the epic entry verbatim at the feature's base commit (read as `story add` checked
-    it), the project block's `context` paths, and the specs of the same epic in the artifacts directory whose
-    frontmatter status is `done` (paths only)."""
+    it), the project block's `context` paths, the specs of the same epic in the artifacts directory whose
+    frontmatter status is `done` (paths only), and the precondition state at the base commit as brief lines (design
+    epic-drive E6)."""
     epic = story.get("epic_story")
     if not isinstance(epic, dict):
         raise DomainError("STALE_INPUT", "A spec attempt needs a story added from its epic entry")
@@ -222,11 +223,14 @@ def sources(repo, feature: dict, story: dict, project: dict) -> tuple[str, list[
             continue
         if status == "done":
             done.append(path.relative_to(repo.worktree).as_posix())
-    return entry.text, list(project.get("context", [])), done
+    found = implementation.preconditions_state(repo, feature["base_commit"], implementation._artifacts_dir(project),
+                                               story.get("preconditions", []))
+    return entry.text, list(project.get("context", [])), done, \
+        implementation.preconditions_section(found, feature["base_commit"])
 
 
-def brief(spec, feature, story: dict, decisions, continuation, project, epic_text: str, context_paths,
-          done_specs) -> str:
+def brief(spec, feature, story: dict, decisions, continuation, project, epic_text: str, context_paths, done_specs,
+          preconditions) -> str:
     """Design D24: the coordinator's own text, no skill. The epic entry and the read-first paths come from the
     repository, the rest from stored rows; worker text reaches it only JSON-quoted, through the continuation."""
     path = story["spec_path"]
@@ -238,9 +242,12 @@ def brief(spec, feature, story: dict, decisions, continuation, project, epic_tex
              "commits every attempt itself and has the spec reviewed; this brief is everything you have.", "",
              "## Read first", *(reads or ["- nothing beyond the repository"]), "",
              "## Epic entry (verbatim)", epic_text, "",
-             "## Preconditions", *([f"- {item}" for item in story.get("preconditions", [])] or ["- none"]),
-             "The coordinator does not check them.", "",
+             *preconditions, "",
              "## Writable scope", f"- `{path}` (the spec)", "Everything else is read only.", "",
+             *_story_scopes(feature, story),
+             "Every task changes files inside these paths only. A change the story needs outside them is an Open "
+             "Question (options: the operator adds the path to the story's scopes before implementation / the "
+             "operator makes that change by hand after the story), never a task.", "",
              *implementation._authority(feature, decisions), "",
              "## Spec template",
              "Write the spec in this shape: the `<frozen-after-approval>` block holds the intent, the sections after "
@@ -256,6 +263,7 @@ def brief(spec, feature, story: dict, decisions, continuation, project, epic_tex
               "cannot settle and the user would notice in the result. Each entry is one line in the template's shape "
               "(ids `Q1`, `Q2`, …), with options, each option's consequence and your recommendation. Every other "
               "choice is yours: decide it and record it in the spec.",
+              "- A task outside the story scopes is a defect of the spec; ask instead.",
               "- An unmet precondition is an entry whose question starts with `BLOCKED:` and names its ledger entry.",
               "- Frontmatter `status: 'draft'` while any entry remains; when none remains, delete the `## Open "
               "Questions` section and set `status: 'ready-for-dev'`.",
@@ -275,6 +283,12 @@ def brief(spec, feature, story: dict, decisions, continuation, project, epic_tex
     return "\n".join(lines) + "\n"
 
 
+def _story_scopes(feature: dict, story: dict) -> list[str]:
+    """Design §7 F9: the implement attempts' writable paths (never the spec path), for the author and the reviewer."""
+    return ["## Story scopes (the implement attempts' writable paths)",
+            *([f"- `{scope}`" for scope in implementation._code_scopes(feature, story)] or ["- none"])]
+
+
 def prepare(repo, store, owner, spec: implementation.ImplementationPrepare) -> dict:
     """The spec author's prepare: `bmad_implementation.prepare` with kind `spec`."""
     return implementation.prepare(repo, store, owner, replace(spec, kind="spec"))
@@ -283,12 +297,13 @@ def prepare(repo, store, owner, spec: implementation.ImplementationPrepare) -> d
 def review_brief(spec, worktree, sealed, bundle: dict, feature: dict, manifest: dict, decisions, carried, store, repo,
                  snapshot) -> str:
     """Design D24: the spec review brief, `bmad_implementation.review_brief`'s counterpart for a spec bundle: the epic
-    entry, the project rules and the context paths as the author brief reads them, the feature's delegated clauses
-    (M3), the pipeline's verify commands from the author's binding, the five spec lenses; carried items, decisions,
-    rubric and rules as the code review brief has them."""
+    entry, the precondition state (design epic-drive E6), the project rules and the context paths as the author brief
+    reads them, the feature's delegated clauses (M3), the story's code scopes (design §7 F9), the pipeline's verify
+    commands from the author's binding, the five spec lenses; carried items, decisions, rubric and rules as the code
+    review brief has them."""
     story = json.loads(feature["constraints_json"])
     project = implementation.read_assignment_binding(store, repo, manifest["commit"]["assignment_id"])["project"]
-    epic_text, context_paths, _ = sources(repo, feature, story, project)
+    epic_text, context_paths, _, preconditions = sources(repo, feature, story, project)
     lines = ["# BMAD review of a sealed story spec (one attempt)", "",
              "You are a fresh, read-only reviewer of one story's spec, written from its epic entry by a spec author "
              "and committed by the coordinator. The coordinator holds all state; this brief is everything you have. "
@@ -296,15 +311,18 @@ def review_brief(spec, worktree, sealed, bundle: dict, feature: dict, manifest: 
              "## Read first", *([f"- `{item}`" for item in [*project.get("rules", []), *context_paths]] or
                                 ["- nothing beyond this brief"]), "",
              "## Epic entry (verbatim)", epic_text, "",
+             *preconditions, "",
              "## Delegated authority clauses",
              *[f"- `{item['id']}`: {item['text']}" for item in json.loads(feature["authority_json"])["delegated"]], "",
+             *_story_scopes(feature, story), "",
              "## Spec (sealed bytes)", "Read this sealed copy, not the live worktree.",
              *[f"- `{item['path']}` at `{item['sealed_path']}`" for item in sealed]]
     lines += implementation._review_records(carried, decisions)
     lines += ["", "## Review focus (one lens each; a finding cites the lens)",
               "- `readiness`: every task names a file and an action, the acceptance criteria are Given/When/Then, no "
               "placeholder remains and nothing in the spec contradicts anything else in it.",
-              "- `scope`: one user-facing goal, one story; a second deliverable is out of scope.",
+              "- `scope`: one user-facing goal, one story; a second deliverable is out of scope; a task that changes a "
+              "file outside the story scopes (listed above) is `high`: the implementation cannot write there.",
               "- `verification`: the `## Verification` commands are the pipeline's, exactly these, and running them "
               "would exercise every I/O & Edge-Case Matrix row:",
               *[f"  {line}" for line in implementation._render_commands(project["verify"])],

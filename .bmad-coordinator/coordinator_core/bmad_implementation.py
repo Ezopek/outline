@@ -1608,6 +1608,127 @@ def _epic_of(story_key: str) -> str | None:
     return f"epic-{head}" if head.isdigit() else None
 
 
+_DW_ID = re.compile(r"\bDW-(\d+)\b")
+_FIELD = re.compile(r"^([a-z][a-z0-9_-]*):(?: (.*))?$")
+_DECISION_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:\s+|$)")
+_LABEL_MARKUP = re.compile(r"^[\W_]+")   # E6: punctuation, markup and spaces before a decision's option label
+_LEDGER, _ARCHIVE = "deferred-work.md", "deferred-work-archive.md"
+
+
+def _ledger_entries(text: str) -> dict[str, list[list[str]]]:
+    """Design epic-drive E6: `DW-<n>` -> one list of field lines per `### DW-<n>:` block, in file order (a repeated
+    heading is another block, never merged into the first). Blank lines between the heading and the first field are
+    skipped (the coordinator writes one); the first line that is neither blank nor `field: value` ends the fields, as
+    does a blank line after them (the deferred-work format)."""
+    entries, current, started = {}, None, False
+    for line in _plain(text)[2].split("\n"):
+        heading = _DW.match(line)
+        if heading is not None:
+            current, started = [], False
+            entries.setdefault(f"DW-{heading.group(1)}", []).append(current)
+            continue
+        if current is None:
+            continue
+        if not line.strip():
+            if started:
+                current = None
+            continue
+        if not line[0].isspace() and _FIELD.match(line.rstrip()):
+            current.append(line.rstrip())
+            started = True
+        else:
+            current = None
+    return entries
+
+
+def _split_field(line: str) -> tuple[str, str]:
+    """A `name: value` field line as its name and its stripped value."""
+    name, _, value = line.partition(":")
+    return name, value.strip()
+
+
+def _settles(fields: list[str]) -> tuple[bool, str]:
+    """Design epic-drive E6: `status: done …` settles; so does a `decision:` line whose option label is not empty and
+    does not start with `keep-open` or `keep open`, in any case (the deferred-work format's non-settling choice). The
+    label is the value less one leading `YYYY-MM-DD` date (when there is one), cut at the format's ` — <detail>`
+    separator, less its leading punctuation and markup (`` `keep-open` ``, `**keep-open**`): a line that is only
+    `— <detail>` has no option. A settling line beside a keep-open one is unmet (`conflicting decision: lines`,
+    whatever their order). Unmet otherwise, the first decision line that does not settle gives the reason."""
+    pairs = [_split_field(line) for line in fields]
+    status = next((value for name, value in pairs if name == "status"), None)
+    if status is not None and status.split()[:1] == ["done"]:
+        return True, f"status: {status}"
+    reasons, settling, kept = [], None, False
+    for value in (value for name, value in pairs if name == "decision"):
+        label = _LABEL_MARKUP.sub("", _DECISION_DATE.sub("", value, count=1).partition("—")[0]).lower()
+        if not label:
+            reasons.append("a decision: line without an option does not settle")
+        elif label.startswith(("keep-open", "keep open")):
+            reasons.append("a keep-open decision does not settle")
+            kept = True
+        elif settling is None:
+            settling = value
+    if settling is not None:
+        return (False, "conflicting decision: lines") if kept else (True, f"decision: {settling}")
+    return False, reasons[0] if reasons else "no settling decision: line and no status: done"
+
+
+def preconditions_state(repo, commit: str, artifacts_dir: str, bullets) -> list[dict]:
+    """Design epic-drive E6: the mechanical state of each `**Preconditions:**` bullet at `commit`. A bullet names its
+    entry by its first `DW-<n>`; the entry is read from `<artifacts_dir>/deferred-work.md`, else from the archive
+    beside it (an archived entry keeps its lines; the archive appends, so its last block of an id counts). Met:
+    `status: done` or a settling `decision:` line. Unmet with a reason otherwise: no id, no readable ledger, no entry,
+    a repeated heading in the ledger, more than one `status:` line, a keep-open decision (also beside a settling one),
+    nothing decided. Never raises on ledger content; `lines` are the entry's `status:`, `decision:` and `resolution:`
+    lines for a brief."""
+    texts = []
+    for name in (_LEDGER, _ARCHIVE):
+        try:
+            texts.append(_read_at(repo, commit, f"{artifacts_dir}/{name}", "Deferred work"))
+        except DomainError:
+            texts.append(None)
+    ledger, archive = (_ledger_entries(text) if text is not None else {} for text in texts)
+    found = []
+    for bullet in bullets:
+        match = _DW_ID.search(bullet)
+        item = {"bullet": bullet, "id": None, "state": "unmet", "reason": "the bullet names no DW-<n> entry",
+                "lines": []}
+        if match is not None:
+            key = item["id"] = f"DW-{match.group(1)}"
+            if texts[0] is None and texts[1] is None:
+                item["reason"] = f"{artifacts_dir}/{_LEDGER} is not readable at the commit"
+            elif len(ledger.get(key, [])) > 1:
+                item["reason"] = f"{key} has more than one entry in the ledger"
+            elif key not in ledger and key not in archive:
+                item["reason"] = f"{key} has no entry in the ledger or the archive"
+            else:
+                fields = (ledger.get(key) or archive[key])[-1]   # the ledger first; else the archive's last block
+                item["lines"] = [line for line in fields
+                                 if _split_field(line)[0] in ("status", "decision", "resolution")]
+                statuses = sum(_split_field(line)[0] == "status" for line in fields)
+                if statuses > 1:
+                    item["reason"] = f"{key} has {statuses} status: lines"
+                else:
+                    met, item["reason"] = _settles(fields)
+                    item["state"] = "met" if met else "unmet"
+        found.append(item)
+    return found
+
+
+def preconditions_section(found: list[dict], commit: str) -> list[str]:
+    """Design epic-drive E6: the `## Preconditions` section of the spec author's and the spec reviewer's briefs."""
+    if not found:
+        return ["## Preconditions", "- none"]
+    lines = ["## Preconditions"]
+    for item in found:
+        lines.append(f"- {item['bullet']}")
+        lines += [f"  - `{line}`" for line in item["lines"]] or [f"  - {item['reason']}"]
+    state = ", ".join(f"{item['id'] or 'unnamed'} {item['state']}" for item in found)
+    lines.append(f"State at `{commit[:12]}`: {state}. A decision that does not settle its precondition, or a change it "
+                 "requires in this story that the epics entry does not show, is an Open Question, never an assumption.")
+    return lines
+
+
 def sync_sprint_status(text: str, story_key: str, status: str) -> str:
     """Design D18: textual edit of the `development_status` map, comments and order preserved. The story's epic
     moves backlog -> in-progress when the story starts and -> done when every story of that epic is done. The map

@@ -28,8 +28,9 @@ JSON_FIELDS = MANDATE_FIELDS - {"outcome"}
 DRIVE_EVENTS = frozenset({"pipeline.bound", "drive.leased", "drive.started", "drive.turn", "drive.stop-acknowledged",
                           "inbox.rejected", "drive.ended", "judgment.reserved", "judgment.returned",
                           "judgment.unknown", "judgment.failed-preflight",
-                          "story.setup", "story.baseline", "story.committed", "story.verified", "story.status"})
-ANCHOR_TOPS = ("pipelines", "drives", "inbox", "judgments", "story")
+                          "story.setup", "story.baseline", "story.committed", "story.verified", "story.status",
+                          "epic.started", "epic.advanced", "epic.ended"})
+ANCHOR_TOPS = ("pipelines", "drives", "inbox", "judgments", "story", "epics")
 DETAIL_TABLES = {
     "feature": "features", "decision": "decisions", "decision-request": "decision_requests",
     "assignment": "assignments", "bundle": "bundles", "review": "reviews",
@@ -370,8 +371,8 @@ class Coordinator:
         self.store.write(owner, change)
 
     def anchor_event(self, owner: OwnerRef, kind: str, subject_id: str, anchor: tuple) -> None:
-        """Closed-kind driver event anchored to sealed bytes under pipelines/, drives/, inbox/, judgments/ or story/;
-        the bytes are re-hashed inside the owner-fenced transaction, which keeps its single event."""
+        """Closed-kind driver event anchored to sealed bytes under pipelines/, drives/, inbox/, judgments/, story/ or
+        epics/; the bytes are re-hashed inside the owner-fenced transaction, which keeps its single event."""
         if kind not in DRIVE_EVENTS or not isinstance(subject_id, str) or not subject_id or \
            not isinstance(anchor, tuple) or len(anchor) != 3:
             raise DomainError("INVALID_INPUT", "Driver event kind or anchor is not supported")
