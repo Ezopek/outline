@@ -75,7 +75,7 @@ development_status:
   epic-3: in-progress
   3-1-verify-safe-startup-and-readiness-policy-identity: done
   3-2-close-layered-conformance-and-source-provenance-evidence: backlog
-  3-3-produce-reproducible-performance-growth-and-constant-derivat: backlog
+  3-3-produce-reproducible-performance-growth-and-constant-derivat: ready-for-dev
   3-4-assemble-the-gate-1-evidence-index-and-decision-record: backlog
   epic-3-retrospective: optional
 action_items:
