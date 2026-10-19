@@ -1,7 +1,7 @@
 ---
 title: 'Story 3.4: Assemble the Gate 1 Evidence Index and Decision Record'
 type: 'feature'
-status: 'ready-for-dev'
+status: 'in-progress'
 context: []
 ---
 
