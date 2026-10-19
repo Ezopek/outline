@@ -31,6 +31,9 @@ class RunReport:
 
 FIELDS = {"assignment_id", "request_fingerprint", "result", "changed_paths", "checks",
           "descendants", "unresolved_question", "options", "affected_ids"}
+STATE_OF = {"completed": "completed-claim", "blocked": "blocked", "needs-decision": "needs-decision",
+            "client-stopped": "client-stopped"}   # design D25: the coordinator's own terminal result of a client stop
+RETURNED = tuple(STATE_OF.values())
 
 
 def _row(snapshot, table, record_id):
@@ -103,6 +106,13 @@ def _final(value, assignment, profile=profiles.GENERIC):
        (value["result"] == "needs-decision" and not value["unresolved_question"]):
         raise DomainError("UNKNOWN_EVIDENCE", "Worker final JSON does not match required schema or assignment")
     return value
+
+
+def _stop_final(assignment, stop: dict) -> dict:
+    """Design D25: the coordinator's record of a client stop: no worker field, the stop as the client reported it."""
+    return {"assignment_id": assignment["id"], "request_fingerprint": assignment["request_fingerprint"],
+            "result": "client-stopped", "changed_paths": [], "checks": [], "descendants": [],
+            "unresolved_question": None, "options": [], "affected_ids": [], "client_stop": stop}
 
 
 _stop_group = clients.stop_group
@@ -247,6 +257,9 @@ def _report(assignment_id, state, directory, needs=()):
 
 def _return_evidence(repo, assignment, directory, before, after, final, thread, exit_code,
                      profile=profiles.GENERIC, binding=None, feature_scopes=(), client=None, extras=None):
+    """Design D25: a client stop (`final` from `_stop_final`) passes the same scope and integrity checks as a return
+    and is sealed with `client_stop` and no profile payload."""
+    stopped = final["result"] == "client-stopped"
     changed = delta(before, after)
     allowed = json.loads(assignment["paths_json"])
     source_paths = {entry["path"] for entry in json.loads(assignment["source_digests_json"])}
@@ -307,11 +320,13 @@ def _return_evidence(repo, assignment, directory, before, after, final, thread, 
              "ended_at": datetime.now(timezone.utc).isoformat(), **(extras or {})}
     if profile is not profiles.GENERIC:
         value["profile"] = profile.name
-        value["profile_payload"] = profile.check(final, assignment, binding, directory, changed)
+        value["profile_payload"] = None if stopped else profile.check(final, assignment, binding, directory, changed)
+    if stopped:
+        value["client_stop"] = final["client_stop"]
     receipt_digest = seal(directory / "return.json", value)
     return ReturnEvidence(source_id, receipt_ref(directory.name, "return"), refs, final["checks"],
                           final["descendants"], final["result"], final["unresolved_question"],
-                          final["options"], final["affected_ids"], receipt_digest)
+                          final["options"], final["affected_ids"], receipt_digest, final.get("client_stop"))
 
 
 def _sha256_file(path: Path) -> str:
@@ -379,9 +394,10 @@ def _validated_receipt(repo, store, assignment, directory, historical=False):
             raise DomainError("UNKNOWN_EVIDENCE", "Immutable inputs no longer match receipt")
         if stamp_json(inventory(repo.worktree)) != value.get("after"):
             raise DomainError("UNKNOWN_EVIDENCE", "Worktree bytes differ from terminal inventory")
+    stopped = value.get("result") == "client-stopped"
     event = ReturnEvidence(value["source_id"], ref, value["changed_paths"], value["checks"],
                            value["descendants"], value["result"], value["unresolved_question"],
-                           value["options"], value["affected_ids"], digest)
+                           value["options"], value["affected_ids"], digest, value.get("client_stop"))
     source.classify_return(event)
     if client.observation_name is not None and \
        _sha256_file(directory / client.observation_name) != value.get("observation_sha256"):
@@ -402,11 +418,19 @@ def _validated_receipt(repo, store, assignment, directory, historical=False):
     last = (directory / "last.json").read_bytes()
     if _sha256_file(directory / "events.jsonl") != value["events_sha256"] or \
        hashlib.sha256(last).hexdigest() != value["last_sha256"] or last != terminal.final or \
-       value["exit_code"] != 0:
+       (value["exit_code"] != 0 and not stopped):
         raise DomainError("UNKNOWN_EVIDENCE", "Terminal receipt no longer matches raw process output")
     if clients.client_facts(client, assignment["permission_mode"], terminal, web=launch.get("web") is True) != \
        value.get("client_facts", {}):
         raise DomainError("UNKNOWN_EVIDENCE", "Client facts differ from the retained client output")
+    if stopped:   # design D25: no final message, no profile payload; the stop and its fixed fields are re-derived
+        expected = _stop_final(assignment, terminal.stop)
+        if terminal.stop is None or terminal.stop != value.get("client_stop") or last != b"" or \
+           value.get("profile_payload") is not None or not _story(profile.name) or value.get("claimed_paths") != [] or \
+           any(value.get(key) != expected[key] for key in
+               ("checks", "descendants", "unresolved_question", "options", "affected_ids")):
+            raise DomainError("UNKNOWN_EVIDENCE", "Stop receipt differs from the retained client output")
+        return event
     final = _final(json.loads(last), assignment, profile)
     if any(final[key] != value.get(key) for key in
            ("result", "checks", "descendants", "unresolved_question", "options", "affected_ids")) or \
@@ -421,7 +445,7 @@ def _validated_receipt(repo, store, assignment, directory, historical=False):
 def historical_return(repo: RepoIdentity, store: Store, assignment_id: str) -> ReturnEvidence:
     """Internal: validate an anchored observed return without later worktree equality."""
     assignment = _row(store.read_snapshot(), "assignments", assignment_id)
-    if assignment["state"] not in ("completed-claim", "blocked", "needs-decision"):
+    if assignment["state"] not in RETURNED:
         raise DomainError("BLOCKED_EVIDENCE", "Assignment has no recorded return")
     event = _validated_receipt(repo, store, assignment, run_root(repo) / run_name(
         assignment_id, assignment["request_fingerprint"]), historical=True)
@@ -625,8 +649,8 @@ def run_assignment(repo: RepoIdentity, store: Store, owner: OwnerRef, assignment
                            ["sealed evidence changed during the run or the process group survived termination"])
         try:
             after = inventory(repo.worktree)
-            if process.returncode != 0:
-                raise DomainError("UNKNOWN_EVIDENCE", "Worker process exited unsuccessfully")
+            # design D25: after a non-zero exit only a client stop, read from the stream, goes on
+            early = clients.exited_terminal(chosen, directory, launch) if process.returncode != 0 else None
             extras = {}
             if chosen.observe is not None:
                 extras["observation_sha256"] = seal(directory / chosen.observation_name,
@@ -637,7 +661,10 @@ def run_assignment(repo: RepoIdentity, store: Store, owner: OwnerRef, assignment
                 if not clients.launcher_intact(state, hashlib.sha256(launcher).hexdigest()) or \
                    launch.get("script_launcher", {}).get("sha256") != hashlib.sha256(launcher).hexdigest():
                     raise DomainError("UNKNOWN_EVIDENCE", "Script launcher changed during the run")
-            terminal = chosen.terminal(directory, launch)
+            terminal = early or chosen.terminal(directory, launch)
+            if terminal.stop is not None and not _story(profile.name):   # design D25: a story-profile fact only
+                raise DomainError("UNKNOWN_EVIDENCE", "the client stopped at its turn limit "
+                                  f"({terminal.stop.get('num_turns')} turns) without a return")
             if chosen.return_source == "stdout":
                 private_file(directory / "last.json", terminal.final)
             elif chosen.return_source == "worker-file":
@@ -646,7 +673,8 @@ def run_assignment(repo: RepoIdentity, store: Store, owner: OwnerRef, assignment
             last = (directory / "last.json").read_bytes()
             if last != terminal.final:
                 raise DomainError("UNKNOWN_EVIDENCE", "Final message differs from the client terminal")
-            final = _final(json.loads(last), assignment, profile)
+            final = _stop_final(assignment, terminal.stop) if terminal.stop is not None else \
+                _final(json.loads(last), assignment, profile)
             facts = clients.client_facts(chosen, mode, terminal, web=spec.web)
             if facts:
                 extras["client_facts"] = facts
@@ -655,8 +683,7 @@ def run_assignment(repo: RepoIdentity, store: Store, owner: OwnerRef, assignment
                                      json.loads(feature["writable_paths_json"]), chosen, extras)
             observed.anchor_return(owner, assignment_id, event)
             observed.record_return(owner, assignment_id, event)
-            return _report(assignment_id, {"completed": "completed-claim", "blocked": "blocked",
-                                           "needs-decision": "needs-decision"}[final["result"]], directory)
+            return _report(assignment_id, STATE_OF[final["result"]], directory)
         except (OSError, ValueError, DomainError) as exc:
             return _report(assignment_id, "unknown", directory, [str(exc)])
     finally:
@@ -667,7 +694,7 @@ def inspect_run(repo: RepoIdentity, store: Store, assignment_id: str) -> RunRepo
     snapshot = store.read_snapshot()
     assignment = _row(snapshot, "assignments", assignment_id)
     directory = run_root(repo) / run_name(assignment_id, assignment["request_fingerprint"])
-    if assignment["state"] in ("completed-claim", "blocked", "needs-decision"):
+    if assignment["state"] in RETURNED:
         try:
             event = _validated_receipt(repo, store, assignment, directory)
             stored = json.loads(assignment["return_json"])
@@ -782,7 +809,7 @@ def reconcile_run(repo: RepoIdentity, store: Store, owner: OwnerRef, assignment_
     snapshot = store.read_export_snapshot(owner)
     assignment = _row(snapshot, "assignments", assignment_id)
     directory = run_root(repo) / run_name(assignment_id, assignment["request_fingerprint"])
-    if assignment["state"] in ("completed-claim", "blocked", "needs-decision"):
+    if assignment["state"] in RETURNED:
         return inspect_run(repo, store, assignment_id)
     if assignment["state"] not in ("launch-pending", "launch-unknown", "running"):
         raise DomainError("BLOCKED_EVIDENCE", "Assignment has no reserved attempt")
@@ -790,8 +817,6 @@ def reconcile_run(repo: RepoIdentity, store: Store, owner: OwnerRef, assignment_
         event = _validated_receipt(repo, store, assignment, directory)
         source = ReceiptEvidenceSource(repo, assignment_id, assignment["request_fingerprint"], store)
         Coordinator(store, source).record_return(owner, assignment_id, event)
-        state = {"completed": "completed-claim", "blocked": "blocked",
-                 "needs-decision": "needs-decision"}[event.result]
-        return _report(assignment_id, state, directory)
+        return _report(assignment_id, STATE_OF[event.result], directory)
     except (OSError, KeyError, ValueError, DomainError) as exc:
         return _report(assignment_id, "unknown", directory if directory.is_dir() else None, [str(exc)])

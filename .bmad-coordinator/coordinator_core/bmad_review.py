@@ -77,6 +77,22 @@ def critical_open(payload: dict) -> bool:
     return any(item["severity"] == "critical" for item in payload["findings"] + payload["dispositions"])
 
 
+def finding_counts(finding_json) -> dict:
+    """Design D26: a recorded review's findings and dispositions by severity (the basis of `critical_open`), every
+    severity present; an unreadable record counts nothing."""
+    counts = {name: 0 for name in SEVERITIES}
+    try:
+        view = json.loads(finding_json)["finding"]
+        items = list(view.get("findings") or []) + list(view.get("dispositions") or [])
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return counts
+    for item in items:
+        severity = item.get("severity") if isinstance(item, dict) else None
+        if severity in counts:
+            counts[severity] += 1
+    return counts
+
+
 def _sealed_files(bundle: dict, manifest: dict) -> list[dict]:
     """The reviewed subject: artifact and dependency files. Contract files are installed tooling bound by the
     fingerprint, not review subject."""
@@ -101,6 +117,10 @@ def check(final, assignment, binding, run_dir, observed_changed) -> dict:
     if not isinstance(read, list) or any(type(_exact(item, ("path", "sha256"), "bundle_read")[key]) is not str
                                          for item in read for key in ("path", "sha256")):
         raise _bad("bundle_read is malformed")
+    # F16 (live hook 19): a reviewer that names the sealed location it read instead of the manifest path attests the
+    # same bytes; the sealed path is an alias of the manifest path, normalised before the comparison and in the record
+    aliases = {item["sealed_path"]: item["path"] for item in binding["sealed_files"]}
+    read = [{**item, "path": aliases.get(item["path"], item["path"])} for item in read]
     attested = sorted((item["path"], item["sha256"]) for item in read)
     if attested != sorted((item["path"], item["digest"]) for item in binding["sealed_files"]):
         raise _bad("per-file digest attestations do not equal the sealed bundle manifest")
@@ -322,8 +342,10 @@ REVIEW_RULES = [
     "- `lenses_run` lists each lens of the profile line exactly once and no other (refused: lenses run differ from the "
     "bound lens set).",
     "- `bundle_read` holds one object with exactly the string fields `path` and `sha256` per sealed file listed above: "
-    "the `path` shown and the SHA-256 of the bytes you actually read (refused: bundle_read is malformed; bundle_read "
-    "entry has the wrong fields; per-file digest attestations do not equal the sealed bundle manifest).",
+    "`path` is the first path of that line (the manifest path, e.g. `pkg/x.py`; the sealed location after `at` is "
+    "where you read it and is accepted as an alias) and `sha256` the SHA-256 of the bytes you actually read (refused: "
+    "bundle_read is malformed; bundle_read entry has the wrong fields; per-file digest attestations do not equal the "
+    "sealed bundle manifest).",
     "- `findings` and `dispositions` are lists (refused: findings or dispositions are malformed). Each finding has "
     f"exactly the string fields {_quoted(FINDING_FIELDS)}; its `lens` is one of the profile line's lenses, verbatim, "
     f"and its `severity` one of {_quoted(SEVERITIES)} (refused: finding entry has the wrong fields; finding has a "

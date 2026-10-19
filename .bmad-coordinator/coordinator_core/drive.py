@@ -386,7 +386,7 @@ class Launcher:
         spec = self.pipeline["roles"][role]
         client = clients.get(spec["client"])
         return worker.run_assignment(self.repo, self.store, self.owner, assignment_id, spec["model"],
-                                     spec["timeout"], client.name)
+                                     spec["timeout"], client.name, spec.get("max_turns"))   # design D25
 
 
 @dataclass

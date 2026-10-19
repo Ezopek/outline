@@ -93,6 +93,7 @@ class ReturnEvidence:
     options: list[str]
     affected_ids: list[str]
     payload_digest: str
+    client_stop: dict | None = None   # design D25: the client stop of a `client-stopped` story attempt
 
 
 @dataclass(frozen=True)

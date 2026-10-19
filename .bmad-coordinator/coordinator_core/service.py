@@ -22,7 +22,7 @@ from .store import Store
 CONTINUATION_UNSUPPORTED = ("same-process continuation unsupported; resolve the request, "
                             "then add a fresh assignment with blocking_requests")
 HOLDING_STATES = ("launch-pending", "launch-unknown", "running")
-TERMINAL_STATES = ("completed-claim", "needs-decision", "blocked")
+TERMINAL_STATES = ("completed-claim", "needs-decision", "blocked", "client-stopped")   # design D25: client-stopped
 MANDATE_FIELDS = {"outcome", "exclusions", "constraints", "completion", "authority"}
 JSON_FIELDS = MANDATE_FIELDS - {"outcome"}
 DRIVE_EVENTS = frozenset({"pipeline.bound", "drive.leased", "drive.started", "drive.turn", "drive.stop-acknowledged",
@@ -731,13 +731,18 @@ class Coordinator:
             pass
 
     def record_return(self, owner: OwnerRef, assignment_id: str, result: ReturnEvidence) -> None:
-        if result.result not in ("completed", "needs-decision", "blocked") or not result.source_id:
+        if result.result not in ("completed", "needs-decision", "blocked", "client-stopped") or not result.source_id:
             raise DomainError("INVALID_INPUT", "Return requires result and provenance")
         if result.result == "needs-decision" and not result.unresolved_question:
             raise DomainError("INVALID_INPUT", "Decision request needs a question")
+        stopped = result.result == "client-stopped"   # design D25, ruling H7: a client_stop only on a stop, as a dict
+        if stopped != (result.client_stop is not None) or (stopped and not isinstance(result.client_stop, dict)):
+            raise DomainError("INVALID_INPUT", "A client stop goes with the result client-stopped, and only with it")
         classification = self.evidence_source.classify_return(result) if self.evidence_source and result.event_ref else "reported"
         if classification not in ("reported", "observed"):
             raise DomainError("INVALID_INPUT", "Invalid return evidence classification")
+        if result.result == "client-stopped" and classification != "observed":   # ruling H7: never a reported claim
+            raise DomainError("INVALID_INPUT", "client-stopped is the coordinator's own observed result")
         def change(conn):
             row = conn.execute("SELECT feature_id, state, paths_json FROM assignments WHERE id=?", (assignment_id,)).fetchone()
             if row is None:
@@ -760,9 +765,12 @@ class Coordinator:
                 affected = conn.execute("SELECT feature_id FROM assignments WHERE id=?", (affected_id,)).fetchone()
                 if affected is None or affected["feature_id"] != row["feature_id"]:
                     raise DomainError("INVALID_INPUT", "Affected ID must be an assignment in this feature")
-            state = {"completed": "completed-claim", "needs-decision": "needs-decision", "blocked": "blocked"}[result.result]
+            state = {"completed": "completed-claim", "needs-decision": "needs-decision", "blocked": "blocked",
+                     "client-stopped": "client-stopped"}[result.result]
             payload = {**asdict(result), "provenance_class": classification,
                        "trace": "observed" if classification == "observed" else "unobserved"}
+            if payload["client_stop"] is None:   # design D25: only a stop's return carries the key
+                del payload["client_stop"]
             payload["changed_paths"] = [
                 {**entry, "canonical_path": _path_identity(_resolved_worktree(feature), entry["path"])}
                 for entry in payload["changed_paths"]]
@@ -1079,5 +1087,8 @@ class Coordinator:
                     manifest = bundles.read_manifest(Path(result["path"]), result["manifest_digest"])
                     result["derived_author_ids"] = manifest["derived_author_ids"]
                     result["files"] = manifest["files"]
+                if kind == "review":
+                    from .bmad_review import finding_counts   # design D26: a flat per-severity summary
+                    result["finding_counts"] = finding_counts(record["finding_json"])
                 return result
         raise DomainError("NOT_FOUND", "Record does not exist")
