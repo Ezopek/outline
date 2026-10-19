@@ -1,0 +1,2703 @@
+{
+  "manifestVersion": 1,
+  "label": "smoke run — not Gate 1 evidence",
+  "smoke": true,
+  "gate1Eligible": false,
+  "deviations": [
+    {
+      "item": "app cgroup CPU limit (vCPU)",
+      "expected": "2",
+      "actual": "missing"
+    },
+    {
+      "item": "app cgroup memory limit (bytes)",
+      "expected": "4294967296",
+      "actual": "missing"
+    },
+    {
+      "item": "node --version",
+      "expected": "v26.3.0",
+      "actual": "v24.16.0"
+    },
+    {
+      "item": "Yarn version",
+      "expected": "4.11.0",
+      "actual": "missing"
+    },
+    {
+      "item": "NODE_ENV",
+      "expected": "production",
+      "actual": "test"
+    },
+    {
+      "item": "production build",
+      "expected": "true",
+      "actual": "false"
+    },
+    {
+      "item": "PostgreSQL server_version",
+      "expected": "14.2",
+      "actual": "14.24"
+    },
+    {
+      "item": "PostgreSQL CPU limit (vCPU, WIKILINT_BENCH_POSTGRES_CPUS)",
+      "expected": "2",
+      "actual": "missing"
+    },
+    {
+      "item": "PostgreSQL memory limit (bytes, WIKILINT_BENCH_POSTGRES_MEMORY_BYTES)",
+      "expected": "4294967296",
+      "actual": "missing"
+    },
+    {
+      "item": "local image digest (WIKILINT_BENCH_IMAGE_DIGEST)",
+      "expected": "sha256:<64 hex>",
+      "actual": "missing"
+    },
+    {
+      "item": "attestation sameHost (WIKILINT_BENCH_ATTEST_SAME_HOST)",
+      "expected": "yes",
+      "actual": "not attested"
+    },
+    {
+      "item": "attestation localSsd (WIKILINT_BENCH_ATTEST_LOCAL_SSD)",
+      "expected": "yes",
+      "actual": "not attested"
+    },
+    {
+      "item": "attestation noArtificialLatency (WIKILINT_BENCH_ATTEST_NO_ARTIFICIAL_LATENCY)",
+      "expected": "yes",
+      "actual": "not attested"
+    },
+    {
+      "item": "attestation noCompetingTraffic (WIKILINT_BENCH_ATTEST_NO_COMPETING_TRAFFIC)",
+      "expected": "yes",
+      "actual": "not attested"
+    }
+  ],
+  "startedAt": "2026-10-19T14:25:07.926Z",
+  "finishedAt": "2026-10-19T14:25:48.111Z",
+  "command": "WIKILINT_BENCH_SMOKE_OUT=docs/wikilint-gate-1/benchmark/smoke-manifest.json vitest run --project server server/wikiLint/benchmark/smokeRun.test.ts",
+  "sourceCommit": "0fa7969ca377656f5bda32974e789181cec58500",
+  "imageDigest": {
+    "value": null,
+    "note": "local, unpublished benchmark identity only; not Gate 2 publication"
+  },
+  "fixture": {
+    "generator": "server/wikiLint/benchmark/fixtureGenerator.ts",
+    "generatorCommit": "0fa7969ca377656f5bda32974e789181cec58500",
+    "seed": "wikilint-ad17-smoke-3",
+    "datasetHash": "sha256:bd1886faa6b2b70266b4407bcf7ef84d24a374dc1fa0f56343dbc36fc804af40",
+    "maxLinkReferencesPerDocument": 1000,
+    "profiles": [
+      {
+        "name": "wiki_150",
+        "collections": 3,
+        "documents": 150,
+        "links": 1200,
+        "seeded": true
+      },
+      {
+        "name": "wiki_1000",
+        "collections": 10,
+        "documents": 1000,
+        "links": 8000,
+        "seeded": true
+      }
+    ]
+  },
+  "policySetFingerprint": "sha256:65805d49a59d62ac0da786617e085c4c08d6d4184cfe16d1d2cb85034a87074a",
+  "environment": {
+    "platform": "linux",
+    "arch": "x64",
+    "kernel": "Linux 6.18.33.2-microsoft-standard-WSL2",
+    "cpuModel": "12th Gen Intel(R) Core(TM) i9-12900KF",
+    "hostCpuCount": 24,
+    "hostMemoryBytes": 16682504192,
+    "cgroup": {
+      "version": null,
+      "cpus": null,
+      "memoryBytes": null,
+      "cpuset": null
+    },
+    "nodeVersion": "v24.16.0",
+    "dockerfileNodeVersion": "v26.3.0",
+    "yarnVersion": null,
+    "packageManagerYarnVersion": "4.11.0",
+    "nodeEnv": "test",
+    "runningFromBuild": false,
+    "entryPath": null,
+    "postgres": {
+      "serverVersion": "14.24",
+      "settings": {
+        "default_transaction_isolation": "read committed",
+        "effective_cache_size": "524288 8kB",
+        "effective_io_concurrency": "1",
+        "fsync": "on",
+        "full_page_writes": "on",
+        "idle_in_transaction_session_timeout": "0 ms",
+        "jit": "on",
+        "lock_timeout": "0 ms",
+        "maintenance_work_mem": "65536 kB",
+        "max_connections": "100",
+        "max_parallel_workers_per_gather": "2",
+        "random_page_cost": "4",
+        "server_version": "14.24",
+        "server_version_num": "140024",
+        "shared_buffers": "16384 8kB",
+        "statement_timeout": "0 ms",
+        "synchronous_commit": "on",
+        "wal_level": "replica",
+        "work_mem": "4096 kB"
+      }
+    },
+    "topology": {
+      "SERVICES": null,
+      "WEB_CONCURRENCY": null,
+      "REQUEST_TIMEOUT": null,
+      "connectionPoolMax": 5,
+      "connectionPoolMin": 0
+    },
+    "operator": {
+      "postgresCpus": null,
+      "postgresMemoryBytes": null,
+      "imageDigest": null,
+      "sourceCommit": "0fa7969ca377656f5bda32974e789181cec58500"
+    },
+    "attestations": {
+      "sameHost": false,
+      "localSsd": false,
+      "noArtificialLatency": false,
+      "noCompetingTraffic": false
+    }
+  },
+  "sampling": {
+    "warmups": 1,
+    "samples": 3,
+    "coldRuns": 1,
+    "p95": "nearest rank: the sample at rank ceil(0.95 * N) in ascending order; the cold run is each case's first warmup",
+    "full": {
+      "warmups": 5,
+      "samples": 40
+    }
+  },
+  "constantsInForce": {
+    "WRITE_ELIGIBLE_MARKDOWN_BYTES": 262144,
+    "WRITE_ELIGIBLE_LINK_REFERENCES": 1000,
+    "LINT_WIKI_STOP_MARGIN_MS": 2000,
+    "SET_LOCAL_FLOOR_MS": 100,
+    "LINT_WIKI_DEADLINE_MS": 60000,
+    "VALIDATION_DEADLINE_MS": 9000
+  },
+  "cases": [
+    {
+      "id": "lint_document",
+      "kind": "lint_document",
+      "documents": 1,
+      "samples": [
+        {
+          "id": "lint_document-01",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 39.655,
+          "rssBytes": 608944128,
+          "peakRssBytes": 608944128,
+          "queries": 28,
+          "queryDurationsMs": [
+            1, 0, 1, 0, 2, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1,
+            0, 0, 0, 1, 3
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 1,
+            "warnings": 1,
+            "policies": [
+              "sha256:b7ffa1bf28aaff8a5ecfad10143d1e3dd7fa2f4c84a3351849ac638627e77bf8"
+            ],
+            "errorText": null
+          }
+        },
+        {
+          "id": "lint_document-02",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 24.485,
+          "rssBytes": 609337344,
+          "peakRssBytes": 609337344,
+          "queries": 28,
+          "queryDurationsMs": [
+            0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 2, 1, 1,
+            0, 1, 0, 0, 3
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 1,
+            "warnings": 1,
+            "policies": [
+              "sha256:b7ffa1bf28aaff8a5ecfad10143d1e3dd7fa2f4c84a3351849ac638627e77bf8"
+            ],
+            "errorText": null
+          }
+        },
+        {
+          "id": "lint_document-03",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 25.477,
+          "rssBytes": 609533952,
+          "peakRssBytes": 609533952,
+          "queries": 28,
+          "queryDurationsMs": [
+            1, 0, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+            0, 0, 0, 1, 2
+          ],
+          "setLocalMaxStatementMs": 1,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 1,
+            "warnings": 0,
+            "policies": [
+              "sha256:b7ffa1bf28aaff8a5ecfad10143d1e3dd7fa2f4c84a3351849ac638627e77bf8"
+            ],
+            "errorText": null
+          }
+        },
+        {
+          "id": "lint_document-04",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 25.471,
+          "rssBytes": 610320384,
+          "peakRssBytes": 610320384,
+          "queries": 28,
+          "queryDurationsMs": [
+            0, 0, 1, 0, 1, 1, 2, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2, 0, 1,
+            1, 0, 1, 0, 2
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 1,
+            "warnings": 0,
+            "policies": [
+              "sha256:b7ffa1bf28aaff8a5ecfad10143d1e3dd7fa2f4c84a3351849ac638627e77bf8"
+            ],
+            "errorText": null
+          }
+        }
+      ],
+      "summary": {
+        "warmSamples": 3,
+        "p95Ms": 25.477,
+        "medianMs": 25.471,
+        "maxMs": 25.477,
+        "coldMs": 39.655,
+        "peakRssBytes": 610320384,
+        "queriesP95": 28,
+        "documentIds": [
+          "5705900e-b142-4c36-825a-c130b939fdbb",
+          "5705900e-b142-4c36-825a-c130b939fdbb",
+          "02592ea5-01d4-453e-b5b6-3f4089b71722",
+          "ca42fc06-2f1a-4c7f-a1b2-bac38acd0c80"
+        ]
+      }
+    },
+    {
+      "id": "lint_wiki:wiki_150",
+      "kind": "lint_wiki",
+      "profile": "wiki_150",
+      "documents": 150,
+      "links": 1200,
+      "samples": [
+        {
+          "id": "wiki_150-01",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 151.09,
+          "rssBytes": 628707328,
+          "peakRssBytes": 628707328,
+          "queries": 47,
+          "queryDurationsMs": [
+            1, 0, 0, 0, 0, 0, 1, 0, 0, 2, 1, 3, 0, 1, 7, 1, 0, 2, 0, 1, 0, 0, 3,
+            4, 1, 5, 1, 2, 0, 0, 0, 1, 0, 1, 0, 1, 3, 1, 1, 1, 0, 1, 1, 0, 1, 0,
+            3
+          ],
+          "setLocalMaxStatementMs": 7,
+          "eventLoopMaxMs": 38.994,
+          "unitCount": 156,
+          "unitMaxMs": 0.604,
+          "assemblyMs": 1.341,
+          "batchMaxMs": 36.617,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 109,
+            "warnings": 9,
+            "policies": [
+              "sha256:e36fbe5640e673b0efeaa9a641d1a455695c9cec7cfe3daeb0965276905bcdaa",
+              "sha256:bc36958c856d8de6f5850b79560d93fec54d974bc5cdfd9aa443620e6b0c95f8",
+              "sha256:b70031fe362eb22a0beaf4b801b7d70b5ab7d1658dfef666afaa2074919560a2"
+            ],
+            "errorText": null
+          }
+        },
+        {
+          "id": "wiki_150-02",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 130.054,
+          "rssBytes": 648798208,
+          "peakRssBytes": 648798208,
+          "queries": 47,
+          "queryDurationsMs": [
+            0, 1, 0, 0, 0, 1, 1, 0, 0, 3, 1, 2, 0, 0, 7, 1, 0, 2, 1, 2, 0, 0, 3,
+            4, 0, 5, 1, 2, 1, 0, 1, 0, 0, 1, 1, 0, 2, 1, 2, 0, 1, 0, 1, 0, 1, 0,
+            3
+          ],
+          "setLocalMaxStatementMs": 7,
+          "eventLoopMaxMs": 34.8,
+          "unitCount": 156,
+          "unitMaxMs": 0.148,
+          "assemblyMs": 0.612,
+          "batchMaxMs": 32.963,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 109,
+            "warnings": 9,
+            "policies": [
+              "sha256:e36fbe5640e673b0efeaa9a641d1a455695c9cec7cfe3daeb0965276905bcdaa",
+              "sha256:bc36958c856d8de6f5850b79560d93fec54d974bc5cdfd9aa443620e6b0c95f8",
+              "sha256:b70031fe362eb22a0beaf4b801b7d70b5ab7d1658dfef666afaa2074919560a2"
+            ],
+            "errorText": null
+          }
+        },
+        {
+          "id": "wiki_150-03",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 124.257,
+          "rssBytes": 667455488,
+          "peakRssBytes": 667455488,
+          "queries": 47,
+          "queryDurationsMs": [
+            1, 0, 0, 0, 1, 1, 1, 0, 1, 2, 1, 1, 0, 1, 7, 1, 0, 2, 0, 1, 0, 0, 2,
+            4, 0, 5, 1, 2, 0, 0, 1, 0, 0, 0, 1, 0, 2, 1, 2, 0, 1, 0, 0, 0, 0, 0,
+            1
+          ],
+          "setLocalMaxStatementMs": 7,
+          "eventLoopMaxMs": 32.932,
+          "unitCount": 156,
+          "unitMaxMs": 0.143,
+          "assemblyMs": 0.821,
+          "batchMaxMs": 30.936,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 109,
+            "warnings": 9,
+            "policies": [
+              "sha256:e36fbe5640e673b0efeaa9a641d1a455695c9cec7cfe3daeb0965276905bcdaa",
+              "sha256:bc36958c856d8de6f5850b79560d93fec54d974bc5cdfd9aa443620e6b0c95f8",
+              "sha256:b70031fe362eb22a0beaf4b801b7d70b5ab7d1658dfef666afaa2074919560a2"
+            ],
+            "errorText": null
+          }
+        },
+        {
+          "id": "wiki_150-04",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 122.88,
+          "rssBytes": 685441024,
+          "peakRssBytes": 685441024,
+          "queries": 47,
+          "queryDurationsMs": [
+            0, 0, 0, 0, 0, 1, 0, 1, 0, 2, 1, 2, 0, 0, 7, 0, 0, 1, 1, 2, 0, 0, 3,
+            1, 0, 7, 1, 2, 0, 1, 0, 1, 0, 0, 0, 0, 3, 1, 1, 0, 0, 0, 1, 0, 0, 0,
+            3
+          ],
+          "setLocalMaxStatementMs": 7,
+          "eventLoopMaxMs": 37.65,
+          "unitCount": 156,
+          "unitMaxMs": 0.044,
+          "assemblyMs": 0.26,
+          "batchMaxMs": 30.547,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 109,
+            "warnings": 9,
+            "policies": [
+              "sha256:e36fbe5640e673b0efeaa9a641d1a455695c9cec7cfe3daeb0965276905bcdaa",
+              "sha256:bc36958c856d8de6f5850b79560d93fec54d974bc5cdfd9aa443620e6b0c95f8",
+              "sha256:b70031fe362eb22a0beaf4b801b7d70b5ab7d1658dfef666afaa2074919560a2"
+            ],
+            "errorText": null
+          }
+        }
+      ],
+      "summary": {
+        "warmSamples": 3,
+        "p95Ms": 130.054,
+        "medianMs": 124.257,
+        "maxMs": 130.054,
+        "coldMs": 151.09,
+        "peakRssBytes": 685441024,
+        "queriesP95": 47,
+        "normalized": {
+          "msPerDocument": 0.8670266666666667,
+          "msPerLink": 0.10837833333333334,
+          "queriesPerDocument": 0.31333333333333335,
+          "queriesPerLink": 0.03916666666666667,
+          "rssBytesPerDocument": 4569606.826666667
+        }
+      }
+    },
+    {
+      "id": "lint_wiki:wiki_1000",
+      "kind": "lint_wiki",
+      "profile": "wiki_1000",
+      "documents": 1000,
+      "links": 8000,
+      "samples": [
+        {
+          "id": "wiki_1000-01",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 732.748,
+          "rssBytes": 688406528,
+          "peakRssBytes": 702742528,
+          "queries": 129,
+          "queryDurationsMs": [
+            0, 0, 0, 0, 0, 0, 1, 0, 0, 2, 1, 2, 0, 1, 7, 0, 1, 2, 1, 1, 0, 0, 6,
+            3, 0, 4, 1, 2, 0, 1, 17, 1, 0, 3, 0, 1, 0, 1, 6, 0, 0, 2, 1, 1, 0,
+            0, 7, 1, 0, 3, 1, 2, 0, 0, 7, 4, 0, 3, 1, 2, 1, 0, 8, 3, 0, 3, 1, 1,
+            0, 1, 8, 3, 0, 3, 1, 2, 0, 0, 7, 3, 0, 2, 1, 1, 0, 1, 6, 2, 1, 1, 0,
+            0, 10, 1, 4, 0, 0, 9, 1, 2, 2, 0, 10, 1, 3, 0, 0, 10, 1, 3, 1, 0, 1,
+            1, 0, 1, 0, 0, 10, 1, 2, 1, 0, 1, 0, 0, 1, 1, 2
+          ],
+          "setLocalMaxStatementMs": 17,
+          "eventLoopMaxMs": 38.273,
+          "unitCount": 1020,
+          "unitMaxMs": 0.119,
+          "assemblyMs": 1.658,
+          "batchMaxMs": 29.177,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 623,
+            "warnings": 47,
+            "policies": [
+              "sha256:373fe7340a0683324a1bed3de183493329551b39e26fcd9b98c3230d81b6f52c",
+              "sha256:78d164d7fde82b405fa404cc02ef751f865d810aa2ab4a82b81b82161f7a9d7c",
+              "sha256:54efb8fe49b0d788bb249d1c50de93ab12d74def61b8a0d84f72832fa4a804b6",
+              "sha256:30b96a694cbce3594f899a4d6da127b0878a9ebb768cae9f7bd9603deec44125",
+              "sha256:a4201d316e0023649d21074957fa93ec7fdac4c158dbe9fb0eb1a38e1f038216",
+              "sha256:78d84d8e711a51e62d29d11bb517ca55e80fd03453acca4b9816f56cb4a8daf8",
+              "sha256:ccc177769014be6ee07d7b6fd3da25ba291fc369f42825e46cd7a9f2d27b734f",
+              "sha256:269f7f817768376b6acf6ee89d78c45881c9f12c4b8c0ebbe713636a7fe6ca7a",
+              "sha256:2eccd19d9af5f163cd824b0cfb849fdc2683a27b18c5b56a41abcf09c837cbd8",
+              "sha256:28ee27c6d8294ada3e8cf3fdf1dfb234fbc9a409184782033d255ec3815ad77d"
+            ],
+            "errorText": null
+          }
+        },
+        {
+          "id": "wiki_1000-02",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 698.713,
+          "rssBytes": 727826432,
+          "peakRssBytes": 727826432,
+          "queries": 129,
+          "queryDurationsMs": [
+            0, 0, 0, 0, 1, 1, 1, 1, 0, 2, 3, 4, 0, 1, 6, 0, 1, 3, 1, 2, 0, 0,
+            10, 0, 1, 2, 1, 2, 1, 0, 8, 0, 0, 3, 1, 2, 0, 0, 8, 0, 0, 2, 1, 2,
+            0, 0, 7, 1, 0, 3, 1, 2, 1, 0, 6, 1, 0, 3, 1, 2, 0, 0, 6, 2, 0, 2, 0,
+            1, 0, 0, 6, 2, 0, 3, 1, 2, 1, 0, 7, 3, 0, 3, 0, 1, 0, 0, 6, 3, 0, 1,
+            0, 0, 10, 1, 3, 3, 0, 11, 1, 2, 0, 0, 10, 1, 2, 0, 0, 8, 1, 2, 0, 1,
+            1, 0, 0, 1, 0, 1, 10, 5, 7, 0, 0, 1, 0, 1, 0, 0, 2
+          ],
+          "setLocalMaxStatementMs": 11,
+          "eventLoopMaxMs": 34.046,
+          "unitCount": 1020,
+          "unitMaxMs": 0.094,
+          "assemblyMs": 1.296,
+          "batchMaxMs": 26.83,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 623,
+            "warnings": 47,
+            "policies": [
+              "sha256:373fe7340a0683324a1bed3de183493329551b39e26fcd9b98c3230d81b6f52c",
+              "sha256:78d164d7fde82b405fa404cc02ef751f865d810aa2ab4a82b81b82161f7a9d7c",
+              "sha256:54efb8fe49b0d788bb249d1c50de93ab12d74def61b8a0d84f72832fa4a804b6",
+              "sha256:30b96a694cbce3594f899a4d6da127b0878a9ebb768cae9f7bd9603deec44125",
+              "sha256:a4201d316e0023649d21074957fa93ec7fdac4c158dbe9fb0eb1a38e1f038216",
+              "sha256:78d84d8e711a51e62d29d11bb517ca55e80fd03453acca4b9816f56cb4a8daf8",
+              "sha256:ccc177769014be6ee07d7b6fd3da25ba291fc369f42825e46cd7a9f2d27b734f",
+              "sha256:269f7f817768376b6acf6ee89d78c45881c9f12c4b8c0ebbe713636a7fe6ca7a",
+              "sha256:2eccd19d9af5f163cd824b0cfb849fdc2683a27b18c5b56a41abcf09c837cbd8",
+              "sha256:28ee27c6d8294ada3e8cf3fdf1dfb234fbc9a409184782033d255ec3815ad77d"
+            ],
+            "errorText": null
+          }
+        },
+        {
+          "id": "wiki_1000-03",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 695.566,
+          "rssBytes": 852922368,
+          "peakRssBytes": 852922368,
+          "queries": 129,
+          "queryDurationsMs": [
+            1, 0, 0, 0, 1, 1, 0, 1, 0, 2, 0, 1, 0, 0, 5, 0, 1, 2, 0, 1, 0, 1, 7,
+            4, 0, 3, 2, 3, 0, 0, 6, 1, 0, 5, 1, 2, 1, 0, 6, 3, 0, 2, 0, 1, 0, 0,
+            7, 3, 0, 3, 1, 2, 0, 1, 6, 3, 1, 3, 1, 2, 0, 0, 6, 4, 1, 2, 1, 1, 0,
+            1, 7, 4, 0, 2, 0, 1, 0, 0, 6, 3, 0, 2, 0, 1, 0, 0, 7, 4, 0, 2, 0, 0,
+            9, 1, 6, 1, 0, 8, 2, 2, 4, 0, 8, 1, 2, 0, 0, 7, 1, 2, 1, 0, 1, 0, 1,
+            1, 0, 0, 8, 2, 3, 1, 0, 1, 0, 0, 0, 0, 1
+          ],
+          "setLocalMaxStatementMs": 9,
+          "eventLoopMaxMs": 34.177,
+          "unitCount": 1020,
+          "unitMaxMs": 0.631,
+          "assemblyMs": 1.07,
+          "batchMaxMs": 25.445,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 623,
+            "warnings": 47,
+            "policies": [
+              "sha256:373fe7340a0683324a1bed3de183493329551b39e26fcd9b98c3230d81b6f52c",
+              "sha256:78d164d7fde82b405fa404cc02ef751f865d810aa2ab4a82b81b82161f7a9d7c",
+              "sha256:54efb8fe49b0d788bb249d1c50de93ab12d74def61b8a0d84f72832fa4a804b6",
+              "sha256:30b96a694cbce3594f899a4d6da127b0878a9ebb768cae9f7bd9603deec44125",
+              "sha256:a4201d316e0023649d21074957fa93ec7fdac4c158dbe9fb0eb1a38e1f038216",
+              "sha256:78d84d8e711a51e62d29d11bb517ca55e80fd03453acca4b9816f56cb4a8daf8",
+              "sha256:ccc177769014be6ee07d7b6fd3da25ba291fc369f42825e46cd7a9f2d27b734f",
+              "sha256:269f7f817768376b6acf6ee89d78c45881c9f12c4b8c0ebbe713636a7fe6ca7a",
+              "sha256:2eccd19d9af5f163cd824b0cfb849fdc2683a27b18c5b56a41abcf09c837cbd8",
+              "sha256:28ee27c6d8294ada3e8cf3fdf1dfb234fbc9a409184782033d255ec3815ad77d"
+            ],
+            "errorText": null
+          }
+        },
+        {
+          "id": "wiki_1000-04",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 699.923,
+          "rssBytes": 983777280,
+          "peakRssBytes": 983777280,
+          "queries": 129,
+          "queryDurationsMs": [
+            1, 0, 0, 0, 1, 1, 0, 1, 0, 2, 5, 6, 0, 0, 6, 0, 1, 2, 0, 1, 0, 0, 8,
+            1, 0, 3, 0, 1, 0, 0, 8, 1, 0, 3, 1, 2, 1, 0, 7, 1, 0, 3, 1, 2, 0, 0,
+            7, 0, 1, 2, 1, 2, 0, 0, 7, 0, 0, 2, 1, 2, 0, 0, 7, 4, 0, 3, 0, 1, 0,
+            0, 6, 3, 0, 3, 1, 1, 0, 1, 6, 6, 0, 3, 1, 1, 0, 1, 8, 5, 0, 1, 1, 0,
+            8, 1, 6, 0, 0, 8, 1, 3, 3, 1, 9, 1, 3, 0, 0, 8, 1, 2, 0, 0, 1, 0, 1,
+            1, 0, 0, 8, 1, 2, 0, 0, 2, 1, 4, 0, 1, 2
+          ],
+          "setLocalMaxStatementMs": 9,
+          "eventLoopMaxMs": 34.079,
+          "unitCount": 1020,
+          "unitMaxMs": 0.108,
+          "assemblyMs": 1.157,
+          "batchMaxMs": 28.381,
+          "lint": {
+            "ok": true,
+            "state": "complete",
+            "complete": true,
+            "systemFailureCodes": [],
+            "errors": 623,
+            "warnings": 47,
+            "policies": [
+              "sha256:373fe7340a0683324a1bed3de183493329551b39e26fcd9b98c3230d81b6f52c",
+              "sha256:78d164d7fde82b405fa404cc02ef751f865d810aa2ab4a82b81b82161f7a9d7c",
+              "sha256:54efb8fe49b0d788bb249d1c50de93ab12d74def61b8a0d84f72832fa4a804b6",
+              "sha256:30b96a694cbce3594f899a4d6da127b0878a9ebb768cae9f7bd9603deec44125",
+              "sha256:a4201d316e0023649d21074957fa93ec7fdac4c158dbe9fb0eb1a38e1f038216",
+              "sha256:78d84d8e711a51e62d29d11bb517ca55e80fd03453acca4b9816f56cb4a8daf8",
+              "sha256:ccc177769014be6ee07d7b6fd3da25ba291fc369f42825e46cd7a9f2d27b734f",
+              "sha256:269f7f817768376b6acf6ee89d78c45881c9f12c4b8c0ebbe713636a7fe6ca7a",
+              "sha256:2eccd19d9af5f163cd824b0cfb849fdc2683a27b18c5b56a41abcf09c837cbd8",
+              "sha256:28ee27c6d8294ada3e8cf3fdf1dfb234fbc9a409184782033d255ec3815ad77d"
+            ],
+            "errorText": null
+          }
+        }
+      ],
+      "summary": {
+        "warmSamples": 3,
+        "p95Ms": 699.923,
+        "medianMs": 698.713,
+        "maxMs": 699.923,
+        "coldMs": 732.748,
+        "peakRssBytes": 983777280,
+        "queriesP95": 129,
+        "normalized": {
+          "msPerDocument": 0.699923,
+          "msPerLink": 0.087490375,
+          "queriesPerDocument": 0.129,
+          "queriesPerLink": 0.016125,
+          "rssBytesPerDocument": 983777.28
+        }
+      }
+    },
+    {
+      "id": "write:create",
+      "kind": "write",
+      "mode": "create",
+      "documents": 1,
+      "samples": [
+        {
+          "id": "create-01:baseline",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 29.54,
+          "rssBytes": 984170496,
+          "peakRssBytes": 984170496,
+          "queries": 14,
+          "queryDurationsMs": [0, 1, 0, 2, 1, 0, 0, 0, 0, 0, 2, 0, 1, 3],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "b33711a5-cb8e-4467-af8e-6012476d3a67",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "create-01:enforced",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 45.923,
+          "rssBytes": 995180544,
+          "peakRssBytes": 995180544,
+          "queries": 40,
+          "queryDurationsMs": [
+            0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 5, 2, 1, 1, 1, 0, 0,
+            2, 1, 1, 0, 0, 0, 0, 2, 1, 1, 1, 0, 3, 0, 1, 0, 2
+          ],
+          "setLocalMaxStatementMs": 5,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "8d2ab318-bf6a-4dce-812d-9b704e8f01fc",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8192,
+            "linkReferences": 8,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "create-06:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 37.587,
+          "rssBytes": 996556800,
+          "peakRssBytes": 996556800,
+          "queries": 14,
+          "queryDurationsMs": [0, 0, 1, 16, 0, 0, 1, 1, 1, 1, 2, 0, 1, 3],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "1ac6e047-091b-4f6a-82b1-dff075d4bbbc",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": "max_markdown",
+            "errorText": null
+          }
+        },
+        {
+          "id": "create-06:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 61.969,
+          "rssBytes": 1003044864,
+          "peakRssBytes": 1003044864,
+          "queries": 40,
+          "queryDurationsMs": [
+            1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1, 1, 1, 2, 0, 1, 0,
+            16, 1, 0, 0, 0, 1, 1, 3, 1, 2, 0, 0, 4, 0, 0, 0, 2
+          ],
+          "setLocalMaxStatementMs": 16,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "c620a903-1f82-440c-9940-58650f47068c",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 131072,
+            "linkReferences": 8,
+            "label": "max_markdown",
+            "errorText": null
+          }
+        },
+        {
+          "id": "create-07:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 35.369,
+          "rssBytes": 1006977024,
+          "peakRssBytes": 1006977024,
+          "queries": 14,
+          "queryDurationsMs": [1, 1, 0, 9, 1, 1, 0, 0, 0, 0, 4, 1, 1, 4],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "eb0693d0-3186-46b5-8adb-1cfd775f2a15",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": "max_links",
+            "errorText": null
+          }
+        },
+        {
+          "id": "create-07:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 69.457,
+          "rssBytes": 1009598464,
+          "peakRssBytes": 1009598464,
+          "queries": 40,
+          "queryDurationsMs": [
+            0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 4, 0, 0, 0, 0, 2, 0, 1, 1, 0, 0,
+            9, 1, 0, 0, 0, 1, 1, 3, 0, 1, 0, 1, 3, 1, 0, 0, 1
+          ],
+          "setLocalMaxStatementMs": 9,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "90671a35-f754-453d-951f-71bfcbf76f4f",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 65536,
+            "linkReferences": 1000,
+            "label": "max_links",
+            "errorText": null
+          }
+        },
+        {
+          "id": "create-08:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 30.016,
+          "rssBytes": 1009991680,
+          "peakRssBytes": 1009991680,
+          "queries": 14,
+          "queryDurationsMs": [0, 1, 0, 2, 1, 7, 0, 1, 1, 0, 2, 1, 1, 3],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "b9e7cf43-1a26-4a72-b78a-a880f3ac388f",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "create-08:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 34.79,
+          "rssBytes": 1010188288,
+          "peakRssBytes": 1010188288,
+          "queries": 40,
+          "queryDurationsMs": [
+            0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 1, 1, 0, 0, 0,
+            2, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 3, 0, 1, 0, 2
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "42bf6093-660a-488b-8a36-827f9e6b6312",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8192,
+            "linkReferences": 8,
+            "label": null,
+            "errorText": null
+          }
+        }
+      ],
+      "summary": {
+        "baseline": {
+          "warmSamples": 3,
+          "p95Ms": 37.587,
+          "medianMs": 35.369,
+          "maxMs": 37.587,
+          "coldMs": 29.54,
+          "peakRssBytes": 1009991680,
+          "queriesP95": 14
+        },
+        "enforced": {
+          "warmSamples": 3,
+          "p95Ms": 69.457,
+          "medianMs": 61.969,
+          "maxMs": 69.457,
+          "coldMs": 45.923,
+          "peakRssBytes": 1010188288,
+          "queriesP95": 40
+        },
+        "overheadsMs": [
+          {
+            "sampleId": "create-06",
+            "ms": 24.382
+          },
+          {
+            "sampleId": "create-07",
+            "ms": 34.088
+          },
+          {
+            "sampleId": "create-08",
+            "ms": 4.774
+          }
+        ],
+        "overheadP95Ms": 34.088,
+        "maxima": [
+          {
+            "sampleId": "create-06:baseline",
+            "label": "max_markdown",
+            "markdownBytes": null,
+            "linkReferences": null,
+            "validationStatus": null
+          },
+          {
+            "sampleId": "create-06:enforced",
+            "label": "max_markdown",
+            "markdownBytes": 131072,
+            "linkReferences": 8,
+            "validationStatus": "validated"
+          },
+          {
+            "sampleId": "create-07:baseline",
+            "label": "max_links",
+            "markdownBytes": null,
+            "linkReferences": null,
+            "validationStatus": null
+          },
+          {
+            "sampleId": "create-07:enforced",
+            "label": "max_links",
+            "markdownBytes": 65536,
+            "linkReferences": 1000,
+            "validationStatus": "validated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "write:replace",
+      "kind": "write",
+      "mode": "replace",
+      "documents": 1,
+      "samples": [
+        {
+          "id": "replace-01:baseline",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 19.01,
+          "rssBytes": 1010581504,
+          "peakRssBytes": 1010581504,
+          "queries": 8,
+          "queryDurationsMs": [1, 1, 0, 4, 2, 2, 0, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "b3e70179-5170-48c2-aafd-a1adee947acf",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "replace-01:enforced",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 44.52,
+          "rssBytes": 1011576832,
+          "peakRssBytes": 1011576832,
+          "queries": 38,
+          "queryDurationsMs": [
+            3, 1, 1, 1, 1, 0, 0, 1, 0, 1, 2, 2, 3, 0, 1, 1, 0, 1, 0, 0, 2, 0, 1,
+            0, 0, 0, 3, 1, 1, 1, 2, 0, 0, 3, 0, 1, 0, 2
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "cd69e25a-f48f-44e9-b933-9d734929b427",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8192,
+            "linkReferences": 8,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "replace-06:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 36.463,
+          "rssBytes": 1012756480,
+          "peakRssBytes": 1012756480,
+          "queries": 8,
+          "queryDurationsMs": [2, 0, 0, 19, 3, 2, 1, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "346d3559-bb79-4b74-a36a-48a1934d4ac0",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": "max_markdown",
+            "errorText": null
+          }
+        },
+        {
+          "id": "replace-06:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 62.092,
+          "rssBytes": 1015115776,
+          "peakRssBytes": 1015115776,
+          "queries": 38,
+          "queryDurationsMs": [
+            1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 2, 0, 1,
+            0, 0, 0, 17, 1, 3, 0, 1, 0, 1, 3, 0, 1, 0, 2
+          ],
+          "setLocalMaxStatementMs": 17,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "0213dc3f-7b72-441d-a7f6-acce324a03f7",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 131072,
+            "linkReferences": 8,
+            "label": "max_markdown",
+            "errorText": null
+          }
+        },
+        {
+          "id": "replace-07:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 32.091,
+          "rssBytes": 1016295424,
+          "peakRssBytes": 1016295424,
+          "queries": 8,
+          "queryDurationsMs": [1, 1, 1, 10, 2, 3, 1, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "8851f278-ae4d-47f7-a2f7-9970a97f932b",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": "max_links",
+            "errorText": null
+          }
+        },
+        {
+          "id": "replace-07:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 69.834,
+          "rssBytes": 1016393728,
+          "peakRssBytes": 1016393728,
+          "queries": 38,
+          "queryDurationsMs": [
+            1, 0, 0, 0, 1, 3, 0, 0, 0, 0, 2, 1, 1, 0, 0, 0, 1, 0, 0, 1, 2, 1, 2,
+            1, 0, 0, 7, 1, 4, 1, 1, 0, 0, 3, 0, 0, 1, 1
+          ],
+          "setLocalMaxStatementMs": 7,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "ae4b5d47-fb01-40fc-a564-c0eb551c20d5",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 65536,
+            "linkReferences": 1000,
+            "label": "max_links",
+            "errorText": null
+          }
+        },
+        {
+          "id": "replace-08:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 18.273,
+          "rssBytes": 1016786944,
+          "peakRssBytes": 1016786944,
+          "queries": 8,
+          "queryDurationsMs": [2, 1, 1, 4, 2, 2, 1, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "4275057f-9d91-453f-b0a5-47f7ef38c92f",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "replace-08:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 37.948,
+          "rssBytes": 1016786944,
+          "peakRssBytes": 1016786944,
+          "queries": 38,
+          "queryDurationsMs": [
+            1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 2, 1, 1, 1, 0, 0, 0, 0, 0, 1, 2, 0, 1,
+            0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 2, 0, 0, 0, 2
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "1658cf54-da87-4fc2-902b-9f5ed5fbcba6",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8192,
+            "linkReferences": 8,
+            "label": null,
+            "errorText": null
+          }
+        }
+      ],
+      "summary": {
+        "baseline": {
+          "warmSamples": 3,
+          "p95Ms": 36.463,
+          "medianMs": 32.091,
+          "maxMs": 36.463,
+          "coldMs": 19.01,
+          "peakRssBytes": 1016786944,
+          "queriesP95": 8
+        },
+        "enforced": {
+          "warmSamples": 3,
+          "p95Ms": 69.834,
+          "medianMs": 62.092,
+          "maxMs": 69.834,
+          "coldMs": 44.52,
+          "peakRssBytes": 1016786944,
+          "queriesP95": 38
+        },
+        "overheadsMs": [
+          {
+            "sampleId": "replace-06",
+            "ms": 25.629
+          },
+          {
+            "sampleId": "replace-07",
+            "ms": 37.743
+          },
+          {
+            "sampleId": "replace-08",
+            "ms": 19.675
+          }
+        ],
+        "overheadP95Ms": 37.743,
+        "maxima": [
+          {
+            "sampleId": "replace-06:baseline",
+            "label": "max_markdown",
+            "markdownBytes": null,
+            "linkReferences": null,
+            "validationStatus": null
+          },
+          {
+            "sampleId": "replace-06:enforced",
+            "label": "max_markdown",
+            "markdownBytes": 131072,
+            "linkReferences": 8,
+            "validationStatus": "validated"
+          },
+          {
+            "sampleId": "replace-07:baseline",
+            "label": "max_links",
+            "markdownBytes": null,
+            "linkReferences": null,
+            "validationStatus": null
+          },
+          {
+            "sampleId": "replace-07:enforced",
+            "label": "max_links",
+            "markdownBytes": 65536,
+            "linkReferences": 1000,
+            "validationStatus": "validated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "write:append",
+      "kind": "write",
+      "mode": "append",
+      "documents": 1,
+      "samples": [
+        {
+          "id": "append-01:baseline",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 18.571,
+          "rssBytes": 1017864192,
+          "peakRssBytes": 1017864192,
+          "queries": 8,
+          "queryDurationsMs": [3, 0, 0, 4, 3, 1, 1, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "387e4119-0233-4669-ad19-f4c185fc6ad5",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "append-01:enforced",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 37.427,
+          "rssBytes": 1018060800,
+          "peakRssBytes": 1018060800,
+          "queries": 38,
+          "queryDurationsMs": [
+            2, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 2, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1,
+            0, 0, 0, 1, 0, 2, 1, 1, 1, 0, 3, 0, 0, 0, 1
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "b3387d46-d494-490d-a759-46a5d09f01e5",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8278,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "append-06:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 16.914,
+          "rssBytes": 1018060800,
+          "peakRssBytes": 1018060800,
+          "queries": 8,
+          "queryDurationsMs": [1, 1, 0, 3, 2, 2, 1, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "a6865e6c-0991-492f-9628-e36a14e9558b",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "append-06:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 37.124,
+          "rssBytes": 1018257408,
+          "peakRssBytes": 1018257408,
+          "queries": 38,
+          "queryDurationsMs": [
+            2, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 2, 1, 1,
+            0, 0, 1, 2, 1, 1, 0, 1, 0, 0, 2, 0, 0, 1, 1
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "7ac1a5a6-3582-462c-a1f1-e9419ffbcbdb",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8278,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "append-07:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 16.857,
+          "rssBytes": 1018257408,
+          "peakRssBytes": 1018257408,
+          "queries": 8,
+          "queryDurationsMs": [2, 1, 1, 4, 2, 2, 1, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "857a0c86-e2b1-4169-a1ba-4fe3ed343108",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "append-07:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 35.309,
+          "rssBytes": 1018454016,
+          "peakRssBytes": 1018454016,
+          "queries": 38,
+          "queryDurationsMs": [
+            2, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+            0, 0, 0, 1, 0, 2, 0, 1, 0, 0, 3, 0, 1, 0, 1
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "47a1b4da-febd-4fed-ab62-b8b368b50e2c",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8278,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "append-08:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 16.364,
+          "rssBytes": 1018650624,
+          "peakRssBytes": 1018650624,
+          "queries": 8,
+          "queryDurationsMs": [2, 1, 1, 3, 3, 1, 0, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "1ec166fc-a9e8-48f4-b4b3-962b76dd8a1d",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "append-08:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 36.271,
+          "rssBytes": 1021403136,
+          "peakRssBytes": 1021403136,
+          "queries": 38,
+          "queryDurationsMs": [
+            1, 3, 3, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1,
+            0, 0, 0, 1, 0, 2, 0, 1, 0, 0, 1, 1, 0, 0, 2
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "ffc1697a-c635-48f6-b0fc-4e84ed9fd15d",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8278,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        }
+      ],
+      "summary": {
+        "baseline": {
+          "warmSamples": 3,
+          "p95Ms": 16.914,
+          "medianMs": 16.857,
+          "maxMs": 16.914,
+          "coldMs": 18.571,
+          "peakRssBytes": 1018650624,
+          "queriesP95": 8
+        },
+        "enforced": {
+          "warmSamples": 3,
+          "p95Ms": 37.124,
+          "medianMs": 36.271,
+          "maxMs": 37.124,
+          "coldMs": 37.427,
+          "peakRssBytes": 1021403136,
+          "queriesP95": 38
+        },
+        "overheadsMs": [
+          {
+            "sampleId": "append-06",
+            "ms": 20.21
+          },
+          {
+            "sampleId": "append-07",
+            "ms": 18.452
+          },
+          {
+            "sampleId": "append-08",
+            "ms": 19.907
+          }
+        ],
+        "overheadP95Ms": 20.21,
+        "maxima": []
+      }
+    },
+    {
+      "id": "write:prepend",
+      "kind": "write",
+      "mode": "prepend",
+      "documents": 1,
+      "samples": [
+        {
+          "id": "prepend-01:baseline",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 24.19,
+          "rssBytes": 1021403136,
+          "peakRssBytes": 1021403136,
+          "queries": 8,
+          "queryDurationsMs": [1, 1, 1, 11, 2, 1, 1, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "903ee187-0f7a-4f8e-894d-ea1080087665",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "prepend-01:enforced",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 36.264,
+          "rssBytes": 1021599744,
+          "peakRssBytes": 1021599744,
+          "queries": 38,
+          "queryDurationsMs": [
+            1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 2, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1,
+            0, 0, 0, 1, 0, 2, 0, 1, 0, 1, 1, 0, 0, 1, 2
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "9eaceefe-fd7b-4c3b-bfae-364a467c5d7d",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8279,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "prepend-06:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 14.437,
+          "rssBytes": 1021796352,
+          "peakRssBytes": 1021796352,
+          "queries": 8,
+          "queryDurationsMs": [1, 0, 0, 3, 1, 1, 0, 0],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "ff9953ef-4bd1-4996-92f0-4e0a9359a4ee",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "prepend-06:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 34.41,
+          "rssBytes": 1021796352,
+          "peakRssBytes": 1021796352,
+          "queries": 38,
+          "queryDurationsMs": [
+            2, 1, 1, 1, 1, 0, 1, 0, 0, 1, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+            0, 0, 0, 1, 0, 2, 0, 1, 0, 0, 2, 0, 1, 0, 1
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "3a34d7ed-a980-4191-8c29-6bc5f27c183e",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8279,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "prepend-07:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 16.174,
+          "rssBytes": 1021992960,
+          "peakRssBytes": 1021992960,
+          "queries": 8,
+          "queryDurationsMs": [2, 1, 1, 3, 2, 1, 0, 0],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "14353fc7-73d6-45aa-b748-c695c8e78f95",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "prepend-07:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 38.04,
+          "rssBytes": 1023369216,
+          "peakRssBytes": 1023369216,
+          "queries": 38,
+          "queryDurationsMs": [
+            1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+            1, 0, 0, 2, 1, 1, 3, 3, 0, 1, 2, 0, 0, 0, 2
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "fee69717-b83e-4db7-ab0d-09c99a5d8878",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8279,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "prepend-08:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 16.112,
+          "rssBytes": 1023565824,
+          "peakRssBytes": 1023565824,
+          "queries": 8,
+          "queryDurationsMs": [1, 1, 1, 3, 2, 1, 0, 0],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "6f663911-5969-460c-8a24-c0a6646df5b8",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "prepend-08:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 36.663,
+          "rssBytes": 1023762432,
+          "peakRssBytes": 1023762432,
+          "queries": 38,
+          "queryDurationsMs": [
+            1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1,
+            1, 0, 0, 2, 1, 2, 0, 1, 0, 0, 2, 0, 0, 0, 2
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "3d92ee73-3704-4b2e-a2dc-2ae32fca3761",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8279,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        }
+      ],
+      "summary": {
+        "baseline": {
+          "warmSamples": 3,
+          "p95Ms": 16.174,
+          "medianMs": 16.112,
+          "maxMs": 16.174,
+          "coldMs": 24.19,
+          "peakRssBytes": 1023565824,
+          "queriesP95": 8
+        },
+        "enforced": {
+          "warmSamples": 3,
+          "p95Ms": 38.04,
+          "medianMs": 36.663,
+          "maxMs": 38.04,
+          "coldMs": 36.264,
+          "peakRssBytes": 1023762432,
+          "queriesP95": 38
+        },
+        "overheadsMs": [
+          {
+            "sampleId": "prepend-06",
+            "ms": 19.973
+          },
+          {
+            "sampleId": "prepend-07",
+            "ms": 21.866
+          },
+          {
+            "sampleId": "prepend-08",
+            "ms": 20.551
+          }
+        ],
+        "overheadP95Ms": 21.866,
+        "maxima": []
+      }
+    },
+    {
+      "id": "write:patch",
+      "kind": "write",
+      "mode": "patch",
+      "documents": 1,
+      "samples": [
+        {
+          "id": "patch-01:baseline",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 19.521,
+          "rssBytes": 1023959040,
+          "peakRssBytes": 1023959040,
+          "queries": 9,
+          "queryDurationsMs": [2, 1, 1, 4, 2, 1, 1, 1, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "fba0096e-e751-4c98-ac4a-272e1c5dee7f",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "patch-01:enforced",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 37.647,
+          "rssBytes": 1024155648,
+          "peakRssBytes": 1024155648,
+          "queries": 39,
+          "queryDurationsMs": [
+            1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 2, 1, 1, 1, 0, 0, 0, 0, 0, 0, 2, 1, 1,
+            0, 0, 0, 1, 1, 2, 1, 2, 0, 0, 2, 0, 0, 1, 1, 0
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "b3a1cd38-f800-4901-8fe3-44b34854bd26",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8252,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "patch-06:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 17.233,
+          "rssBytes": 1024155648,
+          "peakRssBytes": 1024155648,
+          "queries": 9,
+          "queryDurationsMs": [2, 1, 1, 4, 1, 2, 1, 1, 0],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "299f192b-68bb-483e-8071-9cca33a2e193",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "patch-06:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 37.447,
+          "rssBytes": 1024352256,
+          "peakRssBytes": 1024352256,
+          "queries": 39,
+          "queryDurationsMs": [
+            2, 1, 1, 1, 1, 0, 1, 0, 0, 1, 2, 1, 1, 0, 1, 0, 1, 0, 0, 1, 2, 1, 2,
+            0, 0, 0, 2, 1, 1, 1, 2, 0, 0, 3, 0, 0, 0, 2, 1
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "7fb15c41-55f5-4ce6-96db-7fd15843f3cc",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8252,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "patch-07:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 17.563,
+          "rssBytes": 1024352256,
+          "peakRssBytes": 1024352256,
+          "queries": 9,
+          "queryDurationsMs": [1, 1, 1, 4, 3, 2, 1, 1, 1],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "7c7c6729-d9a0-407c-9983-76af239620ec",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "patch-07:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 37.385,
+          "rssBytes": 1026318336,
+          "peakRssBytes": 1026318336,
+          "queries": 39,
+          "queryDurationsMs": [
+            2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 2, 1, 2,
+            0, 0, 1, 2, 1, 1, 1, 2, 0, 0, 3, 0, 0, 1, 1, 0
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "a815066f-e721-441d-a6fb-3afe550cd002",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8252,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "patch-08:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 16.967,
+          "rssBytes": 1026514944,
+          "peakRssBytes": 1026514944,
+          "queries": 9,
+          "queryDurationsMs": [2, 1, 1, 3, 2, 1, 0, 0, 0],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "d2fa9d1a-4920-4cde-9f6f-b7e01b5fdf7d",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "patch-08:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 36.484,
+          "rssBytes": 1026711552,
+          "peakRssBytes": 1026711552,
+          "queries": 39,
+          "queryDurationsMs": [
+            2, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+            1, 0, 0, 2, 1, 2, 1, 1, 0, 0, 2, 0, 0, 0, 2, 1
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "30e725bc-3794-43dd-b346-ed0599284d7e",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": 8252,
+            "linkReferences": 9,
+            "label": null,
+            "errorText": null
+          }
+        }
+      ],
+      "summary": {
+        "baseline": {
+          "warmSamples": 3,
+          "p95Ms": 17.563,
+          "medianMs": 17.233,
+          "maxMs": 17.563,
+          "coldMs": 19.521,
+          "peakRssBytes": 1026514944,
+          "queriesP95": 9
+        },
+        "enforced": {
+          "warmSamples": 3,
+          "p95Ms": 37.447,
+          "medianMs": 37.385,
+          "maxMs": 37.447,
+          "coldMs": 37.647,
+          "peakRssBytes": 1026711552,
+          "queriesP95": 39
+        },
+        "overheadsMs": [
+          {
+            "sampleId": "patch-06",
+            "ms": 20.214
+          },
+          {
+            "sampleId": "patch-07",
+            "ms": 19.822
+          },
+          {
+            "sampleId": "patch-08",
+            "ms": 19.517
+          }
+        ],
+        "overheadP95Ms": 20.214,
+        "maxima": []
+      }
+    },
+    {
+      "id": "html",
+      "kind": "html",
+      "documents": 1,
+      "samples": [
+        {
+          "id": "html-01:baseline",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 200.685,
+          "rssBytes": 1037111296,
+          "peakRssBytes": 1037111296,
+          "queries": 18,
+          "queryDurationsMs": [
+            1, 1, 1, 4, 3, 0, 0, 0, 1, 0, 1, 2, 1, 1, 3, 2, 1, 1
+          ],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "5a4dc3fc-5cce-40f8-8f00-6ba241090e71",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "html-01:enforced",
+          "role": "warmup",
+          "cold": true,
+          "durationMs": 68.344,
+          "rssBytes": 1037897728,
+          "peakRssBytes": 1037897728,
+          "queries": 51,
+          "queryDurationsMs": [
+            1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0, 0,
+            0, 1, 1, 0, 1, 0, 0, 0, 2, 0, 0, 1, 1, 1, 1, 1, 1, 2, 0, 0, 3, 0, 0,
+            1, 1, 2, 1, 1
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "3d16334f-0e5c-4bf8-ad7b-7a4b17cf31ee",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "html-06:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 34.758,
+          "rssBytes": 1038290944,
+          "peakRssBytes": 1038290944,
+          "queries": 18,
+          "queryDurationsMs": [
+            1, 1, 0, 1, 2, 0, 0, 0, 1, 1, 1, 1, 0, 1, 3, 1, 0, 0
+          ],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "84ab1c5b-db21-49f8-a61d-c3d2edd8d652",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "html-06:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 58.128,
+          "rssBytes": 1050677248,
+          "peakRssBytes": 1050677248,
+          "queries": 51,
+          "queryDurationsMs": [
+            1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1,
+            0, 0, 1, 1, 1, 1, 0, 0, 2, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 3, 0, 0,
+            1, 1, 2, 0, 0
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "9e4d987e-2dd9-43ca-8c27-0441eb112557",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "html-07:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 32.392,
+          "rssBytes": 1050873856,
+          "peakRssBytes": 1050873856,
+          "queries": 18,
+          "queryDurationsMs": [
+            1, 0, 1, 1, 2, 1, 1, 1, 0, 0, 0, 2, 1, 1, 3, 2, 1, 1
+          ],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "50559441-a3d8-4679-9b9a-c5b68b5a6286",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "html-07:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 55.246,
+          "rssBytes": 1051463680,
+          "peakRssBytes": 1051463680,
+          "queries": 51,
+          "queryDurationsMs": [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0,
+            0, 1, 2, 1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 2, 0, 0,
+            1, 2, 1, 1, 1
+          ],
+          "setLocalMaxStatementMs": 2,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "74bdf98d-1824-4a9d-9a5b-be7a64bb9bff",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "html-08:baseline",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 32.874,
+          "rssBytes": 1051660288,
+          "peakRssBytes": 1051660288,
+          "queries": 18,
+          "queryDurationsMs": [
+            1, 1, 1, 0, 3, 1, 0, 0, 0, 1, 1, 2, 0, 1, 3, 1, 0, 0
+          ],
+          "setLocalMaxStatementMs": null,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "baseline",
+            "ok": true,
+            "documentId": "1294cce8-bc59-4b97-aa20-7cf68d015838",
+            "validationStatus": null,
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        },
+        {
+          "id": "html-08:enforced",
+          "role": "sample",
+          "cold": false,
+          "durationMs": 58.561,
+          "rssBytes": 1054412800,
+          "peakRssBytes": 1054412800,
+          "queries": 51,
+          "queryDurationsMs": [
+            1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0,
+            1, 0, 3, 1, 1, 0, 0, 0, 2, 1, 0, 1, 1, 1, 0, 2, 1, 1, 1, 0, 2, 0, 0,
+            1, 1, 2, 1, 1
+          ],
+          "setLocalMaxStatementMs": 3,
+          "eventLoopMaxMs": null,
+          "unitCount": 0,
+          "unitMaxMs": null,
+          "assemblyMs": null,
+          "batchMaxMs": null,
+          "write": {
+            "side": "enforced",
+            "ok": true,
+            "documentId": "c3600efe-f62d-42dc-a943-1e25e1d27763",
+            "validationStatus": "validated",
+            "systemFailureCodes": [],
+            "markdownBytes": null,
+            "linkReferences": null,
+            "label": null,
+            "errorText": null
+          }
+        }
+      ],
+      "summary": {
+        "note": "HTML import timings; reported apart, never a substitute for the Markdown comparison",
+        "baseline": {
+          "warmSamples": 3,
+          "p95Ms": 34.758,
+          "medianMs": 32.874,
+          "maxMs": 34.758,
+          "coldMs": 200.685,
+          "peakRssBytes": 1051660288,
+          "queriesP95": 18
+        },
+        "enforced": {
+          "warmSamples": 3,
+          "p95Ms": 58.561,
+          "medianMs": 58.128,
+          "maxMs": 58.561,
+          "coldMs": 68.344,
+          "peakRssBytes": 1054412800,
+          "queriesP95": 51
+        }
+      }
+    }
+  ],
+  "budgets": [
+    {
+      "id": "lint_document.p95",
+      "criterion": "AC 4",
+      "description": "stratified lint_document nearest-rank p95",
+      "limit": 1000,
+      "measured": 25.477,
+      "unit": "ms",
+      "sourceCaseId": "lint_document",
+      "sourceSampleIds": ["lint_document-03"],
+      "verdict": "pass"
+    },
+    {
+      "id": "lint_document.semantics",
+      "criterion": "AC 4",
+      "description": "samples not complete under the same policy identity (equivalent rule scope and result semantics)",
+      "limit": 0,
+      "measured": 0,
+      "unit": "runs",
+      "sourceCaseId": "lint_document",
+      "sourceSampleIds": [],
+      "verdict": "pass"
+    },
+    {
+      "id": "lint_wiki.wiki_150.complete",
+      "criterion": "AC 5",
+      "description": "measured runs not complete or carrying VALIDATION_TIMEOUT",
+      "limit": 0,
+      "measured": 0,
+      "unit": "runs",
+      "sourceCaseId": "lint_wiki:wiki_150",
+      "sourceSampleIds": [],
+      "verdict": "pass"
+    },
+    {
+      "id": "lint_wiki.wiki_150.p95",
+      "criterion": "AC 5",
+      "description": "150-document lint_wiki nearest-rank p95",
+      "limit": 10000,
+      "measured": 130.054,
+      "unit": "ms",
+      "sourceCaseId": "lint_wiki:wiki_150",
+      "sourceSampleIds": ["wiki_150-02"],
+      "verdict": "pass"
+    },
+    {
+      "id": "lint_wiki.wiki_1000.complete",
+      "criterion": "AC 5",
+      "description": "measured runs not complete or carrying VALIDATION_TIMEOUT",
+      "limit": 0,
+      "measured": 0,
+      "unit": "runs",
+      "sourceCaseId": "lint_wiki:wiki_1000",
+      "sourceSampleIds": [],
+      "verdict": "pass"
+    },
+    {
+      "id": "lint_wiki.wiki_1000.max",
+      "criterion": "AC 5",
+      "description": "every measured 1,000-document lint_wiki run",
+      "limit": 60000,
+      "measured": 732.748,
+      "unit": "ms",
+      "sourceCaseId": "lint_wiki:wiki_1000",
+      "sourceSampleIds": ["wiki_1000-01"],
+      "verdict": "pass"
+    },
+    {
+      "id": "write.create.overhead_p95",
+      "criterion": "AC 6",
+      "description": "create validation overhead (enforced less baseline) nearest-rank p95",
+      "limit": 500,
+      "measured": 34.088,
+      "unit": "ms",
+      "sourceCaseId": "write:create",
+      "sourceSampleIds": ["create-07"],
+      "verdict": "pass"
+    },
+    {
+      "id": "write.replace.overhead_p95",
+      "criterion": "AC 6",
+      "description": "replace validation overhead (enforced less baseline) nearest-rank p95",
+      "limit": 500,
+      "measured": 37.743,
+      "unit": "ms",
+      "sourceCaseId": "write:replace",
+      "sourceSampleIds": ["replace-07"],
+      "verdict": "pass"
+    },
+    {
+      "id": "write.append.overhead_p95",
+      "criterion": "AC 6",
+      "description": "append validation overhead (enforced less baseline) nearest-rank p95",
+      "limit": 500,
+      "measured": 20.21,
+      "unit": "ms",
+      "sourceCaseId": "write:append",
+      "sourceSampleIds": ["append-06"],
+      "verdict": "pass"
+    },
+    {
+      "id": "write.prepend.overhead_p95",
+      "criterion": "AC 6",
+      "description": "prepend validation overhead (enforced less baseline) nearest-rank p95",
+      "limit": 500,
+      "measured": 21.866,
+      "unit": "ms",
+      "sourceCaseId": "write:prepend",
+      "sourceSampleIds": ["prepend-07"],
+      "verdict": "pass"
+    },
+    {
+      "id": "write.patch.overhead_p95",
+      "criterion": "AC 6",
+      "description": "patch validation overhead (enforced less baseline) nearest-rank p95",
+      "limit": 500,
+      "measured": 20.214,
+      "unit": "ms",
+      "sourceCaseId": "write:patch",
+      "sourceSampleIds": ["patch-06"],
+      "verdict": "pass"
+    }
+  ],
+  "growth": {
+    "note": "wiki_1000 per-unit cost divided by wiki_150 per-unit cost; a ratio above 1 is an increase to explain",
+    "msPerDocument": 0.807,
+    "msPerLink": 0.807,
+    "queriesPerDocument": 0.412,
+    "rssBytesPerDocument": 0.215
+  },
+  "concurrentWriter": {
+    "profile": "wiki_1000",
+    "lintWikiMs": 759.993,
+    "lintWiki": {
+      "ok": true,
+      "state": "complete",
+      "complete": true,
+      "systemFailureCodes": [],
+      "errors": 623,
+      "warnings": 47,
+      "policies": [
+        "sha256:373fe7340a0683324a1bed3de183493329551b39e26fcd9b98c3230d81b6f52c",
+        "sha256:78d164d7fde82b405fa404cc02ef751f865d810aa2ab4a82b81b82161f7a9d7c",
+        "sha256:54efb8fe49b0d788bb249d1c50de93ab12d74def61b8a0d84f72832fa4a804b6",
+        "sha256:30b96a694cbce3594f899a4d6da127b0878a9ebb768cae9f7bd9603deec44125",
+        "sha256:a4201d316e0023649d21074957fa93ec7fdac4c158dbe9fb0eb1a38e1f038216",
+        "sha256:78d84d8e711a51e62d29d11bb517ca55e80fd03453acca4b9816f56cb4a8daf8",
+        "sha256:ccc177769014be6ee07d7b6fd3da25ba291fc369f42825e46cd7a9f2d27b734f",
+        "sha256:269f7f817768376b6acf6ee89d78c45881c9f12c4b8c0ebbe713636a7fe6ca7a",
+        "sha256:2eccd19d9af5f163cd824b0cfb849fdc2683a27b18c5b56a41abcf09c837cbd8",
+        "sha256:28ee27c6d8294ada3e8cf3fdf1dfb234fbc9a409184782033d255ec3815ad77d"
+      ],
+      "errorText": null
+    },
+    "writes": 12,
+    "writesSucceeded": 12,
+    "latenciesMs": [
+      54.486, 62.559, 51.548, 80.555, 57.697, 60.506, 85.548, 54.952, 119.316,
+      88.153, 33.548, 19.925
+    ],
+    "p95Ms": 119.316,
+    "maxMs": 119.316
+  },
+  "heldPool": {
+    "profile": "wiki_1000",
+    "heldConnections": 5,
+    "poolMax": 5,
+    "deadlineMs": 60000,
+    "toleranceMs": 1000,
+    "elapsedMs": 30004.325,
+    "outcome": "result",
+    "state": "failed",
+    "systemFailureCodes": ["VALIDATION_RUNTIME_FAILED"]
+  },
+  "dw": [
+    {
+      "entry": "DW-4",
+      "measure": "longest event-loop block during lint_wiki evaluation",
+      "profile": "wiki_1000",
+      "measuredMs": 38.273,
+      "comparedWith": {
+        "name": "LINT_WIKI_STOP_MARGIN_MS",
+        "ms": 2000
+      },
+      "verdict": "pass",
+      "sourceSampleIds": ["wiki_1000-01"],
+      "detail": {
+        "perSampleMs": [
+          {
+            "id": "wiki_1000-01",
+            "value": 38.273
+          },
+          {
+            "id": "wiki_1000-02",
+            "value": 34.046
+          },
+          {
+            "id": "wiki_1000-03",
+            "value": 34.177
+          },
+          {
+            "id": "wiki_1000-04",
+            "value": 34.079
+          }
+        ]
+      },
+      "status": "open — not Gate 1 evidence; Story 3.4 criterion 8 records it as open"
+    },
+    {
+      "entry": "DW-5",
+      "measure": "longest serialize-and-parse time of one keyset batch between two deadline checks",
+      "profile": "wiki_1000",
+      "measuredMs": 29.177,
+      "comparedWith": {
+        "name": "LINT_WIKI_STOP_MARGIN_MS",
+        "ms": 2000
+      },
+      "verdict": "pass",
+      "sourceSampleIds": ["wiki_1000-01"],
+      "detail": {
+        "perSampleMs": [
+          {
+            "id": "wiki_1000-01",
+            "value": 29.177
+          },
+          {
+            "id": "wiki_1000-02",
+            "value": 26.83
+          },
+          {
+            "id": "wiki_1000-03",
+            "value": 25.445
+          },
+          {
+            "id": "wiki_1000-04",
+            "value": 28.381
+          }
+        ]
+      },
+      "status": "open — not Gate 1 evidence; Story 3.4 criterion 8 records it as open"
+    },
+    {
+      "entry": "DW-6",
+      "measure": "held-pool lint_wiki re-run: ends as VALIDATION_TIMEOUT within the deadline",
+      "profile": "wiki_1000",
+      "measuredMs": 30004.325,
+      "comparedWith": {
+        "name": "deadline + HELD_POOL_TOLERANCE_MS",
+        "ms": 61000
+      },
+      "verdict": "fail",
+      "sourceSampleIds": ["held-pool"],
+      "detail": {
+        "profile": "wiki_1000",
+        "heldConnections": 5,
+        "poolMax": 5,
+        "deadlineMs": 60000,
+        "toleranceMs": 1000,
+        "elapsedMs": 30004.325,
+        "outcome": "result",
+        "state": "failed",
+        "systemFailureCodes": ["VALIDATION_RUNTIME_FAILED"]
+      },
+      "status": "open — not Gate 1 evidence; Story 3.4 criterion 8 records it as open"
+    }
+  ],
+  "derivation": {
+    "constants": [
+      {
+        "name": "WRITE_ELIGIBLE_MARKDOWN_BYTES",
+        "current": 262144,
+        "candidate": 131072,
+        "rule": "equals the largest value of its measure among retained enforced-write samples whose validation completed without VALIDATION_TIMEOUT",
+        "verdict": "pass",
+        "reason": null,
+        "sourceSampleIds": ["create-06:enforced", "replace-06:enforced"],
+        "currentSatisfiesRule": false,
+        "status": "provisional"
+      },
+      {
+        "name": "WRITE_ELIGIBLE_LINK_REFERENCES",
+        "current": 1000,
+        "candidate": 1000,
+        "rule": "equals the largest value of its measure among retained enforced-write samples whose validation completed without VALIDATION_TIMEOUT",
+        "verdict": "pass",
+        "reason": null,
+        "sourceSampleIds": ["create-07:enforced", "replace-07:enforced"],
+        "currentSatisfiesRule": true,
+        "status": "provisional"
+      },
+      {
+        "name": "LINT_WIKI_STOP_MARGIN_MS",
+        "current": 2000,
+        "candidate": 3,
+        "rule": "no less than the largest retained atomic-unit time plus the largest retained result-assembly time, while every measured run completes",
+        "verdict": "pass",
+        "reason": null,
+        "sourceSampleIds": ["wiki_1000-03", "wiki_1000-01"],
+        "currentSatisfiesRule": true,
+        "status": "provisional"
+      },
+      {
+        "name": "SET_LOCAL_FLOOR_MS",
+        "current": 100,
+        "candidate": 17,
+        "rule": "no less than the largest retained single statement under SET LOCAL, and less than the smallest budget it guards (min(9000, 9000 - 2000) = 7000 ms)",
+        "verdict": "pass",
+        "reason": null,
+        "sourceSampleIds": ["wiki_1000-01", "replace-06:enforced"],
+        "currentSatisfiesRule": true,
+        "status": "provisional"
+      }
+    ],
+    "gate1": "not ready"
+  }
+}

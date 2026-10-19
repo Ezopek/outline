@@ -36,6 +36,7 @@ import type {
   LintDocumentOutcome,
 } from "./lintDocument";
 import { WikiResourceLimitError } from "./snapshotLimits";
+import { span } from "./timingProbe";
 
 /** The server-owned `lint_wiki` deadline, in milliseconds. */
 export const LINT_WIKI_DEADLINE_MS = 60000;
@@ -461,6 +462,7 @@ export async function lintWiki(input: {
       stopped = true;
       break;
     }
+    const unitStartedAt = performance.now();
     const { collectionId } = collection;
     const account = accountOf(collectionId);
     // The unit's issues are kept only once it finishes.
@@ -546,7 +548,10 @@ export async function lintWiki(input: {
       completedUnits++;
       account.pending.set(check, (account.pending.get(check) ?? 0) - 1);
     }
+    span("unit", performance.now() - unitStartedAt);
   }
+  // Result assembly is charged to the stop margin.
+  const assemblyStartedAt = performance.now();
   if (stopped) {
     items.push({
       issue: createSystemFailure("VALIDATION_TIMEOUT", runLocation),
@@ -586,7 +591,7 @@ export async function lintWiki(input: {
     evaluatedScope = { kind: "configured_collections", collections };
   }
 
-  return {
+  const outcome: LintWikiOutcome = {
     kind: "result",
     result: buildReadOnlyResult({
       requiredUnits: units.length,
@@ -596,4 +601,6 @@ export async function lintWiki(input: {
       policies,
     }),
   };
+  span("result_assembly", performance.now() - assemblyStartedAt);
+  return outcome;
 }

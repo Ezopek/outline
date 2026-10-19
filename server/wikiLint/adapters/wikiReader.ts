@@ -7,6 +7,7 @@ import {
   SnapshotMeter,
   WIKI_SNAPSHOT_LIMITS,
 } from "../application/snapshotLimits";
+import { span } from "../application/timingProbe";
 import type {
   CheckName,
   InternalLinkReference,
@@ -371,6 +372,9 @@ export async function readWikiSnapshot(input: {
           const contents = contentIds.length
             ? await readContents(contentIds, transaction, deadline)
             : new Map<string, Document>();
+          // The batch's serialization and parsing run between two deadline
+          // checks.
+          const batchStartedAt = performance.now();
           for (const row of kept) {
             const collection = byId.get(row.collectionId as string);
             if (!collection) {
@@ -392,6 +396,7 @@ export async function readWikiSnapshot(input: {
                 : null,
             });
           }
+          span("batch_serialize_parse", performance.now() - batchStartedAt);
         } while (fetched === WIKI_DOCUMENT_BATCH_SIZE);
 
         const references: InternalLinkReference[] = [];
@@ -484,6 +489,7 @@ export async function readWikiSnapshot(input: {
             );
           for (const batch of idBatches(surfaceIds)) {
             const rows = await readContents(batch, transaction, deadline);
+            const batchStartedAt = performance.now();
             for (const id of batch) {
               const content = await canonicalContent(
                 rows.get(id),
@@ -497,6 +503,7 @@ export async function readWikiSnapshot(input: {
                   : null
               );
             }
+            span("batch_serialize_parse", performance.now() - batchStartedAt);
           }
         }
 
