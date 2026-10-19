@@ -76,7 +76,7 @@ development_status:
   3-1-verify-safe-startup-and-readiness-policy-identity: done
   3-2-close-layered-conformance-and-source-provenance-evidence: backlog
   3-3-produce-reproducible-performance-growth-and-constant-derivat: done
-  3-4-assemble-the-gate-1-evidence-index-and-decision-record: backlog
+  3-4-assemble-the-gate-1-evidence-index-and-decision-record: ready-for-dev
   epic-3-retrospective: optional
 action_items:
   - id: "epic-1-retro-item-1-decide-how-a-finding-identifies-the-miss"
