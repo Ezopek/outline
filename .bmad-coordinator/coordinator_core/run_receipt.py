@@ -272,7 +272,8 @@ class ReceiptEvidenceSource:
             value.get("changed_paths") != event.changed_paths or value.get("checks") != event.checks or
             value.get("descendants") != event.descendants or
             value.get("unresolved_question") != event.unresolved_question or
-            value.get("options") != event.options or value.get("affected_ids") != event.affected_ids):
+            value.get("options") != event.options or value.get("affected_ids") != event.affected_ids or
+            value.get("client_stop") != event.client_stop):
             raise DomainError("UNKNOWN_EVIDENCE", "Return receipt differs")
         if self.historical:
             after = value.get("after")

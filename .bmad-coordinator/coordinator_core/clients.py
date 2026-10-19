@@ -63,6 +63,7 @@ class Terminal:        # replayable from retained bytes; facts["tools"] lists re
     thread_id: str
     final: bytes
     facts: dict
+    stop: dict | None = None   # design D25: a client stop with a known cause and no return ({"kind", "num_turns"})
 
 
 @dataclass(frozen=True)
@@ -459,7 +460,8 @@ def _claude_terminal(run_dir: Path, launch: dict) -> Terminal:
     digest-checked binding it names): every line one JSON object with a string type; exactly one init, first;
     exactly one result, last; every session_id the preset; a successful result with an object structured_output.
     Init cwd and permissionMode must match when present (absence is a gap); init tools must lie in the requested
-    --tools, internal_tools and mcp__* names (MCP names and servers are isolation gaps)."""
+    --tools, internal_tools and mcp__* names (MCP names and servers are isolation gaps). Design D25: a result with
+    subtype `error_max_turns` and terminal_reason `max_turns` is a client stop: an empty final and `stop` set."""
     try:
         seen = jsonl_records(run_dir / "events.jsonl")
         session, argv = launch.get("session_id"), launch.get("argv")
@@ -474,8 +476,9 @@ def _claude_terminal(run_dir: Path, launch: dict) -> Terminal:
         if init.get("session_id") != session or result.get("session_id") != session or \
            any("session_id" in item and item["session_id"] != session for item in seen):
             raise ValueError("stream session differs from the preset")
-        if result.get("subtype") != "success" or result.get("is_error") is not False or \
-           not isinstance(result.get("structured_output"), dict):
+        stopped = result.get("subtype") == "error_max_turns" and result.get("terminal_reason") == "max_turns"
+        if not stopped and (result.get("subtype") != "success" or result.get("is_error") is not False or
+                            not isinstance(result.get("structured_output"), dict)):
             raise ValueError("result is not a successful structured return")
         gaps = []
         expected = {"cwd": launch.get("cwd", launch.get("worktree")),
@@ -508,6 +511,10 @@ def _claude_terminal(run_dir: Path, launch: dict) -> Terminal:
         checked = [name for name in tools if not name.startswith("mcp__")] if "tools" in init else []
         if checked:  # the names tool_check reads; MCP names are gaps, and an empty list is no tool information
             facts["tools"] = checked
+        if stopped:   # design D25: the stream decides; the exit code is recorded by the runner
+            turns = result.get("num_turns")
+            return Terminal(session, b"", facts,
+                            {"kind": "max-turns", "num_turns": turns if type(turns) is int else None})
         return Terminal(session, canonical(result["structured_output"]), facts)
     except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
         raise _unknown("Claude stream terminal record is missing or malformed") from exc
@@ -982,6 +989,21 @@ def tool_check(client: Client, mode: str, facts: dict, web: bool = False) -> str
     return "passed"
 
 
+STOPPED = "the client stopped at its turn limit without a return"   # design D25: an isolated run's stop
+
+
+def exited_terminal(client: Client, run_dir: Path, launch: dict) -> Terminal:
+    """Design D25: the terminal of a run that exited non-zero. Only a client stop outlives the exit code; any other
+    stream (none, malformed or a return) leaves the exit code the cause, as before the stream was read first."""
+    try:
+        terminal = client.terminal(run_dir, launch)
+    except (OSError, ValueError, DomainError) as exc:
+        raise _unknown("Worker process exited unsuccessfully") from exc
+    if terminal.stop is None:
+        raise _unknown("Worker process exited unsuccessfully")
+    return terminal
+
+
 def client_facts(client: Client, mode: str, terminal: Terminal, web: bool = False) -> dict:
     """Recorded client facts; empty (and so absent from the receipt) for a client without facts or tool check."""
     check = tool_check(client, mode, terminal.facts, web)
@@ -1428,8 +1450,9 @@ def run_isolated(client: str, target: RepoIdentity, root: Path, cwd: Path, recei
     if not group["group_terminated"]:
         return unknown("process group survived termination")
     try:
-        if process.returncode != 0:
-            raise _unknown("Worker process exited unsuccessfully")
+        if process.returncode != 0:   # design D25: the stream is read first, so a stop is named by its cause
+            exited_terminal(chosen, receipt_dir, launch)
+            raise _unknown(STOPPED)
         after = inventory(cwd)
         if delta(before, after):
             raise _unknown("Isolated run changed its cwd")
@@ -1438,6 +1461,8 @@ def run_isolated(client: str, target: RepoIdentity, root: Path, cwd: Path, recei
             extras["observation_sha256"] = seal(receipt_dir / chosen.observation_name,
                                                 chosen.observe(receipt_dir, launch))
         terminal = chosen.terminal(receipt_dir, launch)
+        if terminal.stop is not None:   # design D25: an isolated run saves nothing; a stop is unknown
+            raise _unknown(STOPPED)
         if chosen.return_source == "stdout":
             private_file(receipt_dir / "last.json", terminal.final)
         elif chosen.return_source != "client-file":

@@ -779,7 +779,7 @@ def run(repo, store, owner, key: str, role: dict, root=None, hook=None):
                                    "scratch": str(scratch), "at": _now()})
     try:
         result = clients.run_isolated(role["client"], repo, scratch, scratch / "cwd", receipts, envelope,
-                                      SCHEMAS[name], role["model"], role["timeout"])
+                                      SCHEMAS[name], role["model"], role["timeout"], role.get("max_turns"))   # D25
     except (DomainError, OSError) as exc:
         if os.path.lexists(receipts):
             return _classify(store, owner, key, request_id, UNKNOWN, "refused-after-receipts", _detail(exc))

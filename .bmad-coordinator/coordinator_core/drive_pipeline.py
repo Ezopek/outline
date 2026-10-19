@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from . import bmad_contract as contract
 from . import bmad_implementation as implementation
 from . import bmad_planning, bmad_spec_author, bundles, clients, judgment
-from .bmad_review import CODE_LENSES, SPEC_LENSES
+from .bmad_review import CODE_LENSES, SPEC_LENSES, finding_counts
 from .model import DecisionInput, DomainError, OwnerRef
 from .run_receipt import canonical, private_file, read_binding, read_receipt
 from .service import ANCHOR_TOPS, DRIVE_EVENTS, HOLDING_STATES, TERMINAL_STATES, Coordinator, _anchored_bytes, \
@@ -34,6 +34,7 @@ MAX_JUDGMENTS = 8
 MAX_CORRECTIONS = 6
 PLANNING_MAX_CORRECTIONS = 4   # a planning pipeline validates as before the implementation drive
 MAX_TIMEOUT = 86400
+MAX_TURNS = 1000   # design D25: a role's turn limit
 COMMAND_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 MAX_OUTPUT = 1 << 24
 COMPLETE = ("OBSERVED_COMPLETE_CLAIM", "OBSERVED_PARTIAL_CLAIM")
@@ -69,7 +70,7 @@ def _integer(value, low: int, high: int, what: str) -> None:
 
 
 def _role(name: str, value) -> None:
-    _keys(value, ("client", "model", "timeout"), ("web",), f"Role {name}")
+    _keys(value, ("client", "model", "timeout"), ("web", "max_turns"), f"Role {name}")
     if type(value["client"]) is not str:
         raise _invalid(f"Role {name} client must be a registered client name")
     if value["client"] not in clients.REGISTRY:
@@ -87,6 +88,10 @@ def _role(name: str, value) -> None:
             raise _invalid("web must be true")
         if value["client"] == clients.COPILOT.name:
             raise _invalid("A copilot worker takes no web")
+    if "max_turns" in value:   # design D25: a turn limit per role, for a client that takes one
+        _integer(value["max_turns"], 1, MAX_TURNS, f"Role {name} max_turns")
+        if clients.get(value["client"]).max_turns_default is None:
+            raise _invalid(f"Role {name} client {value['client']} takes no max_turns")
 
 
 def _head(step_id: str, steps: dict) -> dict:
@@ -991,9 +996,10 @@ def _accept_state(step, snapshot, facts, done, value) -> StepState:
     review unless the pipeline sets `accept_on_high`; the stop carries `corrections: {used, max}`. A spec bundle
     (design D24, ruling P6) is the human's to accept unless the pipeline sets `spec_auto_accept`: `spec-decisions`
     without questions, with the digest and the clauses of the spec the human approves (or sends back with a revise
-    decision, ruling P13). Otherwise ready to accept the review. A story acceptance that is not current only because
-    of an unrecorded commit above its commit, while the done status has no record, stays satisfied
-    (`status_pending`): the status step re-adopts it."""
+    decision, ruling P13). These three stops carry `finding_counts`, the counts of the review they name (design D26).
+    Otherwise ready to accept the review. A story acceptance that is not current only because of an unrecorded commit
+    above its commit, while the done status has no record, stays satisfied (`status_pending`): the status step
+    re-adopts it."""
     sid, review = step["id"], done[step["of"]]
     bundle_id, review_id = review.subjects["bundle_id"], review.subjects["review_id"]
     subjects = {"step_id": sid, "bundle_id": bundle_id, "review_id": review_id}
@@ -1022,24 +1028,29 @@ def _accept_state(step, snapshot, facts, done, value) -> StepState:
         used = corrections_used(snapshot, facts, bundle_row["feature_id"], workspace, bundle_row["mandate_revision"]) \
             if bundle_row is not None and workspace is not None else 0
     subjects = {**subjects, "corrections": {"used": used, "max": value["budgets"].get("max_corrections", 0)}}
+
+    def counted(review_ref):   # design D26: the counts of the review the stop names
+        row = next((item for item in snapshot["reviews"] if item["id"] == review_ref), None)
+        return finding_counts(row["finding_json"] if row else None)
     critical = sorted(row["id"] for row in snapshot["reviews"]
                       if row["bundle_id"] == bundle_id and row["critical_open"])
     if critical:
+        named = review_id if review_id in critical else critical[0]
         return StepState(sid, "accept", "needs-human", "critical-finding", None,
-                         {**subjects, "review_id": review_id if review_id in critical else critical[0]})
+                         {**subjects, "review_id": named, "finding_counts": counted(named)})
     if not value.get("accept_on_high", False):
         review_row = next((row for row in snapshot["reviews"] if row["id"] == review_id), None)
         high = open_high_findings(review_row["finding_json"] if review_row else None)
         if high:
             return StepState(sid, "accept", "needs-human", "open-high-findings", None,
-                             {**subjects, "finding_ids": high})
+                             {**subjects, "finding_ids": high, "finding_counts": counted(review_id)})
     if profiles == {implementation.SPEC_AUTHOR} and not value.get("spec_auto_accept", False):
         head = facts["bundles"][bundle_id]["commit"]["assignment_id"]
         spec = facts["story"]["specs"].get(head) or {}
         return StepState(sid, "accept", "needs-human", "spec-decisions", None, {
             **subjects, "feature_id": bundle_row["feature_id"], "mandate_revision": bundle_row["mandate_revision"],
             "assignment_id": head, "spec_path": facts["bindings"][head].get("spec_path"), "questions": [],
-            "digest": spec.get("digest"), "clauses": spec.get("clauses")})
+            "digest": spec.get("digest"), "clauses": spec.get("clauses"), "finding_counts": counted(review_id)})
     return StepState(sid, "accept", "ready", None, {"kind": "accept", "bundle_id": bundle_id, "review_id": review_id},
                      subjects)
 
@@ -1171,7 +1182,8 @@ def _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, fea
                     kind="implement") -> StepState:
     """Design D24: a spec attempt (`kind` "spec") has no verify; its completed commit is corrected after a recorded
     review as code is, an empty one is final, and an open request may ask several questions (ruling R1) whose
-    refused judgment stops `spec-decisions`."""
+    refused judgment stops `spec-decisions`. Design D25: a client-stopped attempt is committed, never verified, bundled
+    or reviewed, and continued by an update with `continues_stop` (counted in `max_updates`)."""
     client = value["roles"]["worker"]["client"]
     author = kind == "spec"
     # design D21 (F3): every story prepare carries the chain's resolving decisions, so the brief, the binding, the
@@ -1207,6 +1219,15 @@ def _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, fea
     if state == "resolved-unknown":
         return StepState(sid, kind, "needs-human", "attempt-resolved", None, subjects)
     ret = json.loads(head["return_json"]) if head["return_json"] else {}
+    if state == "client-stopped" and ret.get("provenance_class") == "observed":   # design D25
+        commit = facts["story"]["commits"].get(head["id"])
+        if commit is None:   # design D9: committed before anything else is derived
+            return StepState(sid, kind, "ready", None, {"kind": "commit", "assignment_id": head["id"]}, subjects)
+        subjects = {**subjects, "commit_sha": commit.get("sha"), "empty": bool(commit.get("empty")),
+                    "client_stop": ret.get("client_stop")}
+        if _story_updates(bound, facts) >= value["budgets"]["max_updates"]:
+            return StepState(sid, kind, "needs-human", "update-budget", None, subjects)
+        return prepare("update", update_of=head["id"], continues_stop=True)
     payload = facts["payloads"].get(head["id"])
     if state not in TERMINAL_STATES or ret.get("provenance_class") != "observed" or not isinstance(payload, dict):
         return StepState(sid, kind, "needs-human", "unobserved-return", None, {**subjects, "holder": head["id"]})

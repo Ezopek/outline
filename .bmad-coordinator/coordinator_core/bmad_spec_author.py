@@ -248,7 +248,7 @@ def brief(spec, feature, story: dict, decisions, continuation, project, epic_tex
              "Every task changes files inside these paths only. A change the story needs outside them is an Open "
              "Question (options: the operator adds the path to the story's scopes before implementation / the "
              "operator makes that change by hand after the story), never a task.", "",
-             *implementation._authority(feature, decisions), "",
+             *implementation._authority(feature, decisions), *implementation._restart_lines(story), "",
              "## Spec template",
              "Write the spec in this shape: the `<frozen-after-approval>` block holds the intent, the sections after "
              "it the plan; its `## Verification` commands are the pipeline's, exactly as listed here.",

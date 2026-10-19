@@ -1,4 +1,4 @@
-"""Epic drive (docs/epic-drive-design.md, E1–E13): every remaining story of an epic, in the epics file's order, through
+"""Epic drive (docs/epic-drive-design.md, E1–E15): every remaining story of an epic, in the epics file's order, through
 the story drive on a coordinator-owned integration branch. One owner session `epic:<id>` for the whole run; the story
 driver's `Run` is reused unchanged; the loop adds the base sync, the preconditions gate, `story add`, the pipeline
 template, the integration merge and the epic's sealed, anchored state."""
@@ -15,15 +15,16 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 
 from . import bmad_implementation as implementation
-from . import drive, drive_pipeline
+from . import bmad_planning, drive, drive_pipeline
 from .drive import EPIC_SESSION, EXIT, TOKEN, Outcome, Refusal, RunBounds, _bounds_check, _hook, _now, _seal, _sealed
-from .model import DomainError, OwnerRef
+from .model import DecisionInput, DomainError, OwnerRef
 from .run_receipt import canonical
 from .service import Coordinator
 from .store import open_store
 
 FORMAT = 1
 SAMPLE = {"__FEATURE__": "0" * 32, "__KEY__": "0-0-sample"}
+RESTART = "epic-restart:"   # design epic-drive E15: the source_ref prefix of a restart's decision
 EPIC_REASONS = ("precondition-unmet", "story-status", "integration-conflict", "worktree-drift", "epic-done")
 STORY_STATES = ("pending", "current", "done", "skipped", "already-done", "blocked")
 
@@ -58,6 +59,20 @@ def _scopes(value, what: str) -> dict:
     return value
 
 
+def _roles_override(value, what: str) -> dict:
+    """Design epic-drive E14: `{<role>: {timeout?, max_turns?}}` within the pipeline's own ranges."""
+    if not isinstance(value, dict) or not value or set(value) - set(drive_pipeline.ROLES):
+        raise _invalid(f"{what} roles must map one or more of {', '.join(drive_pipeline.ROLES)} to an override")
+    for role, over in value.items():
+        if not isinstance(over, dict) or not over or set(over) - {"timeout", "max_turns"}:
+            raise _invalid(f"{what} roles.{role} takes timeout and max_turns only")
+        if "timeout" in over:
+            drive_pipeline._integer(over["timeout"], 1, drive_pipeline.MAX_TIMEOUT, f"{what} roles.{role} timeout")
+        if "max_turns" in over:
+            drive_pipeline._integer(over["max_turns"], 1, drive_pipeline.MAX_TURNS, f"{what} roles.{role} max_turns")
+    return value
+
+
 def check_input(repo, spec: EpicInput) -> dict:
     """Design epic-drive E13 (and ruling R1): the validated start input. `worktrees_dir` lies outside the repository
     worktree (a worktree inside the project would be untracked content a `git clean` destroys) and is a directory or
@@ -73,7 +88,11 @@ def check_input(repo, spec: EpicInput) -> dict:
        any(type(key) is not str or not implementation.STORY_KEY.match(key) for key in spec.stories):
         raise _invalid("stories must map story keys to overrides")
     for key, value in spec.stories.items():
-        _scopes(value, f"stories.{key}")
+        if not isinstance(value, dict):
+            raise _invalid(f"stories.{key} must be an object")
+        _scopes({name: item for name, item in value.items() if name != "roles"}, f"stories.{key}")
+        if "roles" in value:   # design epic-drive E14: a story's own worker box
+            _roles_override(value["roles"], f"stories.{key}")
     if type(spec.worktrees_dir) is not str or not spec.worktrees_dir:
         raise _invalid("worktrees_dir is required")
     worktrees = Path(spec.worktrees_dir).absolute()
@@ -98,9 +117,11 @@ def check_input(repo, spec: EpicInput) -> dict:
 
 # Template (E8) ------------------------------------------------------------------------------------------------------
 
-def fill_template(template: dict, feature_id: str, story_key: str) -> dict:
-    """Design epic-drive E8: every string value with `__FEATURE__` and `__KEY__` replaced, then the validated
-    pipeline."""
+def fill_template(template: dict, feature_id: str, story_key: str, roles: dict | None = None,
+                  revision: int = 1) -> dict:
+    """Design epic-drive E8, E14 and E15: every string value with `__FEATURE__` and `__KEY__` replaced, a story's
+    roles override merged over the template's roles, the mandate revision set (a restart binds above 1), then the
+    validated pipeline."""
     def fill(value):
         if isinstance(value, str):
             return value.replace("__FEATURE__", feature_id).replace("__KEY__", story_key)
@@ -109,7 +130,30 @@ def fill_template(template: dict, feature_id: str, story_key: str) -> dict:
         if isinstance(value, list):
             return [fill(item) for item in value]
         return value
-    return drive_pipeline.validate(fill(template))
+    filled = fill(template)
+    if roles:
+        missing = set(roles) - set(filled.get("roles") or {})
+        if missing:
+            raise _invalid(f"roles override names a role the template lacks: {', '.join(sorted(missing))}")
+        filled["roles"] = {name: {**role, **roles.get(name, {})} for name, role in filled["roles"].items()}
+    filled["mandate_revision"] = revision
+    return drive_pipeline.validate(filled)
+
+
+def _check_overrides(template: dict, stories: dict, bounds: RunBounds, finished=frozenset()) -> None:
+    """Design epic-drive E14 (rulings H6 and I2): the roles override of every story still to run (its key not in
+    `finished`) fills, validates and fits the bounds; every refusal names the story. `epic start` checks them all;
+    `epic resume` passes the stories its newest state has finished (`done`, `skipped`, `already-done`) and the one
+    its `--skip` or `--restart` names; a restart checks the story's effective override itself (E15)."""
+    for key, over in stories.items():
+        if over.get("roles") and key not in finished:
+            try:
+                _bounds_check(fill_template(template, SAMPLE["__FEATURE__"], key, over["roles"]), bounds)
+            except Refusal as exc:
+                raise Refusal(exc.code, f"Story {key}: {exc.message}", exc.extra["reason"],
+                              exc.extra.get("action")) from None
+            except DomainError as exc:
+                raise DomainError(exc.code, f"Story {key}: {exc.message}") from None
 
 
 def check_template(template) -> dict:
@@ -361,16 +405,45 @@ def _loop_action(reason: str, subjects: dict, epic_id: str) -> str | None:
     return None
 
 
+# Ruling H10: the terminal story stops `--restart` follows; any other stop is answered (an inbox decision, an accept).
+RESTARTABLE = ("critical-finding", "open-high-findings", "correction-budget", "update-budget", "worker-blocked",
+               "attempt-resolved")
+
+
 def _story_epic_action(outcome: Outcome, story: dict | None, epic_id: str, from_story: bool = False) -> str | None:
     """Ruling R3: the epic-level options beside a story's own operator action; none for an epic-level stop, which is
-    decided by origin: a story run's outcome is never epic-level, whatever its reason (`worktree-drift`)."""
+    decided by origin: a story run's outcome is never epic-level, whatever its reason (`worktree-drift`). `--restart`
+    is named after a terminal stop only (ruling H10)."""
     if outcome.outcome == "done" or story is None or (outcome.reason in EPIC_REASONS and not from_story):
         return None
     key = story.get("key") or story["number"]
+    restart = (f"epic resume --restart {key} [--roles <json file>] (same conditions) revises the story's mandate, "
+               "binds the template afresh at the new revision with corrections at zero and runs the next attempt; "
+               if outcome.reason in RESTARTABLE else "")
     return (f"epic resume continues story {key}; epic resume --skip {key} (allowed once this run has ended needs-human "
             "or failed and no attempt of the story holds the fence) leaves it to the operator and continues with the "
-            f"next story; release --token-file {TOKEN} hands the repository back, after which epic resume --epic "
-            f"{epic_id} --token-file <new file> continues")
+            f"next story; {restart}release --token-file {TOKEN} hands the repository back, after which epic resume "
+            f"--epic {epic_id} --token-file <new file> continues")
+
+
+def _restart_carry(summary: dict, snapshot: dict, accept_on_high: bool) -> dict | None:
+    """Design epic-drive E15 (ruling H8): the terminal stop's recorded evidence a restart carries into the new
+    revision's briefs: the items of the review a `critical-finding` or `open-high-findings` stop names (its
+    `finding_ids`, else its blocking pointers under the template's `accept_on_high`), or the failed command names of
+    a `correction-budget` stop's red receipt; None for any other stop."""
+    reason, subjects = summary.get("reason"), summary.get("subjects") or {}
+    if reason in ("critical-finding", "open-high-findings"):
+        row = next((item for item in snapshot["reviews"] if item["id"] == subjects.get("review_id")), None)
+        if row is None:
+            raise DomainError("BLOCKED_EVIDENCE",
+                              f"The stop names review {subjects.get('review_id')}, which the store does not hold")
+        pointers = subjects.get("finding_ids") or drive_pipeline.blocking_findings(row["finding_json"], accept_on_high)
+        items = bmad_planning._review_items(json.loads(row["finding_json"])["finding"], pointers)
+        return {"kind": "review", "review_id": row["id"], "items": items}
+    if reason == "correction-budget":
+        return {"kind": "verify", "verify_ref": subjects.get("verify_ref"),
+                "failed": list(subjects.get("failed") or [])}
+    return None
 
 
 class Epic:
@@ -382,7 +455,8 @@ class Epic:
         self.base = store.path.parent
         self.started = clock()
         self.stopping = False
-        self.counts = {"runs": 0, "merges": 0, "syncs": 0, "stories_done": 0, "stories_skipped": 0}   # this run's
+        self.counts = {"runs": 0, "merges": 0, "syncs": 0, "stories_done": 0, "stories_skipped": 0,
+                       "stories_restarted": 0}   # this run's
         self.story_outcome = False   # the outcome ending the run came from a story run (E10, ruling R3)
         self.sample = fill_template(template, SAMPLE["__FEATURE__"], SAMPLE["__KEY__"])   # the deadline floor (E9)
         ended = [row for row in store.read_snapshot()["events"] if row["kind"] == "epic.ended" and
@@ -528,7 +602,7 @@ class Epic:
                 return Outcome("done", "epic-done", {"skipped": [item["key"] for item in self.state["stories"]
                                                                  if item["state"] == "skipped"]})
             story = picked
-        if short:
+        if short or self._below_floor(story):   # E14: the picked story's own box decides too
             return Outcome("continue", "deadline", {"key": story["key"]})
         if not adopting:
             outcome = self._gate(story)
@@ -538,11 +612,20 @@ class Epic:
             return Outcome("needs-human", "signal-stop", {})
         return self._add(story)
 
-    def _below_floor(self) -> bool:
-        """Design epic-drive E9: what is left of this run's deadline cannot hold a story run (the template's largest
-        role timeout plus the driver's MARGIN, as `_bounds_check` counts it), so no story is added or started."""
+    def _sample(self, story: dict | None = None) -> dict:
+        """Design epic-drive E14: the template sample, or the picked story's merged pipeline when it has a roles
+        override."""
+        over = self.state["stories_input"].get(story["key"]) if story and story.get("key") else None
+        if not over or not over.get("roles"):
+            return self.sample
+        return fill_template(self.template, SAMPLE["__FEATURE__"], story["key"], over["roles"])
+
+    def _below_floor(self, story: dict | None = None) -> bool:
+        """Design epic-drive E9 and E14: what is left of this run's deadline cannot hold a story run (the largest role
+        timeout of the template, or of the story's merged pipeline, plus the driver's MARGIN, as `_bounds_check`
+        counts it), so no story is added or started."""
         try:
-            _bounds_check(self.sample, self._remaining())
+            _bounds_check(self._sample(story), self._remaining())
         except Refusal:
             return True
         return False
@@ -660,21 +743,32 @@ class Epic:
         return self._current()
 
     def _lease(self, story: dict) -> dict:
-        """E7/E8: the template filled for the story, bound under the epic's owner and leased; an anchored lease of the
-        feature from a killed run is reused, re-sealed first under the owner's generation when an E12 re-claim came
-        between."""
+        """E7/E8/E14/E15: the template filled for the story (its roles override, the feature's mandate revision),
+        bound under the epic's owner and leased. The feature's newest anchored lease of this epic (a run killed between
+        the bind and the story's record of it) is reused while its pipeline is at the feature's revision, re-sealed
+        first under the owner's generation when an E12 re-claim came between; after a restart the revision moved, so
+        a new pipeline is bound. A carry in flight never reaches here: its run never ended, so the story keeps its
+        `lease_id` (ruling H11)."""
+        self._restart_pending(story)
         snapshot = self.store.read_export_snapshot(self.owner)
+        feature = next(row for row in snapshot["features"] if row["id"] == story["feature_id"])
         rows = [row for row in snapshot["events"] if row["kind"] == "drive.leased" and
                 row["source_id"] == story["feature_id"]]
         lease = _sealed(self.base, rows[-1]) if rows else None
-        if lease is None or lease.get("epic_id") != self.state["epic_id"]:
-            pipeline = fill_template(self.template, story["feature_id"], story["key"])
+        current = False
+        if lease is not None and lease.get("epic_id") == self.state["epic_id"]:
+            value = drive_pipeline.load(self.base, lease["pipeline_sha256"])
+            current = value["mandate_revision"] == feature["mandate_revision"]
+        if current:
+            lease = self._owned(lease)
+        else:
+            over = self.state["stories_input"].get(story["key"], {})   # E14: the story's own worker box
+            pipeline = fill_template(self.template, story["feature_id"], story["key"], over.get("roles"),
+                                     feature["mandate_revision"])
             drive_pipeline.check_bindable(snapshot, pipeline)
             lease = drive.bind_and_lease(self.repo, self.store, self.owner, pipeline, self.bounds,
                                          self.state["judgment_root"], EPIC_SESSION + self.state["epic_id"],
                                          epic_id=self.state["epic_id"])
-        else:
-            lease = self._owned(lease)
         self._advance(story["key"], stories=self._updated(story["number"], lease_id=lease["lease_id"]))
         return self._current()
 
@@ -732,24 +826,95 @@ class Epic:
         self.counts["stories_done"] += 1
         return None
 
-    def skip(self, key: str) -> None:
-        """Ruling R2: the named story (current or blocked) becomes skipped: without a feature at once; with one, only
-        after a run that ended needs-human or failed and while no attempt of it holds the fence."""
+    def _stopped_story(self, key: str, verb: str) -> tuple[dict, dict | None]:
+        """Ruling R2 and design epic-drive E15: the story the last stop named (current or blocked), to skip or
+        restart, with the summary of its stopped run (None without a feature): without a feature at once; with one,
+        only after a run that ended needs-human or failed and while no attempt of it holds the fence, never while a
+        recorded restart has not run yet. A refusal's reason is `<verb>-refused`."""
+        reason = f"{verb}-refused"
         story = next((item for item in self.state["stories"] if item.get("key") == key or item["number"] == key), None)
         if story is None or story["state"] not in ("current", "blocked"):
-            raise Refusal("INVALID_INPUT", f"Story {key} is not one the last stop named", "skip-refused")
+            raise Refusal("INVALID_INPUT", f"Story {key} is not one the last stop named", reason)
+        last = None
         if story.get("feature_id") is not None:
+            if story.get("lease_id") is None and story.get("restarts"):
+                raise Refusal("INVALID_INPUT", f"Story {key} has a restart pending; epic resume runs it first", reason)
             last = self._last_summary(story["lease_id"]) if story.get("lease_id") else None
             if last is None or last.get("outcome") not in ("needs-human", "failed"):
-                raise Refusal("INVALID_INPUT", f"Story {key} has a run that did not end needs-human or failed",
-                              "skip-refused")
+                raise Refusal("INVALID_INPUT", f"Story {key} has a run that did not end needs-human or failed", reason)
             holder = drive_pipeline.fence_holder(self.store.read_export_snapshot(self.owner), story["feature_id"])
             if holder is not None:
                 raise Refusal("BLOCKED_EVIDENCE", f"Story {key}: assignment {holder[0]} holds the fence ({holder[1]})",
-                              "skip-refused",
-                              f"worker reconcile {holder[0]} --token-file {TOKEN}, then epic resume --skip {key}")
+                              reason,
+                              f"worker reconcile {holder[0]} --token-file {TOKEN}, then " +
+                              (f"epic resume --skip {key}" if verb == "skip" else
+                               "epic resume (a restart follows the run's terminal stop)"))
+        return story, last
+
+    def skip(self, key: str) -> None:
+        """Ruling R2: the named story becomes skipped (`_stopped_story`)."""
+        story, _ = self._stopped_story(key, "skip")
         self._advance(f"skip:{story['number']}", stories=self._updated(story["number"], state="skipped"))
         self.counts["stories_skipped"] += 1
+
+    def restart(self, key: str, roles: dict | None) -> None:
+        """Design epic-drive E15 (a): the current story with a feature (`_stopped_story`) records in the next state
+        revision its restart count `restarts` (n, after the feature's own `epic-restart:<n>` decisions, so a feature
+        from an earlier epic never collides), the stopped run's evidence `restart_carry` (ruling H8) and the optional
+        roles override, its `lease_id`, `outcome`, `reason` and `run_id` cleared. The story's effective box (the new
+        override, else its recorded one) is checked like a start's (E14, ruling H6). The mandate revision follows at
+        `_lease` (`_restart_pending`), so a kill in between is finished at the next resume."""
+        story, last = self._stopped_story(key, "restart")
+        if story.get("feature_id") is None or story["state"] != "current":
+            raise Refusal("INVALID_INPUT", f"Story {key} has no feature to restart; epic resume continues it",
+                          "restart-refused")
+        if last.get("reason") not in RESTARTABLE:   # ruling H10: a stop with a designed answer is answered
+            raise Refusal("INVALID_INPUT", f"Story {key} stopped {last.get('reason')}, not a terminal stop: epic "
+                          "resume continues it (a decision stop takes an inbox decision or an accept first); --restart "
+                          "follows a terminal stop", "restart-refused")
+        over = self.state["stories_input"].get(story["key"], {})
+        if roles is not None:
+            over = {**over, "roles": _roles_override(roles, f"stories.{story['key']}")}
+        _check_overrides(self.template, {story["key"]: over}, self.bounds)
+        snapshot = self.store.read_export_snapshot(self.owner)
+        numbers = [row["source_ref"].removeprefix(RESTART) for row in snapshot["decisions"]
+                   if row["feature_id"] == story["feature_id"] and row["source_ref"].startswith(RESTART)]
+        n = max((int(item) for item in numbers if item.isascii() and item.isdigit()), default=0) + 1
+        carry = _restart_carry(last, snapshot, self.template.get("accept_on_high", False))
+        changes = {"stories": self._updated(story["number"], lease_id=None, outcome=None, reason=None, run_id=None,
+                                            restarts=n, restart_carry=carry)}
+        if roles is not None:
+            changes["stories_input"] = {**self.state["stories_input"], story["key"]: over}
+        self._advance(f"restart:{story['number']}", **changes)
+        _hook("after-restart-record", key=story["key"])
+        self.counts["stories_restarted"] += 1
+
+    def _restart_pending(self, story: dict) -> None:
+        """Design epic-drive E15 (b), ruling H9: the story's recorded restart n decided by the feature's decision
+        `epic-restart:<n>`, never by `constraints.restarts` (a later carry replaces the constraints): none, so an
+        operator-reported decision is recorded at the feature's revision and the mandate revised; one at the
+        feature's revision (a kill between the two), so the mandate is revised; one below it, so nothing is left. The
+        revise sets `constraints.restarts` and the story's `restart_carry` (ruling H8), or drops an older carry."""
+        n = story.get("restarts", 0)
+        if n == 0:
+            return
+        snapshot = self.store.read_export_snapshot(self.owner)
+        feature = next(row for row in snapshot["features"] if row["id"] == story["feature_id"])
+        coordinator, revision, source = Coordinator(self.store), feature["mandate_revision"], f"{RESTART}{n}"
+        found = next((row for row in snapshot["decisions"] if row["feature_id"] == feature["id"] and
+                      row["source_ref"] == source), None)
+        if found is not None and found["mandate_revision"] < revision:
+            return
+        decision = found["id"] if found is not None else coordinator.record_decision(self.owner, DecisionInput(
+            feature["id"], revision, "operator-reported", source,
+            f"the operator restarted story {story['key']} inside the epic (design epic-drive E15)", {"restart": n}))
+        constraints = {name: value for name, value in json.loads(feature["constraints_json"]).items()
+                       if name != "restart_carry"}
+        constraints["restarts"] = n
+        if story.get("restart_carry"):
+            constraints["restart_carry"] = story["restart_carry"]
+        coordinator.revise_mandate(self.owner, feature["id"], revision, {"constraints": constraints}, decision)
+        _hook("after-restart-revise", key=story["key"])
 
     # The end ---------------------------------------------------------------------------------------------------
     def _end(self, outcome: Outcome) -> tuple[dict, int]:
@@ -772,11 +937,11 @@ class Epic:
                    "generation": self.owner.generation, "outcome": outcome.outcome, "reason": outcome.reason,
                    "subjects": subjects,
                    "story": story and {key: story.get(key) for key in ("key", "number", "feature_id", "lease_id",
-                                                                       "run_id", "outcome", "reason")},
+                                                                       "run_id", "outcome", "reason", "restarts")},
                    "epic": {**{key: self.state[key] for key in ("branch", "worktree", "head_sha", "base_branch",
                                                                 "base_synced_sha")},
                             "stories": [{key: item.get(key) for key in ("number", "key", "state", "outcome",
-                                                                        "head_sha")} for item in stories]},
+                                                                        "head_sha", "restarts")} for item in stories]},
                    "operator_action": action,
                    "epic_action": _story_epic_action(outcome, story, self.state["epic_id"], self.story_outcome),
                    "counts": dict(self.counts),
@@ -818,6 +983,7 @@ def start(repo, spec: EpicInput, template, token_path: Path, bounds: RunBounds, 
     template = check_template(template)
     sample = fill_template(template, SAMPLE["__FEATURE__"], SAMPLE["__KEY__"])
     _bounds_check(sample, bounds)
+    _check_overrides(template, value["stories"], bounds)
     root = drive._judgment_root(repo, sample, judgment_root)
     worktree = Path(value["worktrees_dir"]) / f"epic-{value['epic']}"
     if _rev(repo.worktree, f"refs/heads/{value['branch']}") is not None:
@@ -858,10 +1024,16 @@ def start(repo, spec: EpicInput, template, token_path: Path, bounds: RunBounds, 
 
 
 def resume(repo, owner: OwnerRef | None, bounds=None, judgment_root=None, *, skip: str | None = None,
-           epic_id: str | None = None, token_path: Path | None = None, clock=time.monotonic) -> tuple[dict, int]:
-    """Design epic-drive E11 (and ruling R2): lock, the epic from the owner session, optional skip, a new run. E12:
-    without an owner (no session owns the repository) `epic_id` and a fresh token file claim `epic:<id>` anew; the
-    state and the current story's lease are re-sealed under the new generation."""
+           restart: str | None = None, roles: dict | None = None, epic_id: str | None = None,
+           token_path: Path | None = None, clock=time.monotonic) -> tuple[dict, int]:
+    """Design epic-drive E11 (and ruling R2): lock, the epic from the owner session, optional skip or restart (E15,
+    with an optional roles override), a new run. E12: without an owner (no session owns the repository) `epic_id` and
+    a fresh token file claim `epic:<id>` anew; the state and the current story's lease are re-sealed under the new
+    generation."""
+    if skip is not None and restart is not None:
+        raise _invalid("--skip and --restart exclude each other")
+    if roles is not None and restart is None:
+        raise _invalid("--roles goes with --restart")
     store = open_store(repo)
     fd = drive.acquire_lock(repo, exclusive=True)
     try:
@@ -888,11 +1060,18 @@ def resume(repo, owner: OwnerRef | None, bounds=None, judgment_root=None, *, ski
         if not isinstance(bounds, RunBounds):
             bounds = RunBounds(**{**state["bounds"], **(bounds or {})})
         _bounds_check(fill_template(template, SAMPLE["__FEATURE__"], SAMPLE["__KEY__"]), bounds)
+        named = {name for name in (skip, restart) if name is not None}
+        finished = {item.get("key") for item in state["stories"]
+                    if item["state"] in ("done", "skipped", "already-done") or
+                    named & {item.get("key"), item["number"]}}   # ruling H6 (amended): restart checks its own box
+        _check_overrides(template, state["stories_input"], bounds, finished)
         if judgment_root is not None and os.path.realpath(judgment_root) != state["judgment_root"]:
             raise Refusal("INVALID_INPUT", "Judgment root differs from the epic", "judgment-root-mismatch")
         epic = Epic(repo, store, owner, state, template, bounds, clock)
         if skip is not None:
             epic.skip(skip)
+        if restart is not None:
+            epic.restart(restart, roles)
         return epic.execute()
     finally:
         os.close(fd)

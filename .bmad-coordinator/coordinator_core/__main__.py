@@ -156,6 +156,11 @@ def _parser():
     epic_resume = leaf("resume", parent=epic, token=True)
     epic_resume.add_argument("--epic", help="the epic to continue after a release (with a token file to create)")
     epic_resume.add_argument("--skip", help="the story the last stop named, left to the operator")
+    epic_resume.add_argument("--restart", help="the story the last stop named, after a terminal stop: a new mandate "
+                                               "revision, a fresh pipeline with corrections at zero, the next attempt "
+                                               "(design E15)")
+    epic_resume.add_argument("--roles", type=Path, help="with --restart: a JSON file {role: {timeout?, max_turns?}} "
+                                                        "that becomes the story's roles override (design E14)")
     leaf("status", parent=epic).add_argument("--epic")
     for item in (epic_start, epic_resume):
         item.add_argument("--max-turns", type=int)
@@ -252,6 +257,16 @@ def _pipeline(path: Path) -> dict:
     return value
 
 
+def _roles_file(path: Path) -> dict:
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise DomainError("INVALID_INPUT", "Roles file must be one readable JSON object") from exc
+    if not isinstance(value, dict):
+        raise DomainError("INVALID_INPUT", "Roles file must be one readable JSON object")
+    return value
+
+
 def _drive(repo, args):
     bounds = {"max_turns": args.max_turns, "deadline_seconds": args.deadline, "human_wait_seconds": args.human_wait}
     bounds = {key: value for key, value in bounds.items() if value is not None}
@@ -271,8 +286,12 @@ def _epic(repo, args):
                                          args.token_file, drive.RunBounds(**{**DRIVE_DEFAULTS, **bounds}),
                                          args.judgment_root)
     else:  # exempt from the shared lock: resume takes only the exclusive one; no token file yet is E12's re-claim
+        if args.roles is not None and args.restart is None:   # the pairing before the roles file is read
+            raise DomainError("INVALID_INPUT", "--roles goes with --restart")
         owner = _owner(args.token_file) if args.token_file.exists() else None
         summary, code = drive_epic.resume(repo, owner, bounds or None, args.judgment_root, skip=args.skip,
+                                          restart=args.restart,
+                                          roles=_roles_file(args.roles) if args.roles is not None else None,
                                           epic_id=args.epic, token_path=args.token_file)
     return _Exit(summary, code)
 
