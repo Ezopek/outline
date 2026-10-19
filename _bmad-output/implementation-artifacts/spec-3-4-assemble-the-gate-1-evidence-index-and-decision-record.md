@@ -1,7 +1,7 @@
 ---
 title: 'Story 3.4: Assemble the Gate 1 Evidence Index and Decision Record'
 type: 'feature'
-status: 'in-progress'
+status: 'done'
 context: []
 ---
 
@@ -70,3 +70,11 @@ context: []
 - `oxlint`: `node_modules/.bin/oxlint --type-aware server shared`
 - `oxfmt`: `node_modules/.bin/oxfmt --check {changed_files}`
 - `vitest`: `node_modules/.bin/vitest run --project server --maxWorkers=2 server/wikiLint server/index.test.ts server/routes/mcp server/tools`
+
+## Coordinator Result
+
+- acceptance: `d32af0cd-6a2c-4491-a202-372a95fa3674`
+- accepted commit: `203ef3957e315a0868f744e6df6a653c217bc864`
+- review: `4cf1454a-02ed-4056-884f-1910342ec9f7`
+- verification: tsc: pass, oxlint: pass, oxfmt: pass, vitest: pass
+- decisions: none
