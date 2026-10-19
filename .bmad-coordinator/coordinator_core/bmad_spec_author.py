@@ -139,9 +139,16 @@ def _entries(items) -> bool:
         for item in items)
 
 
+def _same(text: str) -> str:
+    """A question as compared (ruling R2, finding F18): code quotes dropped and whitespace collapsed, so a return that
+    quotes the file's entry without its Markdown code marks still names it."""
+    return " ".join(text.replace("`", "").split())
+
+
 def _compared(items) -> list:
-    """What the return and the file share entry by entry (ruling R2): the id, the question, the option labels."""
-    return [(item["id"], item["question"], [option["label"] for option in item["options"]]) for item in items]
+    """What the return and the file share entry by entry (ruling R2): the id, the question (as `_same`), the option
+    labels."""
+    return [(item["id"], _same(item["question"]), [option["label"] for option in item["options"]]) for item in items]
 
 
 def _sealed_text(binding: dict, run_dir) -> tuple[str, str]:
@@ -163,7 +170,8 @@ def check(final, assignment, binding, run_dir, observed_changed) -> dict:
     Git delta) without tasks and verification; the attempt changes the spec file only; `open_questions` and
     `assumptions` are typed; a `completed` return has no open question and changed the spec file, which has no
     `## Open Questions` section and the status `ready-for-dev`; a `needs-decision` return's `open_questions` equal the
-    spec's entries (ids, questions, option labels) and its aggregate asks the entries' questions in order. A
+    spec's entries (ids, questions with code quotes and whitespace aside, option labels) and its aggregate asks the
+    entries' questions in order. A
     `completed` return that changed nothing is an empty claim (ruling P14): the driver's empty-attempt rule stops it."""
     payload = implementation.check({**final, "tasks": [], "verification": []}, assignment, binding, run_dir,
                                    observed_changed)
@@ -182,7 +190,7 @@ def check(final, assignment, binding, run_dir, observed_changed) -> dict:
     if final["result"] == "needs-decision":
         entries = parse_open_questions(text) if text is not None else []
         if not questions or _compared(questions) != _compared(entries) or \
-           payload["questions"] != [item["question"] for item in entries]:
+           [_same(item) for item in payload["questions"]] != [_same(item["question"]) for item in entries]:
             raise _bad("open_questions differ from the spec's Open Questions section")
     kept = {key: value for key, value in payload.items() if key not in ("tasks", "verification")}
     return {**kept, "open_questions": questions, "assumptions": assumptions, "spec_sha256": sha256}
