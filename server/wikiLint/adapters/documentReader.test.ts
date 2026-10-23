@@ -1015,26 +1015,29 @@ function recordTransactions() {
 
 describe("lockDocumentsTable", () => {
   it("retries a busy table from a fresh transaction until it is granted", async () => {
-    const blocker = await blockDocumentsTable();
-    const opened = recordTransactions();
-    const locking = lockDocumentsTable(LOCK_ATTEMPTS, 10);
-    try {
-      await vi.waitFor(() => expect(opened.length).toBeGreaterThan(2));
-    } finally {
-      await blocker.rollback();
-    }
-    const holder = await locking;
-    try {
-      const granted = opened.at(-1);
-      expect(granted?.transaction).toBe(holder);
-      expect(granted?.rollback).not.toHaveBeenCalled();
-      for (const { rollback } of opened.slice(0, -1)) {
-        expect(rollback).toHaveBeenCalledOnce();
+    // The lock is granted at the end, so no other test file may run meanwhile.
+    await withExclusiveDatabase(async () => {
+      const blocker = await blockDocumentsTable();
+      const opened = recordTransactions();
+      const locking = lockDocumentsTable(LOCK_ATTEMPTS, 10);
+      try {
+        await vi.waitFor(() => expect(opened.length).toBeGreaterThan(2));
+      } finally {
+        await blocker.rollback();
       }
-    } finally {
-      await holder.rollback();
-    }
-  });
+      const holder = await locking;
+      try {
+        const granted = opened.at(-1);
+        expect(granted?.transaction).toBe(holder);
+        expect(granted?.rollback).not.toHaveBeenCalled();
+        for (const { rollback } of opened.slice(0, -1)) {
+          expect(rollback).toHaveBeenCalledOnce();
+        }
+      } finally {
+        await holder.rollback();
+      }
+    });
+  }, 300_000);
 
   it("fails naming the lock when the table stays busy for the whole budget", async () => {
     const blocker = await blockDocumentsTable();
