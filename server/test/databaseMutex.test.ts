@@ -13,13 +13,14 @@ const ExclusiveTimeoutMs = 300_000;
 const waitOptions = { timeout: ExclusiveTimeoutMs, interval: 20 };
 
 /**
- * Lists the database test mutex locks held or awaited by a backend.
+ * Lists the advisory locks on a key held or awaited by a backend.
  *
  * @param observer - the client that queries `pg_locks`.
+ * @param key - the advisory lock key.
  * @param pid - the backend process ID.
  * @returns the backend's lock modes with whether each is granted.
  */
-async function mutexLocks(observer: Client, pid: number) {
+async function locks(observer: Client, key: number, pid: number) {
   const { rows } = await observer.query<{ mode: string; granted: boolean }>(
     `SELECT mode, granted FROM pg_locks
      WHERE locktype = 'advisory'
@@ -28,9 +29,20 @@ async function mutexLocks(observer: Client, pid: number) {
        AND objsubid = 1
        AND pid = $2
      ORDER BY mode`,
-    [DatabaseTestMutexKey, pid]
+    [key, pid]
   );
   return rows;
+}
+
+/**
+ * Lists the database test mutex locks held or awaited by a backend.
+ *
+ * @param observer - the client that queries `pg_locks`.
+ * @param pid - the backend process ID.
+ * @returns the backend's lock modes with whether each is granted.
+ */
+function mutexLocks(observer: Client, pid: number) {
+  return locks(observer, DatabaseTestMutexKey, pid);
 }
 
 /**
@@ -46,32 +58,37 @@ async function backendPid(connected: Client) {
   return rows[0].pid;
 }
 
-describe("withExclusiveDatabase", () => {
+/**
+ * A private advisory lock key for the queue test. It must differ from
+ * `DatabaseTestMutexKey`: a test that waits on the mutex key while its own file
+ * holds it in shared mode deadlocks with another file's waiting exclusive
+ * section.
+ */
+const QueueProbeKey = DatabaseTestMutexKey + 1;
+
+describe("advisory lock queue", () => {
   it(
-    "queues a later shared request behind a waiting exclusive section until it ends",
+    "queues a later shared request behind a waiting exclusive request until it ends",
     async () => {
       const sharer = await connectDatabaseClient();
+      const exclusive = await connectDatabaseClient();
       const latecomer = await connectDatabaseClient();
       try {
-        const filePid = databaseMutexPid();
+        const exclusivePid = await backendPid(exclusive);
         const latecomerPid = await backendPid(latecomer);
         await sharer.query("SELECT pg_advisory_lock_shared($1)", [
-          DatabaseTestMutexKey,
+          QueueProbeKey,
         ]);
 
-        let entered = false;
-        let leave = () => {};
-        const left = new Promise<void>((resolve) => {
-          leave = resolve;
-        });
-        const exclusive = withExclusiveDatabase(async () => {
-          entered = true;
-          await left;
-          return "section result";
-        });
+        let exclusiveGranted = false;
+        const exclusiveLock = exclusive
+          .query("SELECT pg_advisory_lock($1)", [QueueProbeKey])
+          .then(() => {
+            exclusiveGranted = true;
+          });
         await vi.waitFor(
           async () =>
-            expect(await mutexLocks(sharer, filePid)).toEqual([
+            expect(await locks(sharer, QueueProbeKey, exclusivePid)).toEqual([
               { mode: "ExclusiveLock", granted: false },
             ]),
           waitOptions
@@ -79,45 +96,44 @@ describe("withExclusiveDatabase", () => {
 
         let latecomerGranted = false;
         const latecomerShared = latecomer
-          .query("SELECT pg_advisory_lock_shared($1)", [DatabaseTestMutexKey])
+          .query("SELECT pg_advisory_lock_shared($1)", [QueueProbeKey])
           .then(() => {
             latecomerGranted = true;
           });
         await vi.waitFor(
           async () =>
-            expect(await mutexLocks(sharer, latecomerPid)).toEqual([
+            expect(await locks(sharer, QueueProbeKey, latecomerPid)).toEqual([
               { mode: "ShareLock", granted: false },
             ]),
           waitOptions
         );
-        expect(entered).toBe(false);
 
         await sharer.query("SELECT pg_advisory_unlock_shared($1)", [
-          DatabaseTestMutexKey,
+          QueueProbeKey,
         ]);
-        await vi.waitFor(() => expect(entered).toBe(true), waitOptions);
-        expect(await mutexLocks(sharer, latecomerPid)).toEqual([
+        await exclusiveLock;
+        expect(exclusiveGranted).toBe(true);
+        expect(await locks(sharer, QueueProbeKey, latecomerPid)).toEqual([
           { mode: "ShareLock", granted: false },
         ]);
         expect(latecomerGranted).toBe(false);
 
-        leave();
-        await expect(exclusive).resolves.toBe("section result");
+        await exclusive.query("SELECT pg_advisory_unlock($1)", [QueueProbeKey]);
         await latecomerShared;
-        expect(await mutexLocks(sharer, latecomerPid)).toEqual([
-          { mode: "ShareLock", granted: true },
-        ]);
-        expect(await mutexLocks(sharer, filePid)).toEqual([
+        expect(await locks(sharer, QueueProbeKey, latecomerPid)).toEqual([
           { mode: "ShareLock", granted: true },
         ]);
       } finally {
         await latecomer.end();
+        await exclusive.end();
         await sharer.end();
       }
     },
     ExclusiveTimeoutMs
   );
+});
 
+describe("withExclusiveDatabase", () => {
   it(
     "releases the exclusive lock and restores the shared hold when the section throws",
     async () => {

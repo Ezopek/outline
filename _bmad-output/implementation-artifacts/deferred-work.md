@@ -435,4 +435,21 @@ location: server/test/setup.ts; server/wikiLint/adapters/documentReader.test.ts 
 source_spec: `spec-dw-47-exclusive-database-test-mutex.md`
 severity: high
 reason: After DW-46 the lock is never queued, but once granted it is held for the two 400 ms reads. A test in the other worker that is mid-way through an enforced write with an engineered short lock_timeout then fails: with the lock test looping in a second process, `enforcedWrite.concurrency.test.ts > COMMIT outcomes > ends in row 6 with its callbacks when COMMIT lands but its reply outlives the timer` returned row 5 in 1 of 10 runs ("expected 5 to be 6"). Operator decision 2026-10-24: a cross-worker mutex in the server test setup (the real-lock test runs exclusive of every other server database test, and the wait happens before a test starts, never inside it). Story 3.2 lists this entry as a precondition, met only at `status: done`.
+status: done 2026-10-24
+resolution: story dw-47-exclusive-database-test-mutex (feature acb24222), finished attended by the coordinator after a critical-finding stop: server/test/databaseMutex.ts holds a session advisory lock shared per test file from setup.ts and gives the real-lock test an exclusive section. Coordinator stress run: COMMIT-outcome tests 10/10 with the real-lock test looping (11 runs). Repair of the queue test and the two deferred low findings are recorded in the story spec's Review Triage Log.
+
+### DW-48: `withExclusiveDatabase` ignores the result of `pg_advisory_unlock`, and an unlock error replaces the section's own error.
+origin: DW-47 implementation review a00aafe5, low finding
+location: server/test/databaseMutex.ts (withExclusiveDatabase, inner finally)
+source_spec: `spec-dw-47-exclusive-database-test-mutex.md`
+severity: low
+reason: If the unlock returns false or throws, the session keeps the exclusive lock until the file's afterAll closes the client, so other workers stall for the rest of that file, and a section error can be masked by the unlock error. Test infrastructure only; the file end always releases the session.
+status: open
+
+### DW-49: No test asserts that the setup file's shared hold is released only after the test file's own afterAll hooks.
+origin: DW-47 implementation review a00aafe5, low finding
+location: server/test/databaseMutex.test.ts; server/test/setup.ts
+source_spec: `spec-dw-47-exclusive-database-test-mutex.md`
+severity: low
+reason: The ordering relies on Vitest's default `sequence.hooks: 'stack'` (verified for Vitest 4.1.10); a change of that setting or of the setup hook would go unnoticed except through indirect timing failures.
 status: open

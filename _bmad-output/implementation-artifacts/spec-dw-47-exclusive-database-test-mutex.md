@@ -2,7 +2,7 @@
 title: 'DW-47: Run the real-lock test exclusive of every other server database test'
 type: 'bugfix'
 created: '2026-10-24'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '6b98faa896ba20298347a5039d85da2d5f0bce94'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -68,3 +68,9 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+### 2026-10-24 — Attended finish by the coordinator
+- The drive stopped `critical-finding` with both corrections spent (review a00aafe5: critical 1, medium 1, low 2).
+- `[critical]` acceptance item 1 unproven (the worker's tool policy cannot run two Vitest processes). — Run by the coordinator from the story worktree: the real-lock test looped in one process (11 runs, all passed) while the COMMIT-outcome tests ran 10 times in another, 10/10 passed. Before DW-47 the same harness failed 1 of 10.
+- `[medium]` the queue test requested the mutex key shared from an extra client while its file held it, which deadlocks with another file's waiting exclusive section under `yarn test`. — Repaired by hand: the queue test proves the PostgreSQL queue semantics on a private key with three raw clients; tsc, oxlint, oxfmt and `server/test` plus `documentReader.test.ts` (37/37) pass; routine Copilot review of the repair: APPROVE.
+- `[low]` unchecked `pg_advisory_unlock` result in the helper, and no test of the setup release ordering. — Deferred as DW-48 and DW-49.
