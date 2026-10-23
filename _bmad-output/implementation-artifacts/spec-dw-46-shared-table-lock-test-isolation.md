@@ -2,7 +2,7 @@
 title: 'DW-46: Keep the lock-timeout test from queueing other workers behind a table lock'
 type: 'bugfix'
 created: '2026-10-24'
-status: 'ready-for-dev'
+status: 'in-progress'
 baseline_revision: 'cf2412fb2e912a87b7cb735ba716ba786fc18e61'
 review_loop_iteration: 0
 followup_review_recommended: false
