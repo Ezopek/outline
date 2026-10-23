@@ -945,12 +945,17 @@ const LOCK_RETRY_MS = 50;
  * read of `documents` behind it. A `lock_not_available` attempt is rolled back
  * and retried from a fresh transaction after a short pause.
  *
+ * @param attempts - the retry budget.
+ * @param retryMs - the pause between two attempts.
  * @returns the transaction holding the lock.
  * @throws when the lock is not granted within the retry budget, or on any
  * other error from the lock statement or a rollback.
  */
-const lockDocumentsTable = async (): Promise<Transaction> => {
-  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
+const lockDocumentsTable = async (
+  attempts = LOCK_ATTEMPTS,
+  retryMs = LOCK_RETRY_MS
+): Promise<Transaction> => {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const holder = await sequelize.transaction();
     try {
       await sequelize.query(
@@ -965,12 +970,99 @@ const lockDocumentsTable = async (): Promise<Transaction> => {
         throw error;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+    await new Promise((resolve) => setTimeout(resolve, retryMs));
   }
   throw new Error(
-    `Could not acquire the documents table lock in ${LOCK_ATTEMPTS} attempts`
+    `Could not acquire the documents table lock in ${attempts} attempts`
   );
 };
+
+/**
+ * Opens a transaction holding `documents` in ACCESS SHARE mode, the lock any
+ * open read of `documents` holds, which conflicts with ACCESS EXCLUSIVE.
+ *
+ * @returns the blocking transaction.
+ */
+const blockDocumentsTable = async (): Promise<Transaction> => {
+  const blocker = await sequelize.transaction();
+  await sequelize.query("LOCK TABLE documents IN ACCESS SHARE MODE", {
+    transaction: blocker,
+  });
+  return blocker;
+};
+
+/**
+ * Records every transaction opened from now on, with its rollback spied on.
+ *
+ * @returns the opened transactions with their rollback spies, in order.
+ */
+function recordTransactions() {
+  const open = sequelize.transaction.bind(
+    sequelize
+  ) as () => Promise<Transaction>;
+  const opened: {
+    transaction: Transaction;
+    rollback: ReturnType<typeof vi.spyOn>;
+  }[] = [];
+  vi.spyOn(sequelize, "transaction").mockImplementation((async () => {
+    const transaction = await open();
+    opened.push({ transaction, rollback: vi.spyOn(transaction, "rollback") });
+    return transaction;
+  }) as typeof sequelize.transaction);
+  return opened;
+}
+
+describe("lockDocumentsTable", () => {
+  it("retries a busy table from a fresh transaction until it is granted", async () => {
+    const blocker = await blockDocumentsTable();
+    const opened = recordTransactions();
+    const locking = lockDocumentsTable(LOCK_ATTEMPTS, 10);
+    try {
+      await vi.waitFor(() => expect(opened.length).toBeGreaterThan(2));
+    } finally {
+      await blocker.rollback();
+    }
+    const holder = await locking;
+    try {
+      const granted = opened.at(-1);
+      expect(granted?.transaction).toBe(holder);
+      expect(granted?.rollback).not.toHaveBeenCalled();
+      for (const { rollback } of opened.slice(0, -1)) {
+        expect(rollback).toHaveBeenCalledOnce();
+      }
+    } finally {
+      await holder.rollback();
+    }
+  });
+
+  it("fails naming the lock when the table stays busy for the whole budget", async () => {
+    const blocker = await blockDocumentsTable();
+    const opened = recordTransactions();
+    const statements = recordStatements();
+    try {
+      await expect(lockDocumentsTable(3, 10)).rejects.toThrow(
+        "Could not acquire the documents table lock in 3 attempts"
+      );
+    } finally {
+      await blocker.rollback();
+    }
+    expect(opened).toHaveLength(3);
+    for (const { rollback } of opened) {
+      expect(rollback).toHaveBeenCalledOnce();
+    }
+    expect(
+      statements()
+        .filter(({ transaction }) => transaction !== blocker)
+        .map(({ sql }) => sql)
+    ).toEqual(
+      Array.from({ length: 3 }).flatMap(() => [
+        "START TRANSACTION;",
+        "LOCK TABLE documents IN ACCESS EXCLUSIVE MODE NOWAIT",
+        "ROLLBACK;",
+      ])
+    );
+  });
+});
 
 describe("database timeouts", () => {
   it("times out behind an exclusive lock held by another transaction", async () => {
