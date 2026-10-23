@@ -72,7 +72,7 @@ development_status:
   dw-4-yield-between-lint-units: done
   dw-20-bound-structure-read: done
   dw-46-shared-table-lock-test-isolation: done
-  dw-47-exclusive-database-test-mutex: ready-for-dev
+  dw-47-exclusive-database-test-mutex: in-progress
 
   epic-3: in-progress
   3-1-verify-safe-startup-and-readiness-policy-identity: done

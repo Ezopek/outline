@@ -2,7 +2,7 @@
 title: 'DW-47: Run the real-lock test exclusive of every other server database test'
 type: 'bugfix'
 created: '2026-10-24'
-status: 'ready-for-dev'
+status: 'in-progress'
 baseline_revision: '6b98faa896ba20298347a5039d85da2d5f0bce94'
 review_loop_iteration: 0
 followup_review_recommended: false
