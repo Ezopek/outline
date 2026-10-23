@@ -9,6 +9,7 @@ import {
   UserMembership,
 } from "@server/models";
 import { sequelize } from "@server/storage/database";
+import { withExclusiveDatabase } from "@server/test/databaseMutex";
 import {
   buildCollection,
   buildDocument,
@@ -1067,27 +1068,32 @@ describe("lockDocumentsTable", () => {
 describe("database timeouts", () => {
   it("times out behind an exclusive lock held by another transaction", async () => {
     const { user, collection, document } = await buildFixture();
-    const holder = await lockDocumentsTable();
-    try {
-      const snapshotError = await readDocumentSnapshot({
-        documentId: document.id,
-        collectionId: collection.id,
-        deadline: new Deadline(400),
-        actor: user,
-      }).catch((error: unknown) => error);
-      expect(isDatabaseTimeout(snapshotError)).toBe(true);
+    // Holding `documents` exclusively would time out other workers' enforced
+    // writes, so no other test file may run meanwhile. The test timeout covers
+    // waiting for the other worker's current test file to end.
+    await withExclusiveDatabase(async () => {
+      const holder = await lockDocumentsTable();
+      try {
+        const snapshotError = await readDocumentSnapshot({
+          documentId: document.id,
+          collectionId: collection.id,
+          deadline: new Deadline(400),
+          actor: user,
+        }).catch((error: unknown) => error);
+        expect(isDatabaseTimeout(snapshotError)).toBe(true);
 
-      const lookupError = await authorizeLintTarget({
-        id: document.id,
-        actor: user,
-        deadline: new Deadline(400),
-      }).catch((error: unknown) => error);
-      expect(lookupError).toBeInstanceOf(Error);
-      expect(isDatabaseTimeout(lookupError)).toBe(true);
-    } finally {
-      await holder.rollback();
-    }
-  }, 15000);
+        const lookupError = await authorizeLintTarget({
+          id: document.id,
+          actor: user,
+          deadline: new Deadline(400),
+        }).catch((error: unknown) => error);
+        expect(lookupError).toBeInstanceOf(Error);
+        expect(isDatabaseTimeout(lookupError)).toBe(true);
+      } finally {
+        await holder.rollback();
+      }
+    });
+  }, 300_000);
 
   it("does not treat other errors as timeouts", () => {
     expect(isDatabaseTimeout(new Error("canceling statement"))).toBe(false);

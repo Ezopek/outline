@@ -49,6 +49,14 @@ vi.mock("@aws-sdk/s3-request-presigner", () => ({
 // would be hoisted ahead of it.
 await import("@server/storage/database");
 
+// Hold the database test mutex in shared mode for the whole test file, before
+// its module code runs. The release is registered here, so Vitest runs it
+// after the file's own afterAll hooks.
+const { holdDatabaseShared, releaseDatabaseHold } =
+  await import("./databaseMutex");
+await holdDatabaseShared();
+afterAll(releaseDatabaseHold);
+
 // Eagerly load plugin server entry points so that PluginManager.getHooks()
 // returns the registered plugins. Vitest does not support require() of TS
 // files with bare imports (e.g. `@server/...`), so we use Vite's
