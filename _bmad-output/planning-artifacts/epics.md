@@ -1539,6 +1539,7 @@ AD: AD-1–AD-20 through the AD-18 layers, with AD-18 and AD-19 governing
 
 **Preconditions:** Do not start this story until each item's entry carries a `decision:` line that settles it or reads `status: done`, and any change that decision makes to this story is applied here; otherwise halt as `blocked`, naming the entry (Overview, Story preconditions).
 - DW-46 — the fix that keeps the COMMIT-outcome test deterministic under `yarn test:wikilint`, so the three retained runs can be identical; met only at `status: done` (operator decision 2026-10-24).
+- DW-47 — the cross-worker mutex that keeps the real-lock test from disturbing tests in the other `yarn test:wikilint` worker, the remainder of DW-46; met only at `status: done` (operator decision 2026-10-24).
 
 **Acceptance Criteria:**
 
