@@ -1537,6 +1537,9 @@ SM: SM-I1–SM-I4, SM-I6, SM-I7, SM-C1–SM-C7
 Gates: Gate 1 evidence only
 AD: AD-1–AD-20 through the AD-18 layers, with AD-18 and AD-19 governing
 
+**Preconditions:** Do not start this story until each item's entry carries a `decision:` line that settles it or reads `status: done`, and any change that decision makes to this story is applied here; otherwise halt as `blocked`, naming the entry (Overview, Story preconditions).
+- DW-46 — the fix that keeps the COMMIT-outcome test deterministic under `yarn test:wikilint`, so the three retained runs can be identical; met only at `status: done` (operator decision 2026-10-24).
+
 **Acceptance Criteria:**
 
 1. **Given** a clean supported verification environment
@@ -1557,7 +1560,7 @@ AD: AD-1–AD-20 through the AD-18 layers, with AD-18 and AD-19 governing
 
 4. **Given** dependency and seam review
    **When** core imports and test injection points are inspected
-   **Then** the AD-1 forbidden-import boundary holds and only the minimal snapshot reader, deadline/clock, audit writer, and media stager seams permitted by AD-18 exist
+   **Then** the AD-1 forbidden-import boundary holds and only the minimal seams of the seven kinds permitted by AD-18 exist (snapshot reader, deadline/clock, audit writer, media stager, configuration values, admission control, and attempt-phase callbacks)
    **And** a source-layout assertion proves every Gate 1 test is collocated with the code it covers under baseline conventions, with no new test directory, parallel framework tree, or external service.
 
 5. **Given** reusable source, interfaces, tool descriptions, examples, fixtures, and generic documentation
