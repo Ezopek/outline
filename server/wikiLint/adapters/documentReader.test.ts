@@ -930,15 +930,53 @@ describe("resolveLinkTargets with a read wrapper", () => {
   });
 });
 
+/** PostgreSQL's `lock_not_available`, the only lock failure that is retried. */
+const LOCK_NOT_AVAILABLE = "55P03";
+
+/** The number of `NOWAIT` lock attempts before the test gives up. */
+const LOCK_ATTEMPTS = 100;
+
+/** The pause between two `NOWAIT` lock attempts. */
+const LOCK_RETRY_MS = 50;
+
+/**
+ * Opens a transaction holding `documents` in ACCESS EXCLUSIVE mode without
+ * ever waiting in the lock queue, where it would queue every other worker's
+ * read of `documents` behind it. A `lock_not_available` attempt is rolled back
+ * and retried from a fresh transaction after a short pause.
+ *
+ * @returns the transaction holding the lock.
+ * @throws when the lock is not granted within the retry budget, or on any
+ * other error from the lock statement or a rollback.
+ */
+const lockDocumentsTable = async (): Promise<Transaction> => {
+  for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt++) {
+    const holder = await sequelize.transaction();
+    try {
+      await sequelize.query(
+        "LOCK TABLE documents IN ACCESS EXCLUSIVE MODE NOWAIT",
+        { transaction: holder }
+      );
+      return holder;
+    } catch (error) {
+      await holder.rollback();
+      const code = (error as { parent?: { code?: unknown } }).parent?.code;
+      if (code !== LOCK_NOT_AVAILABLE) {
+        throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+  }
+  throw new Error(
+    `Could not acquire the documents table lock in ${LOCK_ATTEMPTS} attempts`
+  );
+};
+
 describe("database timeouts", () => {
   it("times out behind an exclusive lock held by another transaction", async () => {
     const { user, collection, document } = await buildFixture();
-    const holder = await sequelize.transaction();
+    const holder = await lockDocumentsTable();
     try {
-      await sequelize.query("LOCK TABLE documents IN ACCESS EXCLUSIVE MODE", {
-        transaction: holder,
-      });
-
       const snapshotError = await readDocumentSnapshot({
         documentId: document.id,
         collectionId: collection.id,
@@ -957,7 +995,7 @@ describe("database timeouts", () => {
     } finally {
       await holder.rollback();
     }
-  });
+  }, 15000);
 
   it("does not treat other errors as timeouts", () => {
     expect(isDatabaseTimeout(new Error("canceling statement"))).toBe(false);
