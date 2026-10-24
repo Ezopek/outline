@@ -453,3 +453,11 @@ source_spec: `spec-dw-47-exclusive-database-test-mutex.md`
 severity: low
 reason: The ordering relies on Vitest's default `sequence.hooks: 'stack'` (verified for Vitest 4.1.10); a change of that setting or of the setup hook would go unnoticed except through indirect timing failures.
 status: open
+
+### DW-50: An unexplained 5-second database stall failed one coordinator verify run of `yarn test:wikilint` during Story 3.2.
+origin: coordinator observation, Story 3.2 (key 3-2-…-r2) verify of attempt commit 867f96b9825b, 2026-10-24
+location: server/queues/tasks/DocumentPublishedNotificationsTask.test.ts; server/wikiLint/adapters/auditEvents.test.ts
+source_spec: `spec-3-2-close-layered-conformance-and-source-provenance-evidence-r2.md`
+severity: medium
+reason: The verify receipt (`.git/coordinator/story/9f98b154-3c68-4a16-b63c-6bb5a079078c/verify-c3cbee64-…-89c23d8b2a628022.json`) records 8 failures in two files that Story 3.2 did not change: seven tests timed out at 5000 ms on ordinary fixture writes (`buildUser`, `buildRow`), and one counted a notification leaked from a timed-out test. The same source passed every other full run: the worker's six retained or voided runs and five coordinator runs afterwards, all 2279 passed and 1 expected skip. The two files ran in the two workers at once, so the stall looks database-wide, but no lingering session or advisory lock was present afterwards and a lock sampler was not running when it happened. Not reproduced; frequency observed 1 in 12 full runs. Needs a reproduction (run the suite in a loop with a working pg_stat_activity/pg_blocking_pids sampler) before Gate 1 can rely on determinism of the whole suite.
+status: open

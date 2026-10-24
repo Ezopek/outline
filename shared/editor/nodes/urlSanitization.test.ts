@@ -21,8 +21,8 @@ vi.mock("../../utils/urls", async (importOriginal) => {
 });
 
 const BASE_URL = "https://wiki.example.test";
-const MODEL_ID = "c85a0d80-3a89-4b25-a0cd-e7fc83f0d226";
-const MENTION_ID = "0c440212-8b40-49fa-8a64-2548d6b60d59";
+const MODEL_ID = "00000000-0000-4000-8000-000000000001";
+const MENTION_ID = "00000000-0000-4000-8000-000000000002";
 const UNSAFE_PROTOCOLS = ["javascript:", "vbscript:", "data:", "file:"];
 
 /* oxlint-disable no-script-url */
