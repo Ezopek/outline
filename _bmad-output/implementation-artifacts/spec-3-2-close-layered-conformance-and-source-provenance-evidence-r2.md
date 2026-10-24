@@ -1,7 +1,7 @@
 ---
 title: 'Story 3.2: Close Layered Conformance and Source-Provenance Evidence'
 type: 'feature'
-status: 'ready-for-dev'
+status: 'in-progress'
 context: []
 ---
 

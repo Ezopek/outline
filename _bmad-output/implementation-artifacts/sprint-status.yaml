@@ -77,7 +77,7 @@ development_status:
   epic-3: in-progress
   3-1-verify-safe-startup-and-readiness-policy-identity: done
   # Story 3.2 rerun 2026-10-24 under a new key: the coordinator store keeps the skipped first run's feature on story/3-2-close-layered-conformance-and-source-provenance-evidence (branch archived as archive/story-3-2-close-layered-conformance-2026-10-18).
-  3-2-close-layered-conformance-and-source-provenance-evidence-r2: ready-for-dev
+  3-2-close-layered-conformance-and-source-provenance-evidence-r2: in-progress
   3-3-produce-reproducible-performance-growth-and-constant-derivat: done
   3-4-assemble-the-gate-1-evidence-index-and-decision-record: done
   epic-3-retrospective: optional
