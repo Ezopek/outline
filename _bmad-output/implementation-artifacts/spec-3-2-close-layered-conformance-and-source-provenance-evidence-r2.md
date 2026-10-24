@@ -1,7 +1,7 @@
 ---
 title: 'Story 3.2: Close Layered Conformance and Source-Provenance Evidence'
 type: 'feature'
-status: 'ready-for-dev'
+status: 'draft'
 context: []
 ---
 
@@ -16,7 +16,7 @@ context: []
 ## Boundaries & Constraints
 
 **Always:**
-- Decision (Q1, operator 2026-10-24): the two non-placeholder UUIDs at `shared/editor/nodes/urlSanitization.test.ts:24-25` (`MODEL_ID`, `MENTION_ID`) were replaced by the operator with the `00000000-0000-4000-8000-…` placeholder form in commit `1dc68a9044379d9102017adf2c7c366daef5700c` on the base branch, outside this story's scopes. This story's worktree predates that commit, so the generic-data review records these two hits as fixed by that operator commit, cited by hash, and neither as a `gap` nor as absent. The file is not edited by this story.
+- The generic-data review runs over the tree at the retained source commit (P10), and AC 5 is claimed only if that tree has zero hits. A fix that exists only in a commit that is not an ancestor of the retained source commit is never cited as closing a hit. Until Q1 is decided, the two UUIDs at `shared/editor/nodes/urlSanitization.test.ts:24-25` are recorded as open hits and AC 5 is not claimed.
 - Preconditions DW-46 and DW-47 are `status: done 2026-10-24`, so they are met.
 - The retained broad command is `corepack yarn test:wikilint` (server project, `--maxWorkers=2`), run 3 times. The test PostgreSQL was ensured by the coordinator, not the worker (P7). `conformance.md` records "run from the main worktree root at 2026-10-23T23:54:48Z, exit 0, output `test-db: outline-test ready on 127.0.0.1:5432`".
 - Layers outside the paths of that command run as recorded supplementary commands: `shared/editor/nodes/urlSanitization.test.ts` and `shared/utils/urls.test.ts` (projects `shared-node`, `shared-jsdom`), and `TZ=UTC node_modules/.bin/vitest run --project server --maxWorkers=2 server/index.test.ts server/models/helpers/DocumentHelper.test.ts server/services/worker.test.ts server/routes/api/events/events.test.ts` (worker log/tag content and a worker without the enforced task registered; `wikiLint.*` audit access, a non-admin cannot list them, kept out of the audit log). Files outside the story scopes are run, never edited, except as Q1 decides.
@@ -50,6 +50,10 @@ context: []
 
 </frozen-after-approval>
 
+## Open Questions
+
+- Q1: The generic-data review finds two non-placeholder UUIDs at `shared/editor/nodes/urlSanitization.test.ts:24-25` (`MODEL_ID`, `MENTION_ID`), outside the story scopes. Operator commit `1dc68a904` replaces them, and its parent is the story base `f48820a4d`, but it is not an ancestor of this branch. How should the retained source come to contain zero hits? — options: rebase onto 1dc68a904 (the coordinator rebases the story branch onto `1dc68a904` before the retained runs; the review finds 0 hits and AC 5 holds, and merge-base and provenance are unaffected because the commit is the operator's own commit on `main`, not `upstream/main`) / add path to scopes (the operator adds `shared/editor/nodes/urlSanitization.test.ts` to the story scopes; the story makes the same placeholder fix and runs the shared projects green, which duplicates `1dc68a904` and creates a merge conflict with it) / record as gap (the runs use the current tree; `conformance.md` records "2 hits at urlSanitization.test.ts:24-25; fixed by 1dc68a904, which is not an ancestor", AC 5 is a `gap`, not `pass`, and Gate 1 lacks AC 5 until a rerun) — recommendation: rebase onto 1dc68a904
+
 ## Code Map
 
 - `package.json:35` -- `test:wikilint` covers `server/{wikiLint,tools,queues,routes/mcp}` only. That is why the supplementary commands exist.
@@ -57,7 +61,7 @@ context: []
 - `server/wikiLint/{core,application,adapters}/*.test.ts` -- most AD-18 layers. The real-PostgreSQL COMMIT and lock cases are in `application/enforcedWrite.concurrency.test.ts` and `adapters/documentReader.test.ts`. DW-47 serializes them through `server/test/databaseMutex.ts`, which is read only here.
 - `server/tools/*.test.ts`, `server/routes/mcp/*.test.ts`, `server/queues/tasks/EnforcedDocumentImportTask.test.ts` -- the tool, discovery, socket-timeout, worker and compatibility layers.
 - Fork-changed tests outside the suite roots (`git diff --stat 4a5a616a… HEAD`): `server/queues/queue.test.ts` (+91, sibling `queue.ts`, run by `test:wikilint`), `server/services/worker.test.ts` (+209, sibling `worker.ts`) and `server/routes/api/events/events.test.ts` (+177, sibling `events.ts`), the last two run only by the supplementary server command. None contains `.skip`/`.only`/`.todo`/`skipIf`/`runIf`. `server/test/databaseMutex.test.ts` is DW-47 test infrastructure, not a Gate 1 test.
-- `shared/editor/nodes/urlSanitization.test.ts:24-25` -- two non-placeholder UUIDs outside the story scopes in this worktree, already replaced by operator commit `1dc68a904` (not an ancestor of this branch); recorded per the Q1 decision, not edited.
+- `shared/editor/nodes/urlSanitization.test.ts:24-25` -- two non-placeholder UUIDs outside the story scopes, still present at HEAD `8dbbe7668`. Operator commit `1dc68a904` (parent `f48820a4d`) replaces them, but `git merge-base --is-ancestor 1dc68a904 HEAD` exits 1. Not edited; see Q1.
 - `server/wikiLint/benchmark/smokeRun.test.ts:20` -- `describe.runIf(!!OUT)`, the only skip helper in the `test:wikilint` paths. The upstream `.skip` calls are in `server/routes/api/**`, outside those paths.
 - Test files with no sibling of their first dotted segment: `routes/mcp/{audit,wikiLint,requestTimeout}.test.ts` (the directory holds only `index.ts`), `benchmark/{smokeRun,gate1EvidenceIndex}.test.ts`, `core/boundary.test.ts`, `shared/editor/nodes/urlSanitization.test.ts`, and the upstream `queues/tasks/DocumentAccessRequestNotificationTask.test.ts`, which is outside the Gate 1 set.
 - `server/wikiLint/core/internalLinks.test.ts:15` -- the non-placeholder UUID (P11). The earlier run checked that the placeholder value passes 94/94.
@@ -66,7 +70,7 @@ context: []
 
 ## Tasks & Acceptance
 
-- [ ] `server/wikiLint/core/internalLinks.test.ts` -- replace the UUID with the placeholder. Make the same fix for any other generic-data hit in the story scopes; `urlSanitization.test.ts` is not edited (Q1 decision) -- AC 5.
+- [ ] `server/wikiLint/core/internalLinks.test.ts` -- replace the UUID with the placeholder. Make the same fix for any other generic-data hit in the story scopes; `urlSanitization.test.ts` is not edited. In `conformance.md`, record the review's hits at the retained source commit exactly as found. Claim AC 5 only if that count is 0 -- AC 5.
 - [ ] `server/wikiLint/layout.test.ts` -- over the Gate 1 test set (Boundaries), with the suite roots `server/wikiLint/`, `server/routes/mcp/` and `server/tools/` walked recursively and the eight other files named (sibling sources `queue.ts`, `worker.ts`, `events.ts` and so on): (a) no path contains a `__tests__`/`test`/`tests` segment; (b) each file has a sibling `.ts`/`.tsx` source named by its first dotted segment, or it is in this allowlist and its covered path exists: `routes/mcp/{audit,wikiLint,requestTimeout}.test.ts` → `routes/mcp/index.ts`; `wikiLint/core/boundary.test.ts` → `wikiLint/core/`; `wikiLint/benchmark/smokeRun.test.ts` → `wikiLint/benchmark/harness.ts`; `wikiLint/benchmark/gate1EvidenceIndex.test.ts` → `docs/wikilint-gate-1/evidence-index.md`; `shared/editor/nodes/urlSanitization.test.ts` → `shared/editor/nodes/index.ts`; `wikiLint/layout.test.ts` → `server/wikiLint/`; (c) no file except `smokeRun.test.ts` contains `.skip`, `.only`, `.todo`, `skipIf` or `runIf`. Any new test file needs a sibling source -- AC 3, 4.
 - [ ] collocated `*.test.ts` in the story scopes -- go through the AC 1 list item by item and add each missing fixture to the test file of the code it covers -- AC 1.
 - [ ] `docs/wikilint-gate-1/conformance.md` -- record the toolchain (`node --version`, `corepack yarn --version`, PostgreSQL `server_version`, Vitest) and the P7 line. For each command (3× `corepack yarn test:wikilint --reporter=default --reporter=json --outputFile=<tmpdir>/test-wikilint-run-N.json`, the supplementary commands, and `corepack yarn build` as a local build only), record the exit status, totals, original SHA-256 and formatted raw path. Then the three-run comparison, the source commit (P10), an AC 1 layer → test-name table, the seven-kind seam inventory, and the generic-data review patterns, scope, exclusions and results -- AC 1, 3, 4, 5, 7.
