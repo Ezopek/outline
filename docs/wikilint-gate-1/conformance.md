@@ -4,7 +4,7 @@ Source provenance is in [provenance.md](provenance.md). The requirement map is i
 
 ## Overall result
 
-The three runs of `test:wikilint` and the three runs of each supplementary command passed, and per command the three runs have identical per-test names and statuses. The broad command skipped only the expected smoke-helper test, and the supplementary commands skipped nothing. No run had a todo. `corepack yarn build` exited `1` in this worktree (see Commands). That is a `gap` for AC 7. The seam review found three injected dependencies outside the seven AD-18 kinds. That is a `gap` for AC 4. Provenance check (b) was denied by the tool policy. That is a `gap` for AC 6 ([provenance.md](provenance.md)).
+The three runs of `test:wikilint` and the three runs of each supplementary command passed, and per command the three runs have identical per-test names and statuses. The broad command skipped only the expected smoke-helper test, and the supplementary commands skipped nothing. No run had a todo. `corepack yarn build` exited `1` in this worktree (see Commands). That is a `gap` for AC 7. The seam review found three injected dependencies outside the seven AD-18 kinds. That is a `gap` for AC 4. The worker's tool policy denied provenance check (b). The coordinator then ran it read-only and recorded `157` = `157`, so (b) passes. With (a) to (e) all passing, AC 6 is proven ([provenance.md](provenance.md)).
 
 ## Retained source
 
