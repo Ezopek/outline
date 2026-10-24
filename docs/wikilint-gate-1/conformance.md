@@ -85,6 +85,8 @@ The console totals above match each report's `numPassedTests`, `numFailedTests`,
 
 **Re-diagnosis on the retained source (correction attempt, 2026-10-24T01:42Z).** After the coordinator's attempt commit `e17fb654716f21d736dcf29cccbe72bb7fe1ad67` (HEAD), the working tree was clean apart from the coordinator's own `_bmad-output/coordinator/`. `git diff --stat 92eed955f83fdb93d84a2b3ae1b3ebef19f15497 HEAD` lists only the four files above and the evidence under `docs/wikilint-gate-1/`, and `sha256sum` of the four files gave the same four values as the table above, so the source tree at HEAD is the retained source byte for byte. On that tree, `corepack yarn build` exited `1` again after the Vite client build. `corepack yarn build:i18n` alone exited `1` with the same `Error: ENOENT: no such file or directory, stat '/home/ezop/repos/outline/node_modules/node_modules'` (raised from `/home/ezop/repos/outline/node_modules/streamx/index.js`). `corepack yarn build:server` alone exited `0` (`Clean previous build…`, `Compiling…`, `Copying static files…`, `Done!`). The worker cannot inspect the main checkout's `node_modules`: the sandbox limits it to this worktree. The `gap` stands until the coordinator runs `corepack yarn build` from the main worktree root.
 
+**Recheck (continuation attempt after decision `5d255d91-…`, 2026-10-24, HEAD `354804c21`).** `git diff --stat 92eed955f HEAD` again lists only the four files above and the evidence, so the source is unchanged. `corepack yarn build:i18n` exited `1` with the same `ENOENT … '/home/ezop/repos/outline/node_modules/node_modules'`. The `gap` is unchanged.
+
 ## Three-run comparison
 
 For every retained command, each test of each original report was reduced to `<file> > <full name> :: <status>`, the list was sorted, and runs 1, 2 and 3 were compared:
@@ -180,6 +182,8 @@ AD-18 permits seven seam kinds: snapshot reader, deadline/clock, audit writer, m
 | process timing probe (`setTimingProbe`)                                                                    | `application/timingProbe.ts:22`; installed by `benchmark/harness.ts:341` and `application/timingProbe.test.ts`                                                                   | **none of the seven**   |
 
 **`gap` (AC 4; owner: the AD-18 architecture owner, who decides whether to admit or remove these):** the last three rows are injected dependencies outside the seven kinds. They are recorded and not refactored. `schedule` injects the HTML-worker queue submission. The `AttemptPlan` members are the per-path phase implementations that the shared `runAttempt` shell receives from its two production callers, and the unit tests drive the shell with fake plans. The timing probe is a process-level observer for the Story 3.3 benchmark that never changes a result (`application/timingProbe.test.ts > timingProbe leaves the lint_wiki result byte-identical with a throwing probe`). An earlier run of this story classified `schedule` and the plan members as internal composition. This review counts them as injection points because tests replace them. The AD-1 forbidden-import boundary holds (`core/boundary.test.ts`).
+
+Coordinator decision `5d255d91-d07b-4bdd-8452-e2f245d7ea6b` (under S20; a coordinator judgment, not operator approval) keeps all three as recorded `gap`s for Gate 1, with no refactor. AC 4 and AD-18 stay a `gap`, owned by the architecture owner. This story neither admits them into AD-18 nor schedules their removal. Both choices remain with the architecture owner, outside this story.
 
 ## Generic-data review
 

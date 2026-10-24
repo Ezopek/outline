@@ -21,7 +21,7 @@ All commands are read-only Git, run one per call in the story worktree on 2026-1
 
 (a) The merge-base equals the `v1.10.1` source commit, so no merge from `upstream/main` moved it.
 
-(b) The correction attempt (2026-10-24, HEAD `e17fb654716f21d736dcf29cccbe72bb7fe1ad67`, the coordinator's attempt commit, whose source tree equals the retained source) tried the exact (b) command again, and the tool policy denied it again, with no approval surface. The worker did not substitute another way of running Git. The patch-equivalence comparison could not be made, so this attempt cannot prove that no fork commit was rebased or cherry-picked from `upstream/main`. **`gap` (owner: the coordinator, which can run the (b) command read-only and compare its count with `153`).**
+(b) The correction attempt (2026-10-24, HEAD `e17fb654716f21d736dcf29cccbe72bb7fe1ad67`, the coordinator's attempt commit, whose source tree equals the retained source) tried the exact (b) command again, and the tool policy denied it again, with no approval surface. The continuation attempt after decision `5d255d91-…` (HEAD `354804c21`, same source tree) tried it a third time and was denied the same way. The worker did not substitute another way of running Git. The patch-equivalence comparison could not be made, so this attempt cannot prove that no fork commit was rebased or cherry-picked from `upstream/main`. **`gap` (owner: the coordinator, which can run the (b) command read-only and compare its count with `153`).**
 
 (c) Merge commits in `4a5a616a…..HEAD`, each parent checked with `git merge-base --is-ancestor <parent> upstream/main`:
 
