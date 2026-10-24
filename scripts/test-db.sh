@@ -57,8 +57,12 @@ start() {
     psql -c "CREATE DATABASE \"$db\""
 }
 
-# Line 4 of postmaster.pid is the port of the server running from $data.
-owned() { [ -f "$data/postmaster.pid" ] && [ "$(sed -n 4p "$data/postmaster.pid")" = "$port" ]; }
+# The listening server is ours only when it reports $data as its data directory; a
+# postmaster.pid alone can be stale while another server holds the port.
+owned() {
+  [ -f "$data/postmaster.pid" ] && [ -x "$bin/psql" ] &&
+    [ "$(psql -w -c 'SHOW data_directory' 2>/dev/null)" -ef "$data" ]
+}
 
 # Drop and recreate $db; DROP DATABASE without FORCE also refuses a session that
 # connects after the check, so the database stays in place in that case too.
