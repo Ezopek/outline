@@ -2,7 +2,7 @@
 title: 'DW-51: Re-assemble the Gate 1 evidence index and decision record after Story 3.2'
 type: 'chore'
 created: '2026-10-24'
-status: 'ready-for-dev'
+status: 'in-progress'
 baseline_revision: '5308b7edfeb13b1b4c645245301b7715c6466b62'
 review_loop_iteration: 0
 followup_review_recommended: false
