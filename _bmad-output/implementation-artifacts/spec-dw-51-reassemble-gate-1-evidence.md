@@ -2,7 +2,7 @@
 title: 'DW-51: Re-assemble the Gate 1 evidence index and decision record after Story 3.2'
 type: 'chore'
 created: '2026-10-24'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '5308b7edfeb13b1b4c645245301b7715c6466b62'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -71,3 +71,11 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+## Coordinator Result
+
+- acceptance: `3e1922cc-813b-4bc6-ae9e-47c3aac43820`
+- accepted commit: `d2b463b88b3d0e3abd9ef424300a5063475dbcf9`
+- review: `95a65e25-f65b-4739-8a6c-56f7ab080cac`
+- verification: tsc: pass, oxlint: pass, oxfmt: pass, vitest-index: pass
+- decisions: none
