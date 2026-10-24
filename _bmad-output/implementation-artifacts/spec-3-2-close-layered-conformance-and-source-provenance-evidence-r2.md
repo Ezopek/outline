@@ -1,7 +1,7 @@
 ---
 title: 'Story 3.2: Close Layered Conformance and Source-Provenance Evidence'
 type: 'feature'
-status: 'in-progress'
+status: 'done'
 context: []
 ---
 
@@ -110,3 +110,11 @@ Scan results and HEAD references below are historical (taken while this spec was
 - `oxfmt`: `node_modules/.bin/oxfmt --check {changed_files}`
 - `vitest`: `corepack yarn test:wikilint`
 - `vitest-index`: `node_modules/.bin/vitest run --project server server/index.test.ts`
+
+## Coordinator Result
+
+- acceptance: `273be257-7f08-4fd8-a8dd-a527a1ad1bab`
+- accepted commit: `55fbe63b8c9960b292deeecf646e4e10e572dd8c`
+- review: `ac78b3dc-50b7-4a8c-b887-38040c542441`
+- verification: tsc: pass, oxlint: pass, oxfmt: pass, vitest: pass, vitest-index: pass
+- decisions: a736267c-56e6-45d0-9f98-0a104b8ba803 (coordinator), 5d255d91-d07b-4bdd-8452-e2f245d7ea6b (coordinator)
