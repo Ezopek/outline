@@ -2,12 +2,15 @@
 # PostgreSQL for DB-backed server tests on hosts without Docker.
 #
 #   scripts/test-db.sh ensure   start (installing on first use) and migrate; idempotent
+#   scripts/test-db.sh reset    as ensure, but drop and recreate the database first
 #   scripts/test-db.sh status   exit 0 when the database from .env.test accepts connections
 #   scripts/test-db.sh stop     stop the server this script started
 #
 # The first `ensure` installs PostgreSQL 14 from conda-forge with micromamba under
 # OUTLINE_TEST_PG_HOME (default: ~/.local/share/outline-test-pg). If something else
-# already listens on the configured port, it is used as is.
+# already listens on the configured port, it is used as is. `reset` drops the database
+# only on the server started from this data directory, and refuses while any other
+# session is connected to it; it never ends a session.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,13 +47,36 @@ install() {
   fi
 }
 
+psql() { "$bin/psql" -h 127.0.0.1 -p "$port" -U "$user" -d postgres -qtAX "$@"; }
+
 start() {
   "$bin/pg_ctl" -D "$data" -l "$home/postgres.log" -w \
     -o "-p $port -c listen_addresses=127.0.0.1 -c unix_socket_directories=''" start >/dev/null
-  psql() { "$bin/psql" -h 127.0.0.1 -p "$port" -U "$user" -d postgres -qtAX "$@"; }
   psql -c "ALTER USER \"$user\" PASSWORD '$pass'"
   [ "$(psql -c "SELECT 1 FROM pg_database WHERE datname = '$db'")" = 1 ] ||
     psql -c "CREATE DATABASE \"$db\""
+}
+
+# Line 4 of postmaster.pid is the port of the server running from $data.
+owned() { [ -f "$data/postmaster.pid" ] && [ "$(sed -n 4p "$data/postmaster.pid")" = "$port" ]; }
+
+# Drop and recreate $db; DROP DATABASE without FORCE also refuses a session that
+# connects after the check, so the database stays in place in that case too.
+recreate() {
+  local sessions
+  sessions="$(psql -c "SELECT format('pid %s (%s, %s)', pid, usename,
+    coalesce(nullif(application_name, ''), client_addr::text, 'local'))
+    FROM pg_stat_activity WHERE datname = '$db' AND pid <> pg_backend_pid()")"
+  [ -z "$sessions" ] ||
+    die "not resetting $db: other sessions are connected to it:"$'\n'"$sessions"
+  psql -c "DROP DATABASE IF EXISTS \"$db\"" || die "not resetting $db: DROP DATABASE failed"
+  psql -c "CREATE DATABASE \"$db\""
+}
+
+migrate() {
+  cd "$repo"
+  NODE_ENV=test corepack yarn sequelize db:migrate >/dev/null
+  echo "test-db: $db ready on 127.0.0.1:$port"
 }
 
 case "${1:-}" in
@@ -59,9 +85,16 @@ case "${1:-}" in
       install
       start
     fi
-    cd "$repo"
-    NODE_ENV=test corepack yarn sequelize db:migrate >/dev/null
-    echo "test-db: $db ready on 127.0.0.1:$port"
+    migrate
+    ;;
+  reset)
+    if ! listening; then
+      install
+      start
+    fi
+    owned || die "something other than the server from $data listens on 127.0.0.1:$port; not resetting $db"
+    recreate
+    migrate
     ;;
   status)
     listening
@@ -71,6 +104,6 @@ case "${1:-}" in
     "$bin/pg_ctl" -D "$data" -w -m fast stop >/dev/null
     ;;
   *)
-    die "usage: $0 ensure|status|stop"
+    die "usage: $0 ensure|reset|status|stop"
     ;;
 esac
