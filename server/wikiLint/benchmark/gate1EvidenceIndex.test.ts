@@ -127,6 +127,13 @@ const INVENTORY = [
   "AD-20-ROW-7",
 ];
 
+/** The retained run sets; a `pass` on a retained-run row links all three. */
+const RETAINED_RUN_SETS = [
+  "test-wikilint",
+  "shared-supplementary",
+  "server-supplementary",
+];
+
 /** One parsed index row, keyed by column. */
 type IndexRow = Record<string, string> & { ID: string; Result: string };
 
@@ -238,6 +245,17 @@ function validate(indexMarkdown: string, recordMarkdown: string): string[] {
     }
     if (!(RESULTS as readonly string[]).includes(row.Result)) {
       errors.push(`row ${row.ID} has the unknown result ${row.Result}`);
+    }
+    if (
+      row.Result === "pass" &&
+      row["Evidence kind"].includes("(retained run)") &&
+      !RETAINED_RUN_SETS.some((set) =>
+        [1, 2, 3].every((n) =>
+          row["Raw evidence location"].includes(`](raw/${set}-run-${n}.json)`)
+        )
+      )
+    ) {
+      errors.push(`row ${row.ID} passes without linking the retained runs`);
     }
   }
   for (const [id, matches] of byId) {
@@ -420,6 +438,38 @@ describe("the AC 2 rule", () => {
       ])
     );
     expect(validate(index, syntheticRecord("not ready", results))).toEqual([]);
+  });
+
+  it("fails a retained-run pass that does not link the three run reports, and lets an unretained claim stay unverified", () => {
+    const retained = (result: string, raw: string): string =>
+      syntheticIndex().replace(
+        "| FR-4 | requirement | test | [source](source.md) | `command` | `0123456789ab` | pass | none retained |",
+        `| FR-4 | requirement | test (retained run) | [source](source.md) | \`command\` | \`0123456789ab\` | ${result} | ${raw} |`
+      );
+    const runs = [1, 2, 3]
+      .map((n) => `[${n}](raw/test-wikilint-run-${n}.json)`)
+      .join(", ");
+    expect(
+      validate(retained("pass", "none retained"), syntheticRecord("ready"))
+    ).toContain("row FR-4 passes without linking the retained runs");
+    expect(
+      validate(
+        retained(
+          "pass",
+          runs.replace(", [3](raw/test-wikilint-run-3.json)", "")
+        ),
+        syntheticRecord("ready")
+      )
+    ).toContain("row FR-4 passes without linking the retained runs");
+    expect(validate(retained("pass", runs), syntheticRecord("ready"))).toEqual(
+      []
+    );
+    expect(
+      validate(
+        retained("unverified", "none retained"),
+        syntheticRecord("not ready", { "FR-4": "unverified" })
+      )
+    ).toEqual([]);
   });
 
   it("fails a listed row that does not block", () => {
