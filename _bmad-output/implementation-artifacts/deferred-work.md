@@ -468,4 +468,21 @@ location: docs/wikilint-gate-1/evidence-index.md; docs/wikilint-gate-1/decision-
 source_spec: `spec-dw-51-reassemble-gate-1-evidence.md`
 severity: medium
 reason: Story 3.4's record says it is re-assembled after Story 3.2; it still marks every Story 3.2 deliverable as a gap. AC 4 and AD-18 were gaps only for three seams that the operator admitted into AD-18 on 2026-10-24 (ten kinds). AC 7 was a gap because `corepack yarn build` failed in the story worktree; the failure came from a stray `node_modules/node_modules` symlink that a coordinator setup step had created in the main checkout, and after its removal the build exited 0 in the main checkout at 2026-10-24T12:04:00Z on HEAD 5308b7edf.
+status: done 2026-10-24
+resolution: story dw-51-reassemble-gate-1-evidence (feature da3d83fb), reviewed and accepted by the coordinator, fast-forwarded at 81c12b570. The recomputed Gate 1 decision stays `not ready` with 16 blocking rows (NFR-1–5, SM-I2, SM-I5, G1-SM-I, G1-BLOCKING-DECISIONS, AD-17, the three D-9 constants, DW-4, DW-5, DW-6). Two low review findings are DW-52 and DW-53.
+
+### DW-52: The AC 7 paragraph in `conformance.md` cites a `git diff --stat` between the retained freeze and the build commit with no retained output.
+origin: DW-51 implementation review 95a65e25, low finding
+location: docs/wikilint-gate-1/conformance.md:125
+source_spec: `spec-dw-51-reassemble-gate-1-evidence.md`
+severity: low
+reason: The claim that only the four test files and `urlSanitization.test.ts` differ between `92eed955f` and `5308b7edf` is true by construction of the commits but has no retained raw output; retain the command's output or drop the sentence.
+status: open
+
+### DW-53: `gate1EvidenceIndex.test.ts` no longer exercises the not-done branch of the Story 3.2 deliverable rows.
+origin: DW-51 implementation review 95a65e25, low finding
+location: server/wikiLint/benchmark/gate1EvidenceIndex.test.ts:598
+source_spec: `spec-dw-51-reassemble-gate-1-evidence.md`
+severity: low
+reason: With the Story 3.2 sprint key at `done`, only the done branch runs; the matrix row's error column ("no evidence for an ID: `gap` naming the missing item") is no longer proven by a test.
 status: open
