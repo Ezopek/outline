@@ -266,6 +266,22 @@ describe("readWikiSnapshot resource limits", () => {
     await expect(read(entries, user)).resolves.toEqual(exceeded);
   });
 
+  it("does not fail hierarchy rules only on the Markdown and link limits", async () => {
+    const { user, collection } = await buildCollectionWith([
+      "## One\n\n[a](/doc/00000000-0000-4000-8000-000000000001)",
+    ]);
+    const entries = entriesFor({ [collection.id]: hierarchyPolicy });
+
+    limits.documentMarkdownBytes = 0;
+    limits.totalMarkdownBytes = 0;
+    limits.linkReferences = 0;
+
+    await expect(read(entries, user)).resolves.toMatchObject({
+      ok: true,
+      snapshot: { collections: [{ documents: [{ content: null }] }] },
+    });
+  });
+
   it("fails when the structure nodes exceed their limit", async () => {
     const { user, collection } = await buildCollectionWith([]);
     const node = (children: NavigationNode[] = []): NavigationNode => ({

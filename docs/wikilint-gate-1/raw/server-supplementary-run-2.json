@@ -1,0 +1,827 @@
+{
+  "numTotalTestSuites": 18,
+  "numPassedTestSuites": 18,
+  "numFailedTestSuites": 0,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 76,
+  "numPassedTests": 76,
+  "numFailedTests": 0,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 1,
+    "total": 1,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1792805242700,
+  "success": true,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["master"],
+          "fullName": "master stops on a malformed policy before the migration check",
+          "status": "passed",
+          "title": "stops on a malformed policy before the migration check",
+          "duration": 4.229254999999739,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["master"],
+          "fullName": "master exports the policy bytes before the migration check",
+          "status": "passed",
+          "title": "exports the policy bytes before the migration check",
+          "duration": 8.736896000000343,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1792805256949,
+      "endTime": 1792805256961.7368,
+      "status": "passed",
+      "message": "",
+      "name": "/home/ezop/repos/outline-worktrees/story-3-2-close-layered-conformance-and-source-provenance-evidence-r2/server/index.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["the task handler"],
+          "fullName": "the task handler logs and tags only the job ID and name when an enforced task starts",
+          "status": "passed",
+          "title": "logs and tags only the job ID and name when an enforced task starts",
+          "duration": 3.1529489999998077,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["the task handler"],
+          "fullName": "the task handler logs only the job ID and name when an enforced task fails",
+          "status": "passed",
+          "title": "logs only the job ID and name when an enforced task fails",
+          "duration": 1.4541559999997844,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["the task handler"],
+          "fullName": "the task handler redacts an enforced task that this worker has not registered",
+          "status": "passed",
+          "title": "redacts an enforced task that this worker has not registered",
+          "duration": 0.6503790000001572,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["the task handler"],
+          "fullName": "the task handler logs and tags another task's props exactly as before",
+          "status": "passed",
+          "title": "logs and tags another task's props exactly as before",
+          "duration": 0.9835559999996804,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1792805256953,
+      "endTime": 1792805256959.9836,
+      "status": "passed",
+      "message": "",
+      "name": "/home/ezop/repos/outline-worktrees/story-3-2-close-layered-conformance-and-source-provenance-evidence-r2/server/services/worker.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["DocumentHelper", "replaceInternalUrls"],
+          "fullName": "DocumentHelper replaceInternalUrls should replace internal urls",
+          "status": "passed",
+          "title": "should replace internal urls",
+          "duration": 143.36499299999923,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "replaceInternalUrls"],
+          "fullName": "DocumentHelper replaceInternalUrls should not duplicate share path for URLs that already contain it",
+          "status": "passed",
+          "title": "should not duplicate share path for URLs that already contain it",
+          "duration": 104.00147300000026,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toJSON"],
+          "fullName": "DocumentHelper toJSON should return content directly if no transformation required",
+          "status": "passed",
+          "title": "should return content directly if no transformation required",
+          "duration": 100.80972199999997,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toJSON"],
+          "fullName": "DocumentHelper toJSON should remove marks and replace internal urls together",
+          "status": "passed",
+          "title": "should remove marks and replace internal urls together",
+          "duration": 103.7179930000002,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should return html",
+          "status": "passed",
+          "title": "should return html",
+          "duration": 353.3847660000001,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should apply the cspNonce to the injected mermaid script",
+          "status": "passed",
+          "title": "should apply the cspNonce to the injected mermaid script",
+          "duration": 334.92439900000045,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should not set a nonce attribute when cspNonce is not provided",
+          "status": "passed",
+          "title": "should not set a nonce attribute when cspNonce is not provided",
+          "duration": 97.53525600000012,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should render math and include the KaTeX stylesheet",
+          "status": "passed",
+          "title": "should render math and include the KaTeX stylesheet",
+          "duration": 150.47729299999992,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should not include the KaTeX stylesheet without math",
+          "status": "passed",
+          "title": "should not include the KaTeX stylesheet without math",
+          "duration": 130.4162379999998,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should number headings according to the document preference",
+          "status": "passed",
+          "title": "should number headings according to the document preference",
+          "duration": 97.65024199999971,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should not number headings without the document preference",
+          "status": "passed",
+          "title": "should not number headings without the document preference",
+          "duration": 97.57918800000061,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should number headings of a revision from its document",
+          "status": "passed",
+          "title": "should number headings of a revision from its document",
+          "duration": 81.01200599999993,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should render diff classes when changes provided",
+          "status": "passed",
+          "title": "should render diff classes when changes provided",
+          "duration": 183.9186409999993,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should render a notice through its React component with icon",
+          "status": "passed",
+          "title": "should render a notice through its React component with icon",
+          "duration": 242.09129800000028,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should render an embed through its React component as an iframe",
+          "status": "passed",
+          "title": "should render an embed through its React component as an iframe",
+          "duration": 197.4594130000005,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should render mentions with toDOM",
+          "status": "passed",
+          "title": "should render mentions with toDOM",
+          "duration": 100.6106749999999,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should include component styles unless styles are disabled",
+          "status": "passed",
+          "title": "should include component styles unless styles are disabled",
+          "duration": 120.276613,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should isolate concurrent exports",
+          "status": "passed",
+          "title": "should isolate concurrent exports",
+          "duration": 180.9823809999998,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toHTML"],
+          "fullName": "DocumentHelper toHTML should render diff decorations on component nodes",
+          "status": "passed",
+          "title": "should render diff decorations on component nodes",
+          "duration": 229.1778400000003,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "diff"],
+          "fullName": "DocumentHelper diff should return html with diff",
+          "status": "passed",
+          "title": "should return html with diff",
+          "duration": 353.1287620000003,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "parseMentions"],
+          "fullName": "DocumentHelper parseMentions should not parse normal links as mentions",
+          "status": "passed",
+          "title": "should not parse normal links as mentions",
+          "duration": 102.55987800000003,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "parseMentions"],
+          "fullName": "DocumentHelper parseMentions should return an array of mentions",
+          "status": "passed",
+          "title": "should return an array of mentions",
+          "duration": 95.2339350000002,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toEmailDiff"],
+          "fullName": "DocumentHelper toEmailDiff should render a compact diff",
+          "status": "passed",
+          "title": "should render a compact diff",
+          "duration": 74.678460000001,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toEmailDiff"],
+          "fullName": "DocumentHelper toEmailDiff should render diff for mark changes",
+          "status": "passed",
+          "title": "should render diff for mark changes",
+          "duration": 34.80707600000096,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toEmailDiff"],
+          "fullName": "DocumentHelper toEmailDiff should return undefined if no diff is detected",
+          "status": "passed",
+          "title": "should return undefined if no diff is detected",
+          "duration": 1.5591890000014246,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toEmailDiff"],
+          "fullName": "DocumentHelper toEmailDiff should trim table rows to show minimal diff including header",
+          "status": "passed",
+          "title": "should trim table rows to show minimal diff including header",
+          "duration": 44.64826499999981,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should preserve smart quotes rather than flattening them",
+          "status": "passed",
+          "title": "should preserve smart quotes rather than flattening them",
+          "duration": 99.76435800000036,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should not crash serializing a table with no rows",
+          "status": "passed",
+          "title": "should not crash serializing a table with no rows",
+          "duration": 78.60221900000033,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should not escape standalone square brackets",
+          "status": "passed",
+          "title": "should not escape standalone square brackets",
+          "duration": 89.40314500000022,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should escape literal inline-link syntax with nested brackets",
+          "status": "passed",
+          "title": "should escape literal inline-link syntax with nested brackets",
+          "duration": 60.91420400000061,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should export bullet lists inside table cells with br tags",
+          "status": "passed",
+          "title": "should export bullet lists inside table cells with br tags",
+          "duration": 91.40289400000074,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should export ordered lists inside table cells with br tags",
+          "status": "passed",
+          "title": "should export ordered lists inside table cells with br tags",
+          "duration": 93.45629899999949,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should pad table cells to match header width",
+          "status": "passed",
+          "title": "should pad table cells to match header width",
+          "duration": 187.10272599999917,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should export checkbox lists inside table cells with br tags",
+          "status": "passed",
+          "title": "should export checkbox lists inside table cells with br tags",
+          "duration": 99.38017899999977,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should export code fences inside table cells on a single line",
+          "status": "passed",
+          "title": "should export code fences inside table cells on a single line",
+          "duration": 102.57215999999971,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should export math blocks inside table cells on a single line",
+          "status": "passed",
+          "title": "should export math blocks inside table cells on a single line",
+          "duration": 93.45653899999888,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should export notice blocks inside table cells on a single line",
+          "status": "passed",
+          "title": "should export notice blocks inside table cells on a single line",
+          "duration": 136.10937600000034,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should include collection title by default",
+          "status": "passed",
+          "title": "should include collection title by default",
+          "duration": 59.13199800000075,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should include collection emoji icon in title",
+          "status": "passed",
+          "title": "should include collection emoji icon in title",
+          "duration": 202.01580699999977,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toMarkdown"],
+          "fullName": "DocumentHelper toMarkdown should not include collection title when includeTitle is false",
+          "status": "passed",
+          "title": "should not include collection title when includeTitle is false",
+          "duration": 40.38918100000046,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "toPlainText"],
+          "fullName": "DocumentHelper toPlainText should return only plain text",
+          "status": "passed",
+          "title": "should return only plain text",
+          "duration": 1.3700790000002598,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "getAnchorContent"],
+          "fullName": "DocumentHelper getAnchorContent should return the section content for a matching heading anchor",
+          "status": "passed",
+          "title": "should return the section content for a matching heading anchor",
+          "duration": 115.51852599999984,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "getAnchorContent"],
+          "fullName": "DocumentHelper getAnchorContent should accept an anchor with a leading hash",
+          "status": "passed",
+          "title": "should accept an anchor with a leading hash",
+          "duration": 96.74455999999918,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "getAnchorContent"],
+          "fullName": "DocumentHelper getAnchorContent should stop at the next heading of the same or higher level",
+          "status": "passed",
+          "title": "should stop at the next heading of the same or higher level",
+          "duration": 127.75976400000036,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "getAnchorContent"],
+          "fullName": "DocumentHelper getAnchorContent should resolve anchors for duplicate headings",
+          "status": "passed",
+          "title": "should resolve anchors for duplicate headings",
+          "duration": 78.52429500000108,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["DocumentHelper", "getAnchorContent"],
+          "fullName": "DocumentHelper getAnchorContent should return undefined when no heading matches",
+          "status": "passed",
+          "title": "should return undefined when no heading matches",
+          "duration": 71.92921799999931,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1792805248941,
+      "endTime": 1792805254623.9292,
+      "status": "passed",
+      "message": "",
+      "name": "/home/ezop/repos/outline-worktrees/story-3-2-close-layered-conformance-and-source-provenance-evidence-r2/server/models/helpers/DocumentHelper.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should only return activity events",
+          "status": "passed",
+          "title": "should only return activity events",
+          "duration": 292.0250529999994,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should return audit events",
+          "status": "passed",
+          "title": "should return audit events",
+          "duration": 105.3951649999999,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should allow filtering by actorId",
+          "status": "passed",
+          "title": "should allow filtering by actorId",
+          "duration": 132.38850000000002,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should not allow members to filter by actorId",
+          "status": "passed",
+          "title": "should not allow members to filter by actorId",
+          "duration": 254.06792300000052,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should allow filtering by actorId when it's the current user",
+          "status": "passed",
+          "title": "should allow filtering by actorId when it's the current user",
+          "duration": 207.60995500000172,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should allow filtering by documentId",
+          "status": "passed",
+          "title": "should allow filtering by documentId",
+          "duration": 112.7489229999992,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should not return events for documentId without authorization",
+          "status": "passed",
+          "title": "should not return events for documentId without authorization",
+          "duration": 124.3760170000005,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should allow filtering by event name",
+          "status": "passed",
+          "title": "should allow filtering by event name",
+          "duration": 131.26324399999976,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should allow filtering by events param",
+          "status": "passed",
+          "title": "should allow filtering by events param",
+          "duration": 193.73432200000025,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should return events with deleted actors",
+          "status": "passed",
+          "title": "should return events with deleted actors",
+          "duration": 118.14440099999956,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should require authorization for audit events",
+          "status": "passed",
+          "title": "should require authorization for audit events",
+          "duration": 58.13545900000099,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should require authentication",
+          "status": "passed",
+          "title": "should require authentication",
+          "duration": 6.514783999999054,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should not return events for private drafts created by other users",
+          "status": "passed",
+          "title": "should not return events for private drafts created by other users",
+          "duration": 232.2320810000001,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should return events without collection for admins",
+          "status": "passed",
+          "title": "should return events without collection for admins",
+          "duration": 96.944488000001,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list"],
+          "fullName": "#events.list should allow non-admins to list events when collectionId is specified",
+          "status": "passed",
+          "title": "should allow non-admins to list events when collectionId is specified",
+          "duration": 95.57081399999879,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list auditWikiLint"],
+          "fullName": "#events.list auditWikiLint lists only the team's summaries to an admin on a cloud URL",
+          "status": "passed",
+          "title": "lists only the team's summaries to an admin on a cloud URL",
+          "duration": 162.10491100000036,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list auditWikiLint"],
+          "fullName": "#events.list auditWikiLint lists only the team's summaries to an admin on a self-hosted URL",
+          "status": "passed",
+          "title": "lists only the team's summaries to an admin on a self-hosted URL",
+          "duration": 198.66381,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list auditWikiLint"],
+          "fullName": "#events.list auditWikiLint takes precedence over the audit log on a cloud URL",
+          "status": "passed",
+          "title": "takes precedence over the audit log on a cloud URL",
+          "duration": 193.12700500000028,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list auditWikiLint"],
+          "fullName": "#events.list auditWikiLint takes precedence over the audit log on a self-hosted URL",
+          "status": "passed",
+          "title": "takes precedence over the audit log on a self-hosted URL",
+          "duration": 305.15204300000005,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list auditWikiLint"],
+          "fullName": "#events.list auditWikiLint intersects the requested names with the summaries",
+          "status": "passed",
+          "title": "intersects the requested names with the summaries",
+          "duration": 201.29593399999976,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list auditWikiLint"],
+          "fullName": "#events.list auditWikiLint forbids a member without a document",
+          "status": "passed",
+          "title": "forbids a member without a document",
+          "duration": 266.5796889999983,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list auditWikiLint"],
+          "fullName": "#events.list auditWikiLint forbids a member with a document",
+          "status": "passed",
+          "title": "forbids a member with a document",
+          "duration": 332.4958340000012,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list auditWikiLint"],
+          "fullName": "#events.list auditWikiLint keeps the summaries out of the audit log and activity listings",
+          "status": "passed",
+          "title": "keeps the summaries out of the audit log and activity listings",
+          "duration": 306.91808800000035,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["#events.list auditWikiLint"],
+          "fullName": "#events.list auditWikiLint keeps the audit log forbidden on a self-hosted URL",
+          "status": "passed",
+          "title": "keeps the audit log forbidden on a self-hosted URL",
+          "duration": 164.2236069999999,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1792805250367,
+      "endTime": 1792805254659.2236,
+      "status": "passed",
+      "message": "",
+      "name": "/home/ezop/repos/outline-worktrees/story-3-2-close-layered-conformance-and-source-provenance-evidence-r2/server/routes/api/events/events.test.ts"
+    }
+  ]
+}

@@ -12,7 +12,7 @@ import {
 } from "./internalLinks";
 
 const ORIGIN = "https://wiki.example.test";
-const UUID = "3f6c2a1e-8b4d-4c3a-9e2f-1a2b3c4d5e6f";
+const UUID = "00000000-0000-4000-8000-1a2b3c4d5e6f";
 const UPPER_UUID = UUID.toUpperCase();
 const URL_ID = "AbCdEf1234";
 

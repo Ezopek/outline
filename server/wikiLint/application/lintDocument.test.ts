@@ -335,6 +335,27 @@ describe("lintDocument", () => {
       expect(outcome.kind === "failed" && outcome.cause).toBe(cause);
       expect(reader.readDocumentSnapshot).not.toHaveBeenCalled();
     });
+
+    it("reads the snapshot only after authorization completes", async () => {
+      const target = targetIn(STRUCTURE);
+      const reader = fakeReader(target);
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      reader.authorizeLintTarget.mockImplementation(async () => {
+        await gate;
+        return target;
+      });
+
+      const outcome = lint(reader);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(reader.readDocumentSnapshot).not.toHaveBeenCalled();
+      release();
+      await expect(outcome).resolves.toMatchObject({ kind: "result" });
+      expect(reader.readDocumentSnapshot).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("unconfigured", () => {
