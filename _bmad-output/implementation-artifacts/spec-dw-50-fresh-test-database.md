@@ -2,7 +2,7 @@
 title: 'DW-50: Start broad verification runs from a fresh test database'
 type: 'bugfix'
 created: '2026-10-25'
-status: 'ready-for-dev'
+status: 'in-progress'
 baseline_revision: '4d19bd3caa6f9ff9cfd81e671c81efa940e3cda5'
 review_loop_iteration: 0
 followup_review_recommended: false
