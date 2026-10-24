@@ -486,3 +486,11 @@ source_spec: `spec-dw-51-reassemble-gate-1-evidence.md`
 severity: low
 reason: With the Story 3.2 sprint key at `done`, only the done branch runs; the matrix row's error column ("no evidence for an ID: `gap` naming the missing item") is no longer proven by a test.
 status: open
+
+### DW-54: `ErrorTimedOutFileOperationsTask.test.ts` fails once stale file operations from earlier runs outnumber the task's limit in the persistent test database.
+origin: coordinator DW-50 reproduction loop, 2026-10-24 (runs 1 and 2 of 12 on the aged test database)
+location: server/queues/tasks/ErrorTimedOutFileOperationsTask.test.ts:51; server/queues/tasks/ErrorTimedOutFileOperationsTask.ts
+source_spec: `spec-dw-50-fresh-test-database.md`
+severity: medium
+reason: The task selects at most `limit` (100) file operations in `creating` or `uploading` that are older than 12 hours across all teams, without an order. Every suite run leaves about seven `creating` rows behind, and after 12 hours they qualify; on 2026-10-24 about 430 had accumulated from the day's earlier runs, so each invocation errored 100 other rows and missed the test's own (`expected +0 to deeply equal 1`). Run alone after the backlog was drained, the file passed 3 of 3. The upstream test assumes a fresh database, as upstream CI provides; fixed by starting broad runs from `scripts/test-db.sh reset` (DW-50), not by changing the upstream test.
+status: open
