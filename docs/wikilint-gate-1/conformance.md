@@ -6,6 +6,38 @@ Source provenance is in [provenance.md](provenance.md). The requirement map is i
 
 The three runs of `test:wikilint` and the three runs of each supplementary command passed, and per command the three runs have identical per-test names and statuses. The broad command skipped only the expected smoke-helper test, and the supplementary commands skipped nothing. No run had a todo. `corepack yarn build` exited `1` in this worktree (see Commands). That is a `gap` for AC 7. The seam review found three injected dependencies outside the seven AD-18 kinds. That is a `gap` for AC 4. The worker's tool policy denied provenance check (b). The coordinator then ran it read-only and recorded `157` = `157`, so (b) passes. With (a) to (e) all passing, AC 6 is proven ([provenance.md](provenance.md)).
 
+## Rerun at HEAD `867f96b98` (driver `drv-b90970ec9424`, pending a coordinator decision)
+
+This attempt froze the source again and repeated every retained command. Its raw reports are not yet retained. The tool policy limits the worker to this worktree, and it denied `sha256sum`, `Read` and `ls` on the reports under `/tmp/wikilint-gate-1-r3/`. So until the coordinator decides, the SHA-256 values, the formatted copies and the three-run comparison for these runs are **pending**. The files under `raw/` and the tables in the sections after this one still belong to the earlier freeze at `92eed955f`.
+
+**Retained source**, recorded at 2026-10-24T10:04:40Z, before run 1:
+
+- `git rev-parse HEAD`: `867f96b9825b9b8528ab59535592ee5374a56c8e`
+- `git status --porcelain`: `?? _bmad-output/coordinator/`. This is the coordinator's own state, so no source or test file was modified or untracked.
+- `git diff --stat HEAD`: empty.
+- The story's source and test changes are all in ancestors of HEAD (attempt commit `e17fb654716f21d736dcf29cccbe72bb7fe1ad67`). `git diff --stat 92eed955f83fdb93d84a2b3ae1b3ebef19f15497 HEAD -- server shared app plugins` lists exactly the four files below (243 insertions, 1 deletion). Their `sha256sum` values before run 1 and again at 2026-10-24T10:24:28Z, after the last command, match each other and match the earlier freeze's table: `wikiReader.limits.test.ts` `caf45e0f…c339b5`, `lintDocument.test.ts` `3a1e859c…b4fb2f9`, `internalLinks.test.ts` `c2a3ca5a…ac68c13`, `layout.test.ts` `9e19c0fb…d31e272`. `git status --porcelain` after the last command was unchanged.
+
+**Toolchain and database:** the same values as the earlier freeze (Node.js `v24.16.0`, Yarn `4.11.0`, Vitest `vitest/4.1.10 linux-x64 node-v24.16.0`). `SHOW server_version` returned `14.24` before run 1. The P7 line below applies unchanged. `WIKILINT_BENCH_SMOKE_OUT` was unset.
+
+**Commands.** Each was run plain, with no pipe, `tail` or `grep`. Vitest wrote each JSON report to `/tmp/wikilint-gate-1-r3/<name>.json`.
+
+| #   | Command                                                                                                                        | Exit | Files                     | Tests passed / skipped / total | Start (UTC) | Duration | Original SHA-256 | Retained copy |
+| --- | ------------------------------------------------------------------------------------------------------------------------------ | ---- | ------------------------- | ------------------------------ | ----------- | -------- | ---------------- | ------------- |
+| 1   | `corepack yarn test:wikilint --reporter=default --reporter=json --outputFile=/tmp/wikilint-gate-1-r3/test-wikilint-run-1.json` | 0    | 98 passed, 1 skipped (99) | 2279 / 1 / 2280                | 10:05:02    | 322.74 s | pending          | pending       |
+| 2   | same with `test-wikilint-run-2.json`                                                                                           | 0    | 98 passed, 1 skipped (99) | 2279 / 1 / 2280                | 10:11:07    | 339.84 s | pending          | pending       |
+| 3   | same with `test-wikilint-run-3.json`                                                                                           | 0    | 98 passed, 1 skipped (99) | 2279 / 1 / 2280                | 10:17:01    | 323.79 s | pending          | pending       |
+| S1  | the shared supplementary line from Boundaries with `--outputFile=/tmp/wikilint-gate-1-r3/shared-supplementary-run-1.json`      | 0    | 4 passed (4)              | 734 / 0 / 734                  | 10:22:41    | 2.88 s   | pending          | pending       |
+| S2  | same with `shared-supplementary-run-2.json`                                                                                    | 0    | 4 passed (4)              | 734 / 0 / 734                  | 10:22:47    | 2.87 s   | pending          | pending       |
+| S3  | same with `shared-supplementary-run-3.json`                                                                                    | 0    | 4 passed (4)              | 734 / 0 / 734                  | 10:22:51    | 2.78 s   | pending          | pending       |
+| V1  | the server supplementary line from Boundaries with `--outputFile=/tmp/wikilint-gate-1-r3/server-supplementary-run-1.json`      | 0    | 4 passed (4)              | 76 / 0 / 76                    | 10:22:54    | 15.15 s  | pending          | pending       |
+| V2  | same with `server-supplementary-run-2.json`                                                                                    | 0    | 4 passed (4)              | 76 / 0 / 76                    | 10:23:13    | 14.64 s  | pending          | pending       |
+| V3  | same with `server-supplementary-run-3.json`                                                                                    | 0    | 4 passed (4)              | 76 / 0 / 76                    | 10:23:32    | 14.63 s  | pending          | pending       |
+| B   | `corepack yarn build` (local build only)                                                                                       | 1    | —                         | —                              | after V3    | —        | —                | —             |
+
+The console showed 0 failed and 0 todo for every run. In each broad run the only skipped file was `↓ server/wikiLint/benchmark/smokeRun.test.ts (1 test | 1 skipped)`, the expected skip of the non-conformance helper. The build failed the same way as before. `corepack yarn build:i18n` alone exited `1` with `Error: ENOENT: no such file or directory, stat '/home/ezop/repos/outline/node_modules/node_modules'`, and `corepack yarn build:server` alone exited `0` (`Clean previous build…`, `Compiling…`, `Copying static files…`, `Done!`). The AC 7 build `gap` below stands.
+
+**Three-run comparison:** pending. The per-test names and statuses are only in the JSON reports, and the worker cannot read them.
+
 ## Retained source
 
 Recorded at 2026-10-24T01:11:03Z, before run 1.
