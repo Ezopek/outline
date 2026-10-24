@@ -72,7 +72,7 @@ const D9_CONSTANT_IDS = [
   "D9-SET-LOCAL-FLOOR",
 ];
 
-/** The Story 3.2 deliverables, each a gap until Story 3.2 closes it. */
+/** The Story 3.2 deliverables, each closed by its Story 3.2 evidence file. */
 const STORY_3_2_IDS = [
   "S3.2-CONFORMANCE",
   "S3.2-MERGE-BASE",
@@ -545,7 +545,7 @@ describe("the retained Gate 1 evidence", () => {
     );
   });
 
-  it("records every Story 3.2 deliverable as a gap closed by Story 3.2 while it is not done", () => {
+  it("records every Story 3.2 deliverable as a gap closed by Story 3.2 while it is not done, and from its evidence once it is", () => {
     const sprint = read(
       path.join(
         REPOSITORY_ROOT,
@@ -560,7 +560,28 @@ describe("the retained Gate 1 evidence", () => {
         expect(row(id).Result).toBe("gap");
         expect(row(id).Requirement).toContain("closing source Story 3.2");
       }
+      return;
     }
+    const evidence: Record<string, string> = {
+      "S3.2-CONFORMANCE": "](conformance.md)",
+      "S3.2-MERGE-BASE": "](provenance.md)",
+      "S3.2-BACKPORTS": "](provenance.md)",
+      "S3.2-GENERIC-DATA": "](conformance.md)",
+    };
+    for (const id of STORY_3_2_IDS) {
+      expect(row(id).Link).toContain(evidence[id]);
+      expect(row(id)["Source revision"]).toContain("`55fbe63b8c99`");
+      expect(`${row(id).Requirement} ${row(id).Link}`).not.toMatch(
+        /closing source Story 3\.2|`backlog`/
+      );
+    }
+    for (const id of ["AD-18", "S3.2-CONFORMANCE"]) {
+      expect(row(id).Link).toContain("Amendment Record row of 2026-10-24");
+    }
+    expect(row("S3.2-CONFORMANCE").Link).toContain(
+      "at 2026-10-24T12:04:00Z on HEAD `5308b7edf`"
+    );
+    expect(index).not.toContain("closing source Story 3.2");
   });
 
   it("links the D-9 tool and link-form rows, the destination inventory and the move/restore compatibility rows to their fixtures", () => {

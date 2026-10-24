@@ -2,7 +2,7 @@
 
 This record states the Gate 1 implementation-readiness decision (Story 3.4, AC 2, 3 and 5–8). It is derived from [`evidence-index.md`](evidence-index.md). The collocated test [`gate1EvidenceIndex.test.ts`](../../server/wikiLint/benchmark/gate1EvidenceIndex.test.ts) recomputes the decision and the blocking rows from the index and fails if this record differs.
 
-The record is re-assembled after Story 3.2 and the Story 3.3 reference run. Gate 1 readiness is separate from Gates 2–4: this record authorizes no image publication, deployment or rollout.
+Story 3.4 assembled this record while Story 3.2 was `backlog`. It is re-assembled after Story 3.2 (DW-51) under the same rules, and is re-assembled again after the Story 3.3 reference run. Gate 1 readiness is separate from Gates 2–4: this record authorizes no image publication, deployment or rollout.
 
 ## Decision
 
@@ -10,148 +10,74 @@ Decision: `not ready`
 
 Rule (AC 2): the decision is `ready` only when both hold: (a) every SM-I row and every phase-blocking row is `pass`, and (b) no row of the index is `fail`, `gap`, `unverified` or `contradictory`. Condition (a) is necessary but not sufficient. Any other state is `not ready`, and every blocking row is listed below. No waiver applies. An `accepted-gap` row does not block.
 
+Condition (a) fails on SM-I2, SM-I5 and the three D-9 constant rows. Condition (b) fails on every row listed below.
+
 ### Blocking rows
 
-- `CAP-1` — `unverified`
-- `CAP-2` — `unverified`
-- `CAP-3` — `unverified`
-- `CAP-4` — `unverified`
-- `CAP-5` — `unverified`
-- `CAP-6` — `unverified`
-- `FR-1` — `unverified`
-- `FR-2` — `unverified`
-- `FR-3` — `unverified`
-- `FR-4` — `unverified`
-- `FR-5` — `unverified`
-- `FR-6` — `unverified`
-- `FR-7` — `unverified`
-- `FR-8` — `unverified`
-- `FR-9` — `unverified`
-- `FR-10` — `unverified`
-- `FR-11` — `unverified`
-- `FR-12` — `unverified`
-- `FR-13` — `unverified`
-- `FR-14` — `unverified`
-- `FR-15` — `unverified`
-- `FR-16` — `unverified`
-- `FR-17` — `unverified`
-- `FR-18` — `unverified`
-- `FR-19` — `unverified`
-- `FR-20` — `unverified`
-- `FR-21` — `unverified`
-- `FR-22` — `unverified`
-- `FR-23` — `unverified`
 - `NFR-1` — `gap`
 - `NFR-2` — `gap`
 - `NFR-3` — `gap`
 - `NFR-4` — `gap`
 - `NFR-5` — `gap`
-- `NFR-6` — `unverified`
-- `NFR-7` — `unverified`
-- `NFR-8` — `unverified`
-- `NFR-9` — `unverified`
-- `NFR-10` — `unverified`
-- `NFR-11` — `unverified`
-- `NFR-12` — `unverified`
-- `NFR-13` — `unverified`
-- `NFR-14` — `unverified`
-- `NFR-15` — `unverified`
-- `NFR-16` — `unverified`
-- `NFR-17` — `unverified`
-- `NFR-18` — `gap`
-- `NFR-19` — `unverified`
-- `NFR-20` — `unverified`
-- `NFR-21` — `gap`
-- `NFR-22` — `unverified`
-- `NFR-23` — `unverified`
-- `NFR-24` — `unverified`
-- `NFR-25` — `gap`
-- `NFR-26` — `gap`
-- `NFR-27` — `unverified`
-- `SM-I1` — `gap`
-- `SM-I2` — `gap`
-- `SM-I3` — `unverified`
-- `SM-I4` — `unverified`
+- `SM-I2` — `contradictory`
 - `SM-I5` — `gap`
-- `SM-I6` — `unverified`
-- `SM-I7` — `gap`
-- `SM-C1` — `unverified`
-- `SM-C2` — `unverified`
-- `SM-C3` — `unverified`
-- `SM-C4` — `unverified`
-- `SM-C5` — `unverified`
-- `SM-C6` — `unverified`
-- `SM-C7` — `unverified`
-- `G1-BASELINE` — `gap`
 - `G1-SM-I` — `gap`
 - `G1-BLOCKING-DECISIONS` — `gap`
-- `G1-GENERIC-ARTIFACTS` — `gap`
-- `G1-BACKPORTS` — `gap`
-- `AD-1` — `unverified`
-- `AD-2` — `unverified`
-- `AD-3` — `unverified`
-- `AD-4` — `unverified`
-- `AD-5` — `unverified`
-- `AD-6` — `unverified`
-- `AD-7` — `unverified`
-- `AD-8` — `unverified`
-- `AD-9` — `unverified`
-- `AD-10` — `unverified`
-- `AD-11` — `unverified`
-- `AD-12` — `unverified`
-- `AD-13` — `unverified`
-- `AD-14` — `unverified`
-- `AD-15` — `unverified`
-- `AD-16` — `unverified`
 - `AD-17` — `gap`
-- `AD-18` — `gap`
-- `AD-19` — `unverified`
-- `AD-20` — `unverified`
-- `D9-INPUT-SCHEMAS` — `unverified`
-- `D9-ANNOTATIONS` — `unverified`
-- `D9-TOKEN-SCOPE` — `unverified`
-- `D9-LINK-FORMS` — `unverified`
 - `D9-WRITE-ELIGIBILITY` — `gap`
 - `D9-STOP-MARGIN` — `gap`
 - `D9-SET-LOCAL-FLOOR` — `gap`
-- `DS-1` — `unverified`
-- `DS-2` — `unverified`
-- `DS-3` — `unverified`
-- `DS-4` — `unverified`
-- `DS-5` — `unverified`
-- `DS-6` — `unverified`
-- `MR-MOVE` — `unverified`
-- `MR-RESTORE` — `unverified`
-- `S3.2-CONFORMANCE` — `gap`
-- `S3.2-MERGE-BASE` — `gap`
-- `S3.2-BACKPORTS` — `gap`
-- `S3.2-GENERIC-DATA` — `gap`
 - `DW-4` — `gap`
 - `DW-5` — `gap`
 - `DW-6` — `contradictory`
 
+What each blocker needs, as its source states it:
+
+- NFR-1–NFR-5, SM-I5, AD-17 and the three D-9 constant rows wait for the AD-17 reference run of Story 3.3. Its only retained manifest is a smoke run, and every constant is provisional.
+- SM-I2 is `contradictory`: the three retained runs are identical per test, but DW-50 (`status: open`) records one coordinator verify run of the same source that failed 8 tests with 5000 ms timeouts. The ledger says Gate 1 cannot rely on the determinism of the whole suite until that failure is reproduced.
+- G1-SM-I follows from SM-I2 and SM-I5. G1-BLOCKING-DECISIONS follows from the three D-9 constant rows.
+- DW-4, DW-5 and DW-6 wait for the Story 3.3 reference-profile evidence (AC 8 below).
+
 ## Baseline and source provenance (AC 3)
 
-| Item                | Value                                                                                                             | Index row         | Result | Closing source |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------- | ------ | -------------- |
-| Exact baseline      | `v1.10.1^{}` / `4a5a616a21be800257dc11cef4263d0dd0412156` (tag object `9686f7264506a910ed87a4ad8704bafd361a3393`) | G1-BASELINE       | `gap`  | Story 3.2      |
-| Merge-base          | not retained                                                                                                      | S3.2-MERGE-BASE   | `gap`  | Story 3.2      |
-| Backport inventory  | not retained                                                                                                      | S3.2-BACKPORTS    | `gap`  | Story 3.2      |
-| Generic-data review | not retained                                                                                                      | S3.2-GENERIC-DATA | `gap`  | Story 3.2      |
+| Item                | Value                                                                                                                                                                                                                        | Index row         | Result | Source                                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ------ | --------------------------------------------------------------- |
+| Exact baseline      | `v1.10.1^{}` / `4a5a616a21be800257dc11cef4263d0dd0412156` (tag object `9686f7264506a910ed87a4ad8704bafd361a3393`)                                                                                                            | G1-BASELINE       | `pass` | [provenance.md](provenance.md) check (a)                        |
+| Merge-base          | `git merge-base HEAD upstream/main` printed `4a5a616a21be800257dc11cef4263d0dd0412156`; no merge brought in upstream history (check (c)); the container-block patch-edit fix `c17d2c52b3a9` is excluded (checks (d) and (e)) | S3.2-MERGE-BASE   | `pass` | [provenance.md](provenance.md) checks (a), (c), (d), (e)        |
+| Backport inventory  | `none`, confirmed by patch equivalence (check (b), run by the coordinator: `157` = `157` at `2373739c7`, `159` = `159` at `35019faa4`)                                                                                       | S3.2-BACKPORTS    | `pass` | [provenance.md](provenance.md) check (b) and Backport inventory |
+| Generic-data review | no hit remains in the reusable scope as integrated (the retained tree plus operator commit `1dc68a904`)                                                                                                                      | S3.2-GENERIC-DATA | `pass` | [conformance.md](conformance.md) Generic-data review            |
 
-Story 3.2 is `backlog`. This story produces no Story 3.2 evidence.
+Story 3.2 is `done`, accepted at `55fbe63b8c9960b292deeecf646e4e10e572dd8c` ([Coordinator Result](../../_bmad-output/implementation-artifacts/spec-3-2-close-layered-conformance-and-source-provenance-evidence-r2.md)). This re-assembly re-ran none of its runs or checks.
 
 ## Startup and readiness fingerprint (Story 3.1)
 
-Story 3.1 is `done` with accepted commit `58a3b2824222d8deb0f91222ebdf1940cb8e7415` ([Coordinator Result](../../_bmad-output/implementation-artifacts/spec-3-1-verify-safe-startup-and-readiness-policy-identity.md)). Its Coordinator Result reports `vitest: pass`, but no raw run output is retained. The fingerprint result is therefore `unverified` (index row AD-19), covered by [`policySet.test.ts`](../../server/wikiLint/core/policySet.test.ts), [`policyConfig.test.ts`](../../server/wikiLint/adapters/policyConfig.test.ts) and [`healthCheck.test.ts`](../../server/wikiLint/adapters/healthCheck.test.ts).
+Story 3.1 is `done` with accepted commit `58a3b2824222d8deb0f91222ebdf1940cb8e7415` ([Coordinator Result](../../_bmad-output/implementation-artifacts/spec-3-1-verify-safe-startup-and-readiness-policy-identity.md)). Its fingerprint and readiness tests, [`policySet.test.ts`](../../server/wikiLint/core/policySet.test.ts), [`policyConfig.test.ts`](../../server/wikiLint/adapters/policyConfig.test.ts) and [`healthCheck.test.ts`](../../server/wikiLint/adapters/healthCheck.test.ts), passed in runs 1–3 of `test:wikilint` retained by Story 3.2, and `server/index.test.ts` passed in V1–V3. The fingerprint result is therefore `pass` (index row AD-19).
 
 ## Conformance results
 
-No conformance run is retained. The AD-18 layered suite and the requirement coverage map are Story 3.2 deliverables (index row S3.2-CONFORMANCE, `gap`, closing source Story 3.2). Every row backed only by collocated tests is `unverified`.
+The Story 3.2 conformance evidence is retained in [`conformance.md`](conformance.md), with the requirement map in [`coverage.md`](coverage.md) and the reports under [`raw/`](raw/test-wikilint-run-1.json) (index row S3.2-CONFORMANCE, `pass`):
+
+- Runs 1–3 of `corepack yarn test:wikilint` passed: 2279 passed and 1 expected skip (the Story 3.3 smoke helper) of 2280 each. S1–S3 (shared supplementary) passed 734 of 734 each, and V1–V3 (server supplementary) passed 76 of 76 each. Per command, the three runs have identical per-test names and statuses.
+- Every AD-18 layer is traced to a test that a retained command ran (AC 1). Every listed ID has a coverage row (AC 2). The layout and no-skip assertion of `server/wikiLint/layout.test.ts` passed.
+- AC 4: every injected dependency is one of the ten seam kinds of AD-18 as amended by the operator decision of 2026-10-24 ([Spine AD-18, Amendment Record row of 2026-10-24](../../_bmad-output/planning-artifacts/architecture/architecture-outline-2026-09-21/ARCHITECTURE-SPINE.md)). The three seams the review had left outside the seven kinds are `schedule` (job scheduling), the `AttemptPlan` members (attempt-phase implementations) and `setTimingProbe` (the process timing probe). Index rows AD-18 and NFR-26 are `pass`.
+- AC 7: under the operator decision of 2026-10-24, the coordinator ran `corepack yarn build` from the main worktree root at 2026-10-24T12:04:00Z on HEAD `5308b7edfeb13b1b4c645245301b7715c6466b62`. It exited `0` and ended with `Done!`. The earlier exit `1` in the story worktree came from a stray `node_modules/node_modules` symlink, which the coordinator removed before this run. The build was local only and published nothing.
+- Every test row of the index whose linked test files passed in all three runs of their command is `pass`, linking the run reports.
+
+## Open deferred-work entries bearing on Gate 1
+
+Statuses are taken from [deferred-work.md](../../_bmad-output/implementation-artifacts/deferred-work.md).
+
+| Entry | Ledger status     | Where it applies                                                                                                                                                                                                                                                                                                                                                                          |
+| ----- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DW-4  | `open`            | index row DW-4 (`gap`); AC 8 below                                                                                                                                                                                                                                                                                                                                                        |
+| DW-5  | `open`            | index row DW-5 (`gap`); AC 8 below                                                                                                                                                                                                                                                                                                                                                        |
+| DW-6  | `done 2026-10-04` | index row DW-6 (`contradictory` with the Story 3.3 held-pool re-run); AC 8 below                                                                                                                                                                                                                                                                                                          |
+| DW-13 | `open`            | index row FR-7 (`pass`). Its finding F-5, a collection revoked between lookup and snapshot, was accepted as contract behavior under AD-16 and the action item withdrawn ([epic-1-retro-2026-10-03.md](../../_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md) F-5). The ledger still shows it open, so it is recorded here and is not an accepted residual of this record |
+| DW-50 | `open`            | index row SM-I2 (`contradictory`). The failing verify run timed out in `server/queues/tasks/DocumentPublishedNotificationsTask.test.ts` and `server/wikiLint/adapters/auditEvents.test.ts`. The rows that link `auditEvents.test.ts` (FR-19, FR-21, NFR-14, NFR-17, AD-14) rest on the three retained runs, in which it passed                                                            |
 
 ## AD-17 benchmark manifest
 
-The only retained manifest is the Story 3.3 smoke manifest [`benchmark/smoke-manifest.json`](benchmark/smoke-manifest.json): `gate1Eligible: false`, `derivation.gate1: not ready`, source commit `0fa7969ca377656f5bda32974e789181cec58500`, retained at the Story 3.3 accepted commit `647e7b0a72a373cebeaf07f7361cb8fa310fffea`. It is not Gate 1 evidence. Every constant in [`benchmark/constants.md`](benchmark/constants.md) is `provisional — open, not Gate 1 evidence`, so the three D-9 constant rows (D9-WRITE-ELIGIBILITY, D9-STOP-MARGIN, D9-SET-LOCAL-FLOOR) are `gap` and block. The AD-17 reference manifest is open (index row AD-17, `gap`). The Story 3.3 constants stay provisional; this story changes no value.
+The only retained manifest is the Story 3.3 smoke manifest [`benchmark/smoke-manifest.json`](benchmark/smoke-manifest.json): `gate1Eligible: false`, `derivation.gate1: not ready`, source commit `0fa7969ca377656f5bda32974e789181cec58500`, retained at the Story 3.3 accepted commit `647e7b0a72a373cebeaf07f7361cb8fa310fffea`. It is not Gate 1 evidence. Every constant in [`benchmark/constants.md`](benchmark/constants.md) is `provisional — open, not Gate 1 evidence`, so the three D-9 constant rows (D9-WRITE-ELIGIBILITY, D9-STOP-MARGIN, D9-SET-LOCAL-FLOOR) are `gap` and block. The AD-17 reference manifest is open (index row AD-17, `gap`). The Story 3.3 constants stay provisional; this record changes no value.
 
 ## Accepted evidence gaps (AC 3)
 
@@ -164,11 +90,11 @@ Recording these gaps changes no functional outcome, response or audit behavior.
 
 ## Conflict state and phase-blocking set (AC 5)
 
-No PRD and spine conflict is open: C-1 to C-7 and RI-1 to RI-4 and RI-6 are closed by applied amendments. The three architect items of `sprint-change-proposal-2026-10-01.md` §4.6 were decided in the spine amendment of 2026-10-02 and are evidenced in Stories 1.3, 1.5, 1.6 and 1.7.
+No PRD and spine conflict is open: C-1 to C-7 and RI-1 to RI-4 and RI-6 are closed by applied amendments. The three architect items of `sprint-change-proposal-2026-10-01.md` §4.6 were decided in the spine amendment of 2026-10-02 and are evidenced in Stories 1.3, 1.5, 1.6 and 1.7. The AD-18 amendment of 2026-10-24 (ten seam kinds) changed no identifier, binding or adopted status.
 
 Only the D-9 items are phase-blocking:
 
-- the tool input schemas, annotations and token-scope gating, and the L1–L11 link forms, each fixed by its story and proven by fixtures (index rows D9-INPUT-SCHEMAS, D9-ANNOTATIONS, D9-TOKEN-SCOPE, D9-LINK-FORMS; each `unverified`);
+- the tool input schemas, annotations and token-scope gating, and the L1–L11 link forms, each fixed by its story and proven by fixtures that passed in the retained runs (index rows D9-INPUT-SCHEMAS, D9-ANNOTATIONS, D9-TOKEN-SCOPE, D9-LINK-FORMS; each `pass`);
 - the write-eligibility constants, the stop margin and the `SET LOCAL` floor, each fixed from AD-17 evidence in Story 3.3 (index rows D9-WRITE-ELIGIBILITY, D9-STOP-MARGIN, D9-SET-LOCAL-FLOOR; each `gap`).
 
 ## Residuals and non-blocking items (AC 5)
