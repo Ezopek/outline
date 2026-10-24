@@ -2,7 +2,7 @@
 title: 'DW-50: Start broad verification runs from a fresh test database'
 type: 'bugfix'
 created: '2026-10-25'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '4d19bd3caa6f9ff9cfd81e671c81efa940e3cda5'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -70,3 +70,11 @@ DW-50's 5-second client stall was not reproduced in either series; the inference
 ## Spec Change Log
 
 ## Review Triage Log
+
+## Coordinator Result
+
+- acceptance: `8057cd22-0c44-464b-9e75-bb2e002125cd`
+- accepted commit: `91fd1a53b43f47401507ef4762d100b950d8e4fc`
+- review: `22644bdd-e102-496e-9c09-957371dee0c2`
+- verification: syntax: pass, reset-refuses-busy: pass, reset: pass, wikilint: pass
+- decisions: none

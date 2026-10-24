@@ -74,7 +74,7 @@ development_status:
   dw-46-shared-table-lock-test-isolation: done
   dw-47-exclusive-database-test-mutex: done
   dw-51-reassemble-gate-1-evidence: done
-  dw-50-fresh-test-database: in-progress
+  dw-50-fresh-test-database: done
 
   epic-3: done
   3-1-verify-safe-startup-and-readiness-policy-identity: done
