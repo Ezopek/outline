@@ -31,14 +31,14 @@ DW-50's 5-second client stall was not reproduced in either series; the inference
 - `reset` drops a database only on the server whose data directory this script owns (`$data/postmaster.pid` present for the listening server). When something else listens on the port, it fails with a clear message and changes nothing.
 - `reset` never terminates other sessions. When another session is connected to the database, it fails with a clear message that says so and leaves the database in place.
 - `ensure`, `status` and `stop` keep their behaviour; the usage text and the header comment list `reset`.
-- `AGENTS.md` and `CLAUDE.md` (the same "Running and verifying" bullet in each) say that a broad verification run, and every run retained as evidence, starts from `scripts/test-db.sh reset`, and that `ensure` stays enough for targeted runs.
+- The coordinator, not the worker, updates `AGENTS.md` and `CLAUDE.md` (protected rules files) at finish: the "Running and verifying" bullet in each says that a broad verification run, and every run retained as evidence, starts from `scripts/test-db.sh reset`, and that `ensure` stays enough for targeted runs.
 - The script keeps its existing conventions (`set -euo pipefail`, `die`, the bounded `listening` probe).
 
 **Never:**
 - Do not use `DROP DATABASE … WITH (FORCE)`, `pg_terminate_backend` or any other way of ending another session.
 - Do not change PostgreSQL durability settings (`fsync`, `synchronous_commit`, `full_page_writes`); the measurements show they are not needed.
 - Do not change Vitest configuration, `package.json`, server code or any test, including the upstream `ErrorTimedOutFileOperationsTask.test.ts`.
-- Do not edit the deferred-work ledger, the sprint board or this spec.
+- Do not edit `AGENTS.md`, `CLAUDE.md`, the deferred-work ledger, the sprint board or this spec.
 
 ## I/O & Edge-Case Matrix
 
@@ -54,14 +54,13 @@ DW-50's 5-second client stall was not reproduced in either series; the inference
 ## Code Map
 
 - `scripts/test-db.sh` -- `ensure|status|stop`; add `reset`.
-- `AGENTS.md:31`, `CLAUDE.md:31` -- the "DB-backed server tests" bullet under "Running and verifying".
+- `AGENTS.md:31`, `CLAUDE.md:31` -- the "DB-backed server tests" bullet; protected, updated by the coordinator at finish. Read-only for the worker.
 - `.env.test` -- `DATABASE_URL` of the test database. Read-only.
 
 ## Tasks & Acceptance
 
 **Execution:**
 - `scripts/test-db.sh` -- add `reset` as described.
-- `AGENTS.md`, `CLAUDE.md` -- document when to use `reset`.
 
 **Acceptance Criteria:**
 - Given the script's own server with data in the test database, when `scripts/test-db.sh reset` runs with no other session connected, then it exits 0, prints the ready line, and the database holds only migration state.
