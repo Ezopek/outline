@@ -1561,7 +1561,7 @@ AD: AD-1–AD-20 through the AD-18 layers, with AD-18 and AD-19 governing
 
 4. **Given** dependency and seam review
    **When** core imports and test injection points are inspected
-   **Then** the AD-1 forbidden-import boundary holds and only the minimal seams of the seven kinds permitted by AD-18 exist (snapshot reader, deadline/clock, audit writer, media stager, configuration values, admission control, and attempt-phase callbacks)
+   **Then** the AD-1 forbidden-import boundary holds and only the minimal seams of the ten kinds permitted by AD-18 exist (snapshot reader, deadline/clock, audit writer, media stager, configuration values, admission control, attempt-phase callbacks, job scheduling, attempt-phase implementations, and a process timing probe)
    **And** a source-layout assertion proves every Gate 1 test is collocated with the code it covers under baseline conventions, with no new test directory, parallel framework tree, or external service.
 
 5. **Given** reusable source, interfaces, tool descriptions, examples, fixtures, and generic documentation
