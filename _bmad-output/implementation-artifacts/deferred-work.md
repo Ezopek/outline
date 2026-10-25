@@ -539,4 +539,13 @@ location: docs/wikilint-gate-1/evidence-index.md; docs/wikilint-gate-1/decision-
 source_spec: `spec-dw-59-reassemble-gate-1-after-ad17.md`
 severity: medium
 reason: The index lists 16 blocking rows that wait for evidence that is now retained (benchmark/reference-manifest.json, raw/test-wikilint-nas-run-{1,2,3}.json) or for decisions now taken (DW-56, the Story 3.3 criterion 9 amendment, DW-58).
+resolution: story dw-59-reassemble-gate-1-after-ad17 (accepted commit 0ef976992, review d8b67380): `docs/wikilint-gate-1/evidence-index.md` has 121 rows, 117 `pass` and the 4 `accepted-gap` rows it already had (D-6, AD-20-ROW-7, D9-ORPHAN-SWEEPER, D9-MIB-CAP); the coordinator compared the Result column of every row against the index at the story's base commit d04e4713f and found exactly the 16 rows that blocked DW-51 changed, each from `gap` or `contradictory` to `pass`, each linking retained evidence under `docs/wikilint-gate-1/benchmark/` or `raw/`. `docs/wikilint-gate-1/decision-record.md` states `Decision: ready` and `No blocking row remains.`, and `server/wikiLint/benchmark/gate1EvidenceIndex.test.ts` (27 tests) recomputes both and passes. The low finding on the NFR-5 units was fixed by the coordinator in the closing commit; the two test-coverage findings are DW-60.
+status: done 2026-10-25
+
+### DW-60: `gate1EvidenceIndex.test.ts` does not exercise the `contradictory` branch for SM-I2 or the `gap` branch for a non-pass AD-17 manifest item.
+origin: DW-59 implementation review d8b67380, one medium and one low finding (test coverage)
+location: server/wikiLint/benchmark/gate1EvidenceIndex.test.ts:581, :608
+source_spec: `spec-dw-59-reassemble-gate-1-after-ad17.md`
+severity: medium
+reason: The index test recomputes completeness, the decision and the blocking rows from the stated results, but no case checks that SM-I2 turns `contradictory` when its sources disagree, or that an AD-17-dependent row stays `gap` when the reference manifest has a non-pass budget or a missing item. With today's all-pass data the decision is right; a future re-assembly could state a wrong result that the test would not catch.
 status: open
