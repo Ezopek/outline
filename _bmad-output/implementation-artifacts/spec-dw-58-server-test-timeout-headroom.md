@@ -2,7 +2,7 @@
 title: 'DW-58: Give the server test project a 20-second test timeout'
 type: 'bugfix'
 created: '2026-10-25'
-status: 'in-progress'
+status: 'done'
 baseline_revision: 'e5e16ec2588982ca674540100ae24186d1fc1081'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -59,3 +59,11 @@ The original DW-50 failure also timed out upstream fixture writes (`buildUser`, 
 ## Spec Change Log
 
 ## Review Triage Log
+
+## Coordinator Result
+
+- acceptance: `5ccdd3ca-e8de-4373-8dde-1dd74039ce84`
+- accepted commit: `9e96964d345b191539f0b7a95de5553fb4fabef1`
+- review: `17b91e6c-f352-4d83-891b-600d57f96460`
+- verification: tsc: pass, oxlint: pass, oxfmt: pass, reset: pass, wikilint: pass
+- decisions: none
