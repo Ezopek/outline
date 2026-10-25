@@ -9,6 +9,7 @@ import type { CaseRecord, Manifest } from "./harness";
 import {
   HELD_POOL_TOLERANCE_MS,
   evaluateBudgets,
+  heldPoolVerdict,
   runBenchmark,
 } from "./harness";
 
@@ -256,7 +257,9 @@ describe("runBenchmark (smoke, wiki_150)", () => {
       profile: "wiki_150",
       deadlineMs: HELD_POOL_DEADLINE_MS,
       outcome: "result",
+      state: "failed",
       systemFailureCodes: ["VALIDATION_TIMEOUT"],
+      poolAfterRelease: { using: 0, waiting: 0 },
     });
     expect(manifest.heldPool.heldConnections).toBe(manifest.heldPool.poolMax);
     expect(manifest.heldPool.elapsedMs).toBeLessThan(
@@ -304,5 +307,73 @@ describe("runBenchmark (smoke, wiki_150)", () => {
       expect(constant.status).toBe("provisional");
       expect(constant.sourceSampleIds.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("heldPoolVerdict", () => {
+  const DEADLINE_MS = 60000;
+
+  /**
+   * Returns a held-pool record of the 2026-10-25 reference run's shape.
+   *
+   * @param overrides - the fields to replace.
+   * @returns the record.
+   */
+  function heldPool(overrides: Record<string, unknown> = {}) {
+    return {
+      profile: "wiki_1000",
+      deadlineMs: DEADLINE_MS,
+      elapsedMs: 30004,
+      outcome: "result",
+      state: "failed",
+      systemFailureCodes: ["VALIDATION_RUNTIME_FAILED"],
+      poolAfterRelease: { using: 0, waiting: 0 },
+      ...overrides,
+    };
+  }
+
+  it.each(["VALIDATION_TIMEOUT", "VALIDATION_RUNTIME_FAILED"])(
+    "passes a run that ended as %s within the bound with the pool idle",
+    (code) => {
+      expect(heldPoolVerdict(heldPool({ systemFailureCodes: [code] }))).toBe(
+        "pass"
+      );
+      expect(
+        heldPoolVerdict(
+          heldPool({
+            systemFailureCodes: [code],
+            elapsedMs: DEADLINE_MS + HELD_POOL_TOLERANCE_MS,
+          })
+        )
+      ).toBe("pass");
+    }
+  );
+
+  it.each([
+    ["an overrun", { elapsedMs: DEADLINE_MS + HELD_POOL_TOLERANCE_MS + 1 }],
+    ["no elapsed time", { elapsedMs: undefined }],
+    [
+      "another code",
+      { systemFailureCodes: ["VALIDATION_RESOURCE_LIMIT_EXCEEDED"] },
+    ],
+    ["no System Failure", { systemFailureCodes: [] }],
+    [
+      "more than one System Failure",
+      {
+        systemFailureCodes: ["VALIDATION_TIMEOUT", "VALIDATION_RUNTIME_FAILED"],
+      },
+    ],
+    ["another state", { state: "incomplete" }],
+    [
+      "a connection left in use",
+      { poolAfterRelease: { using: 1, waiting: 0 } },
+    ],
+    [
+      "an acquisition left waiting",
+      { poolAfterRelease: { using: 0, waiting: 1 } },
+    ],
+    ["no pool usage after release", { poolAfterRelease: undefined }],
+  ])("fails %s", (_name, overrides) => {
+    expect(heldPoolVerdict(heldPool(overrides))).toBe("fail");
   });
 });

@@ -6,7 +6,8 @@ export const monotonicClock: MonotonicClock = () => performance.now();
 
 /**
  * The smallest remainder, in milliseconds, for which a database batch may
- * start. Provisional: Story 3.3 fixes it from benchmarks.
+ * start. Fixed by the Story 3.3 criterion 7 rule from the AD-17 reference
+ * run of 2026-10-25 (source commit `7631d00b0`).
  */
 export const SET_LOCAL_FLOOR_MS = 100;
 

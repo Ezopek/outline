@@ -291,8 +291,8 @@ describe("decideWrite", () => {
 });
 
 describe("withinWriteEligibility", () => {
-  it("holds named provisional constants distinct from the AD-16 snapshot caps", () => {
-    expect(WRITE_ELIGIBLE_MARKDOWN_BYTES).toBe(262144);
+  it("holds named fixed constants distinct from the AD-16 snapshot caps", () => {
+    expect(WRITE_ELIGIBLE_MARKDOWN_BYTES).toBe(131072);
     expect(WRITE_ELIGIBLE_LINK_REFERENCES).toBe(1000);
     expect(WRITE_ELIGIBLE_MARKDOWN_BYTES).not.toBe(
       WIKI_SNAPSHOT_LIMITS.documentMarkdownBytes

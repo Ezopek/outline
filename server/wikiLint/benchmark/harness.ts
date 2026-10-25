@@ -100,6 +100,12 @@ export const BUDGETS_MS = Object.freeze({
  */
 export const HELD_POOL_TOLERANCE_MS = 1000;
 
+/**
+ * How long, in milliseconds, the held-pool run waits for the pool to become
+ * idle after the holders release their connections.
+ */
+const POOL_SETTLE_MS = 5000;
+
 /** The PostgreSQL settings the manifest records. */
 const DB_SETTINGS = [
   "server_version",
@@ -1539,6 +1545,7 @@ async function runHeldPool(
   const actor = await loadUser(actorId);
   const poolMax = sequelize.options.pool?.max ?? 5;
   const held: Transaction[] = [];
+  let record: Record<string, unknown>;
   try {
     for (let index = 0; index < poolMax; index++) {
       const transaction = await sequelize.transaction();
@@ -1556,7 +1563,7 @@ async function runHeldPool(
     });
     const elapsedMs = round(performance.now() - startedAt);
     const result = outcome.kind === "result" ? outcome.result : null;
-    return {
+    record = {
       profile,
       heldConnections: held.length,
       poolMax,
@@ -1572,6 +1579,50 @@ async function runHeldPool(
       await transaction.rollback().catch(() => undefined);
     }
   }
+  // The abandoned acquisition is served once the holders release, and then
+  // released in turn; the usage is read once the pool is idle or the settle
+  // bound has passed.
+  const { pool } = sequelize.connectionManager as unknown as {
+    pool: { using: number; waiting: number };
+  };
+  const settleBy = performance.now() + POOL_SETTLE_MS;
+  while ((pool.using > 0 || pool.waiting > 0) && performance.now() < settleBy) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return {
+    ...record,
+    poolAfterRelease: { using: pool.using, waiting: pool.waiting },
+  };
+}
+
+/**
+ * Judges the held-pool re-run (DW-6, Story 3.3 criterion 9 as amended on
+ * 2026-10-25): it passes when it ended within the deadline plus
+ * `HELD_POOL_TOLERANCE_MS` as `state: failed` with exactly one System
+ * Failure, `VALIDATION_TIMEOUT` or `VALIDATION_RUNTIME_FAILED`, and the pool
+ * had no connection in use or waiting after the holders released theirs.
+ *
+ * @param heldPool - the held-pool record.
+ * @returns the verdict.
+ */
+export function heldPoolVerdict(
+  heldPool: Record<string, unknown>
+): "pass" | "fail" {
+  const deadlineMs = Number(heldPool.deadlineMs);
+  const elapsedMs = Number(heldPool.elapsedMs);
+  const codes = (heldPool.systemFailureCodes ?? []) as string[];
+  const after = heldPool.poolAfterRelease as
+    | { using?: unknown; waiting?: unknown }
+    | undefined;
+  return elapsedMs <= deadlineMs + HELD_POOL_TOLERANCE_MS &&
+    heldPool.state === "failed" &&
+    codes.length === 1 &&
+    (codes[0] === "VALIDATION_TIMEOUT" ||
+      codes[0] === "VALIDATION_RUNTIME_FAILED") &&
+    after?.using === 0 &&
+    after.waiting === 0
+    ? "pass"
+    : "fail";
 }
 
 /**
@@ -1631,7 +1682,6 @@ function dwRecords(
   };
   const deadlineMs = Number(heldPool.deadlineMs);
   const elapsedMs = Number(heldPool.elapsedMs);
-  const codes = (heldPool.systemFailureCodes ?? []) as string[];
   return [
     longest(
       "DW-4",
@@ -1646,18 +1696,14 @@ function dwRecords(
     {
       entry: "DW-6",
       measure:
-        "held-pool lint_wiki re-run: ends as VALIDATION_TIMEOUT within the deadline",
+        "held-pool lint_wiki re-run: ends within the deadline plus tolerance as state failed with exactly one System Failure, VALIDATION_TIMEOUT or VALIDATION_RUNTIME_FAILED, and the pool has no connection in use or waiting after release",
       profile: (heldPool.profile as ProfileName | undefined) ?? "wiki_150",
       measuredMs: Number.isFinite(elapsedMs) ? elapsedMs : null,
       comparedWith: {
         name: "deadline + HELD_POOL_TOLERANCE_MS",
         ms: deadlineMs + HELD_POOL_TOLERANCE_MS,
       },
-      verdict:
-        codes.includes("VALIDATION_TIMEOUT") &&
-        elapsedMs <= deadlineMs + HELD_POOL_TOLERANCE_MS
-          ? "pass"
-          : "fail",
+      verdict: heldPoolVerdict(heldPool),
       sourceSampleIds: ["held-pool"],
       detail: heldPool,
       status,

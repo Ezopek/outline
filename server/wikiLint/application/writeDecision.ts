@@ -11,16 +11,18 @@ import { OPERATION_FAILED } from "../core/registry";
 /**
  * The largest canonical Markdown, in UTF-8 bytes, of a projected document
  * whose `VALIDATION_RUNTIME_FAILED` or `VALIDATION_TIMEOUT` may fail open.
- * Provisional: Story 3.3 fixes it from the AD-17 measured maxima. It is
- * distinct from the AD-16 snapshot caps and never reuses them.
+ * Fixed by the Story 3.3 criterion 7 rule from the AD-17 reference run of
+ * 2026-10-25 (source commit `7631d00b0`). It is distinct from the AD-16
+ * snapshot caps and never reuses them.
  */
-export const WRITE_ELIGIBLE_MARKDOWN_BYTES = 262144;
+export const WRITE_ELIGIBLE_MARKDOWN_BYTES = 131072;
 
 /**
  * The most internal-link references of a projected document whose
  * `VALIDATION_RUNTIME_FAILED` or `VALIDATION_TIMEOUT` may fail open.
- * Provisional: Story 3.3 fixes it from the AD-17 measured maxima. It is
- * distinct from the AD-16 snapshot caps and never reuses them.
+ * Fixed by the Story 3.3 criterion 7 rule from the AD-17 reference run of
+ * 2026-10-25 (source commit `7631d00b0`). It is distinct from the AD-16
+ * snapshot caps and never reuses them.
  */
 export const WRITE_ELIGIBLE_LINK_REFERENCES = 1000;
 

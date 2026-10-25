@@ -102,7 +102,7 @@ describe("Deadline", () => {
     expect(() => deadline.batchTimeoutMs(2000)).toThrow(DeadlineFloorError);
   });
 
-  it("uses the code-owned provisional floor", () => {
+  it("uses the code-owned fixed floor", () => {
     expect(SET_LOCAL_FLOOR_MS).toBe(100);
   });
 
