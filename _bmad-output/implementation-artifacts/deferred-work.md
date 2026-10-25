@@ -532,3 +532,11 @@ severity: medium
 reason: 15 tests take 1.5-11 s in a passing developer-host run; on `ezopnas` three of three fresh-database runs failed on 5000 ms timeouts, and on the developer host one of 27 fresh-database runs failed during competing I/O. A 20-second server-project timeout keeps a hang a failure while tolerating slower hosts.
 resolution: story dw-58-server-test-timeout-headroom (accepted commit 9e96964d3, review 17b91e6c, no findings): the server project's testTimeout is 20000 ms; coordinator probes showed a 6 s server test passing, a never-settling one failing at 20009 ms, and shared-node keeping 5000 ms.
 status: done 2026-10-25
+
+### DW-59: The Gate 1 index and record predate the AD-17 reference run, the fixed constants, the amended DW-6 criterion and the post-DW-58 suite runs.
+origin: operator plan 2026-10-25 after the attested AD-17 reference run
+location: docs/wikilint-gate-1/evidence-index.md; docs/wikilint-gate-1/decision-record.md; docs/wikilint-gate-1/benchmark/constants.md; docs/wikilint-gate-1/benchmark/dw-4-5-6.md
+source_spec: `spec-dw-59-reassemble-gate-1-after-ad17.md`
+severity: medium
+reason: The index lists 16 blocking rows that wait for evidence that is now retained (benchmark/reference-manifest.json, raw/test-wikilint-nas-run-{1,2,3}.json) or for decisions now taken (DW-56, the Story 3.3 criterion 9 amendment, DW-58).
+status: open
