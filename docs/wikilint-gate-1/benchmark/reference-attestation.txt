@@ -1,0 +1,6 @@
+AD-17 operator attestation, 2026-10-25T10:27:34Z
+Carried from the operator's answer of 2026-10-25 (Claude Code session, AskUserQuestion, before run full-1): "Tak, attestuję" — the disk under the WSL2 vhdx is local SSD, no competing traffic on the Windows host during the run, and WSL2 (kernel 6.18.33.2-microsoft-standard-WSL2) is accepted as the reference host. The operator then approved the plan that includes this re-run after DW-56 ("Lecimy").
+Same host and no artificial latency: all three containers run on this one Docker engine (fenrir 29.8.0) on a user-defined bridge network, with no tc/netem or proxy.
+Image: outline:wikilint-e5e16ec2588982ca674540100ae24186d1fc1081 sha256:82a8ea725d99d88ee714cce9f639f75477220b0083e1dd9a9e682664c7511127, built locally, not published.
+Limits: ad17-pg postgres:14.2 --cpus=2 --cpuset-cpus=2,3 --memory=4g; ad17-app --cpus=2 --cpuset-cpus=4,5 --memory=4g; ad17-redis --cpus=1 --cpuset-cpus=6 --memory=512m.
+Runtime additions to the unmodified image: corepack installed globally at container start; yarn.lock, .yarnrc.yml and Dockerfile of the same commit mounted read-only.

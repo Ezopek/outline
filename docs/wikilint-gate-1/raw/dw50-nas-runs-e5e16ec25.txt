@@ -1,0 +1,13 @@
+2026-10-25T11:38:53Z start head e5e16ec2588982ca674540100ae24186d1fc1081 host ezopnas nproc 16
+2026-10-25T11:41:02Z pg 14.2 (Debian 14.2-1.pgdg110+1)
+2026-10-25T11:41:50Z install exit 0
+2026-10-25T11:43:39Z run 1 migrate exit 0
+2026-10-25T11:43:39Z run 1 begin
+2026-10-25T11:52:42Z run 1 end exit 1 
+2026-10-25T11:53:15Z run 2 migrate exit 0
+2026-10-25T11:53:15Z run 2 begin
+2026-10-25T12:00:42Z run 2 end exit 1 
+2026-10-25T12:01:16Z run 3 migrate exit 0
+2026-10-25T12:01:16Z run 3 begin
+2026-10-25T12:08:32Z run 3 end exit 1 
+2026-10-25T12:08:32Z done
