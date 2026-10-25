@@ -39,7 +39,7 @@
 #   2.4 AC3 -> 2.5.
 # - This file tracks planning state only; it does not authorize implementation.
 generated: 10-02-2026 01:33
-last_updated: 10-25-2026 19:37
+last_updated: 10-25-2026 20:04
 project: outline
 project_key: NOKEY
 tracking_system: file-system
@@ -243,7 +243,7 @@ action_items:
     action: "Make the D-9 constants' doc comments cite the retained Gate 1 run e5e16ec25
       (AV-4)"
     owner: "Dev agent"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-10-25.md"
   - id: "epic-3-retro-item-23-tie-the-gate-1-index-test-to-the-code-as"
     epic: 3
@@ -251,14 +251,14 @@ action_items:
       equals the current constants and cover the contradictory/gap branches (CL-5,
       DW-60)"
     owner: "Dev agent"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-10-25.md"
   - id: "epic-3-retro-item-24-make-a-full-benchmark-run-ineligible-whe"
     epic: 3
     action: "Make a full benchmark run ineligible when it measures fewer than every
       profile or overrides the held pool (CL-4)"
     owner: "Dev agent"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-10-25.md"
   - id: "epic-3-retro-item-25-fold-the-enforcedimport-found-row-owners"
     epic: 3
@@ -279,7 +279,7 @@ action_items:
     action: "Guard benchmark seeding with an explicit opt-in and a refusal on a database
       that holds teams (CL-3)"
     owner: "Dev agent"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-10-25.md"
   - id: "epic-3-retro-item-28-bound-the-test-mutex-waits-with-lock_tim"
     epic: 3
@@ -300,7 +300,7 @@ action_items:
     action: "Add a route-level /_health readiness test through the router start()
       builds (CL-7)"
     owner: "Dev agent"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-10-25.md"
   - id: "epic-3-retro-item-31-triage-the-unverified-epic-3-lens-report"
     epic: 3

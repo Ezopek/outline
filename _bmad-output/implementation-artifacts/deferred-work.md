@@ -548,7 +548,8 @@ location: server/wikiLint/benchmark/gate1EvidenceIndex.test.ts:581, :608
 source_spec: `spec-dw-59-reassemble-gate-1-after-ad17.md`
 severity: medium
 reason: The index test recomputes completeness, the decision and the blocking rows from the stated results, but no case checks that SM-I2 turns `contradictory` when its sources disagree, or that an AD-17-dependent row stays `gap` when the reference manifest has a non-pass budget or a missing item. With today's all-pass data the decision is right; a future re-assembly could state a wrong result that the test would not catch.
-status: open
+resolution: covered by DW-61 (accepted commit 141fa9363): gate1EvidenceIndex.test.ts now exercises SM-I2 turning contradictory and an AD-17-dependent row staying gap.
+status: done 2026-10-25
 
 ### DW-61: Five verified Epic 3 retrospective gaps in the benchmark, the Gate 1 index test and the health-route test (A-2, A-3, A-4, A-7, A-10).
 origin: Epic 3 retrospective 2026-10-25, operator decision to close them before Gate 2
@@ -556,4 +557,13 @@ location: server/wikiLint/application/{writeDecision,deadline,lintWiki}.ts (doc 
 source_spec: `spec-dw-61-close-epic-3-retro-verification-gaps.md`
 severity: medium
 reason: Constants cite a non-retained run, the index test is not tied to the code constants or its contradictory/gap branches (also DW-60), a partial full run stays Gate 1 eligible, the production-image benchmark CLI seeds any database, and the readiness-wired health route is untested. None changes runtime lint behaviour.
+resolution: story dw-61-close-epic-3-retro-verification-gaps (accepted commit 141fa9363, review 780e7f53): constants cite the retained run; the index test checks constantsInForce and the contradictory/gap branches; a partial full run records a deviation and a failing budget; run.ts needs WIKILINT_BENCH_ALLOW_SEED=yes and an empty database; registerHealthRoute is tested at route level. Two low review findings are DW-62.
+status: done 2026-10-25
+
+### DW-62: Two DW-61 wirings are covered only by component tests: the partial-run deviation and failing budget in runBenchmark, and the seed guard's position in run.ts.
+origin: DW-61 implementation review 780e7f53, two low findings
+location: server/wikiLint/benchmark/harness.ts:1190; server/wikiLint/benchmark/run.ts:57
+source_spec: `spec-dw-61-close-epic-3-retro-verification-gaps.md`
+severity: low
+reason: Both are correct at 141fa9363. A later edit that dropped the wiring (or moved the guard after runBenchmark) would keep the component tests green; an end-to-end case through runBenchmark and the CLI would catch it.
 status: open
