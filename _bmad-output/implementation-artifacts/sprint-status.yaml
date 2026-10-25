@@ -39,7 +39,7 @@
 #   2.4 AC3 -> 2.5.
 # - This file tracks planning state only; it does not authorize implementation.
 generated: 10-02-2026 01:33
-last_updated: 10-25-2026 17:56
+last_updated: 10-25-2026 19:37
 project: outline
 project_key: NOKEY
 tracking_system: file-system
@@ -236,7 +236,7 @@ action_items:
       AD-17 fixture ceiling (documents above 128 KiB lose fail-open eligibility) or
       measure sizes above the constant (AV-3)"
     owner: "Operator with the architect"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-3-retro-2026-10-25.md"
   - id: "epic-3-retro-item-22-make-the-d-9-constants-doc-comments-cite"
     epic: 3
