@@ -1,0 +1,9 @@
+image outline:wikilint-45df4867b99660ce0e60ac608390ba54e6c3b33a sha256:9ed80d5269c7a12fa3bb4503c1385d787a1812504f3ea217cefab83f1894c469; postgres postgres:16-alpine; 2026-10-25T19:28:36Z
+S1-no-policy pass 200 sha256:25d4e8ec86646fe465b938d352ab3973a46bef099e8ec712c5535c1a2609ecc2 OK
+S2-read-only-example pass 200 sha256:4fb09124f115e4c98701c29884c2f15f432bca9d8fb801c4ee6be33f0d661249 OK
+S3-wrong-expected-fingerprint pass 503 sha256:4fb09124f115e4c98701c29884c2f15f432bca9d8fb801c4ee6be33f0d661249 Service Unavailable
+S4a-enforced-unconfirmed pass 503 sha256:2b864d7ef5ffd847cbed142a1154e106617f0cb24cbd68fd07cbe9a0ffefa1d2 Service Unavailable
+S4b-enforced-confirmed pass 200 sha256:2b864d7ef5ffd847cbed142a1154e106617f0cb24cbd68fd07cbe9a0ffefa1d2 OK
+S5-malformed-policy pass exited
+S6-packaged-artifacts pass v26.3.0 tools core example /opt/outline/server/wikiLint/policy.example.json 
+overall pass
