@@ -2,7 +2,7 @@
 title: 'DW-56: Fix the AD-17 constants and the held-pool verdict from the 2026-10-25 reference run'
 type: 'chore'
 created: '2026-10-25'
-status: 'in-progress'
+status: 'done'
 baseline_revision: '7631d00b04530ac3fe2f7ad68d0b9597f9d24a9e'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -71,3 +71,11 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+## Coordinator Result
+
+- acceptance: `5fa1a740-3382-4caa-9855-741af75b2035`
+- accepted commit: `8f76ac9268fb30c9daf6a969b9fa1e18f1fe12ce`
+- review: `a3220697-4d1d-4ba6-bac5-81a8074a7939`
+- verification: tsc: pass, oxlint: pass, oxfmt: pass, reset: pass, wikilint: pass
+- decisions: none
