@@ -2,7 +2,7 @@
 title: 'DW-58: Give the server test project a 20-second test timeout'
 type: 'bugfix'
 created: '2026-10-25'
-status: 'ready-for-dev'
+status: 'in-progress'
 baseline_revision: 'e5e16ec2588982ca674540100ae24186d1fc1081'
 review_loop_iteration: 0
 followup_review_recommended: false
