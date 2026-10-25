@@ -76,6 +76,9 @@ export default defineConfig({
           ],
           globalSetup: ["./server/test/globalTeardown.ts"],
           fileParallelism: true,
+          // Deliberate 2-second waits and DB-heavy fixtures left 5 s too little
+          // headroom on slower or busy hosts (DW-50, DW-58).
+          testTimeout: 20000,
         },
       },
       {
