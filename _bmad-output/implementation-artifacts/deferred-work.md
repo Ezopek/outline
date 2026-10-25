@@ -504,3 +504,11 @@ source_spec: `spec-dw-50-fresh-test-database.md`
 severity: low
 reason: The `DATABASE_URL` regex accepts any database name (`(.+)`), and `$db` goes into the `pg_stat_activity` check, `DROP DATABASE` and `CREATE DATABASE` without escaping, so a name with a quote could change those statements; `start()` also interpolates the user and password into `ALTER USER … PASSWORD`. The input is a local file the developer controls; validating `$db` against a plain identifier pattern in the URL check would close it.
 status: open
+
+### DW-56: The AD-17 reference run of 2026-10-25 leaves `WRITE_ELIGIBLE_MARKDOWN_BYTES` failing its rule, all four D-9 constants provisional, and a DW-6 verdict that the DW-6 design cannot meet.
+origin: operator decision 2026-10-25 after the first attested AD-17 reference run (manifest sha256 58b625942f72bfc333e82671bd388b5776a0f3056ef6da45f3f174aa4b1e0b64, kept under ~/.local/state/wikilint-ad17/full-1 until retained by the evidence story)
+location: server/wikiLint/application/writeDecision.ts; server/wikiLint/application/deadline.ts; server/wikiLint/application/lintWiki.ts; server/wikiLint/benchmark/harness.ts (dwRecords)
+source_spec: `spec-dw-56-fix-ad17-constants-and-held-pool-verdict.md`
+severity: medium
+reason: The derivation gives 131072 for the Markdown eligibility constant against the committed 262144; the other three constants satisfy their rules. The held-pool re-run ended after 30,004 ms as `VALIDATION_RUNTIME_FAILED` from the pool's own 30-second acquisition timeout, inside the 60-second deadline; DW-6 forbids reclassifying that error, so the operator amended Story 3.3 criterion 9 to accept either outcome when the run does not overrun and leaves no connection held.
+status: open
