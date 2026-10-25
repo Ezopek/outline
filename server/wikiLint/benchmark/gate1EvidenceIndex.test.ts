@@ -541,24 +541,87 @@ describe("the retained Gate 1 evidence", () => {
     }
   });
 
-  it("records the three D-9 constant rows as gaps while the constants are provisional", () => {
+  const reference = JSON.parse(
+    read(path.join(GATE1_DIR, "benchmark", "reference-manifest.json"))
+  ) as {
+    gate1Eligible: boolean;
+    deviations: unknown[];
+    budgets: { verdict: string }[];
+    dw: { entry: string; verdict: string }[];
+    derivation: {
+      gate1: string;
+      constants: { status: string; currentSatisfiesRule: boolean }[];
+    };
+  };
+  const referenceEligible =
+    reference.gate1Eligible && reference.deviations.length === 0;
+
+  it("records the three D-9 constant rows as gaps while the constants are provisional, and from the reference manifest once they are fixed", () => {
     const constants = read(path.join(GATE1_DIR, "benchmark", "constants.md"));
-    const manifest = JSON.parse(
-      read(path.join(GATE1_DIR, "benchmark", "smoke-manifest.json"))
-    ) as { derivation: { gate1: string } };
-    if (
-      constants.includes("provisional") ||
-      manifest.derivation.gate1 !== "ready"
-    ) {
-      for (const id of D9_CONSTANT_IDS) {
-        expect(row(id).Result).toBe("gap");
-        expect(row(id).Link).toContain("benchmark/constants.md");
+    const fixed =
+      referenceEligible &&
+      !constants.includes("provisional") &&
+      reference.derivation.gate1 === "ready" &&
+      reference.derivation.constants.every(
+        (constant) =>
+          constant.status === "reference" && constant.currentSatisfiesRule
+      );
+    for (const id of D9_CONSTANT_IDS) {
+      expect(row(id).Result).toBe(fixed ? "pass" : "gap");
+      expect(row(id).Link).toContain("benchmark/constants.md");
+      if (fixed) {
+        expect(row(id).Link).toContain("benchmark/reference-manifest.json");
       }
+    }
+    if (!fixed) {
       expect(parseRecord(record).decision).toBe("not ready");
     }
   });
 
-  it("records DW-6 as contradictory when the ledger and the held-pool re-run disagree, and DW-4/5 as open", () => {
+  it("links the reference manifest from every AD-17-dependent row and no longer names the reference run as open", () => {
+    if (!referenceEligible) {
+      return;
+    }
+    for (const id of [
+      ...range("NFR-", 1, 5),
+      "SM-I5",
+      "AD-17",
+      ...D9_CONSTANT_IDS,
+      "DW-4",
+      "DW-5",
+      "DW-6",
+    ]) {
+      expect(row(id).Link, id).toContain("benchmark/reference-manifest.json");
+      expect(`${row(id).Requirement} ${row(id).Link}`, id).not.toMatch(
+        /reference (run|manifest) is open/
+      );
+    }
+    expect(index).not.toMatch(/reference (run|manifest) is open/);
+    expect(record).not.toMatch(/reference (run|manifest) is open/);
+    if (reference.budgets.every((budget) => budget.verdict === "pass")) {
+      for (const id of ["NFR-1", "NFR-2", "NFR-3", "NFR-4", "SM-I5"]) {
+        expect(row(id).Result, id).toBe("pass");
+      }
+    }
+  });
+
+  it("rests SM-I2 on the three ezopnas runs and the DW-50 and DW-58 entries", () => {
+    const sm = row("SM-I2");
+    for (const n of [1, 2, 3]) {
+      expect(sm["Raw evidence location"]).toContain(
+        `](raw/test-wikilint-nas-run-${n}.json)`
+      );
+      expect(sm["Raw evidence location"]).toContain(
+        `](raw/test-wikilint-run-${n}.json)`
+      );
+    }
+    expect(sm.Link).toContain("deferred-work.md DW-50");
+    expect(sm.Link).toContain("deferred-work.md DW-58");
+    expect(sm.Link).toContain("](conformance.md) Three-run comparison");
+    expect(sm["Source revision"]).toContain("`e1d81de21d30`");
+  });
+
+  it("records DW-6 as contradictory when the ledger and the held-pool re-run disagree, and DW-4/5/6 from the reference records once they pass", () => {
     const ledger = read(
       path.join(
         REPOSITORY_ROOT,
@@ -567,20 +630,16 @@ describe("the retained Gate 1 evidence", () => {
         "deferred-work.md"
       )
     );
-    const smoke = read(path.join(GATE1_DIR, "benchmark", "dw-4-5-6.md"));
     const ledgerEntry = ledger.split("### DW-6:")[1]?.split("\n### ")[0];
     const ledgerDone = /^status: done/m.test(ledgerEntry ?? "");
-    const smokeFailed = /^\| DW-6 .*\*\*fail\*\*/m.test(smoke);
-    if (ledgerDone && smokeFailed) {
+    const verdict = (entry: string): string | undefined =>
+      referenceEligible
+        ? reference.dw.find((dwRecord) => dwRecord.entry === entry)?.verdict
+        : undefined;
+    if (ledgerDone && verdict("DW-6") === "fail") {
       expect(row("DW-6").Result).toBe("contradictory");
     }
     expect(row("DW-6").Link).toContain("deferred-work.md");
-    expect(row("DW-6").Link).toContain("benchmark/dw-4-5-6.md");
-    for (const id of ["DW-4", "DW-5"]) {
-      expect(row(id).Result).not.toBe("pass");
-      expect(row(id).Link).toContain("benchmark/dw-4-5-6.md");
-      expect(row(id).Link).toContain("not Gate 1 evidence");
-    }
     const dwRows = tableRows(record, [
       "Item",
       "Ledger",
@@ -588,7 +647,16 @@ describe("the retained Gate 1 evidence", () => {
       "State",
     ]);
     for (const id of ["DW-4", "DW-5", "DW-6"]) {
-      expect(dwRows.find((cells) => cells[0] === id)?.[3]).toMatch(/^open/);
+      expect(row(id).Link).toContain("benchmark/dw-4-5-6.md");
+      const state = dwRows.find((cells) => cells[0] === id)?.[3];
+      if (verdict(id) === "pass") {
+        expect(row(id).Result).toBe("pass");
+        expect(row(id).Link).toContain("benchmark/reference-manifest.json");
+        expect(state).toMatch(/^closed by Story 3\.3 evidence/);
+      } else {
+        expect(row(id).Result).not.toBe("pass");
+        expect(state).toMatch(/^open/);
+      }
     }
     expect(record).toContain(
       "No read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5 and DW-6."

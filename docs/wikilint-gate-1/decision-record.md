@@ -2,41 +2,33 @@
 
 This record states the Gate 1 implementation-readiness decision (Story 3.4, AC 2, 3 and 5–8). It is derived from [`evidence-index.md`](evidence-index.md). The collocated test [`gate1EvidenceIndex.test.ts`](../../server/wikiLint/benchmark/gate1EvidenceIndex.test.ts) recomputes the decision and the blocking rows from the index and fails if this record differs.
 
-Story 3.4 assembled this record while Story 3.2 was `backlog`. It is re-assembled after Story 3.2 (DW-51) under the same rules, and is re-assembled again after the Story 3.3 reference run. Gate 1 readiness is separate from Gates 2–4: this record authorizes no image publication, deployment or rollout.
+Story 3.4 assembled this record while Story 3.2 was `backlog`. It was re-assembled after Story 3.2 (DW-51), and again after the Story 3.3 AD-17 reference run (DW-59), under the same rules. A `ready` decision here is Gate 1 implementation readiness only. Image publication (Gate 2), deployment (Gate 3) and rollout (Gate 4) stay separate approval boundaries, and this record authorizes none of them.
 
 ## Decision
 
-Decision: `not ready`
+Decision: `ready`
 
 Rule (AC 2): the decision is `ready` only when both hold: (a) every SM-I row and every phase-blocking row is `pass`, and (b) no row of the index is `fail`, `gap`, `unverified` or `contradictory`. Condition (a) is necessary but not sufficient. Any other state is `not ready`, and every blocking row is listed below. No waiver applies. An `accepted-gap` row does not block.
 
-Condition (a) fails on SM-I2, SM-I5 and the three D-9 constant rows. Condition (b) fails on every row listed below.
+Condition (a) holds: SM-I1–SM-I7 and the seven phase-blocking D-9 rows are each `pass`. Condition (b) holds: no row of the index is `fail`, `gap`, `unverified` or `contradictory`. Every other row is `pass`, except the named accepted gaps, D-6, AD-20-ROW-7, D9-ORPHAN-SWEEPER and D9-MIB-CAP, which are `accepted-gap`.
 
 ### Blocking rows
 
-- `NFR-1` — `gap`
-- `NFR-2` — `gap`
-- `NFR-3` — `gap`
-- `NFR-4` — `gap`
-- `NFR-5` — `gap`
-- `SM-I2` — `contradictory`
-- `SM-I5` — `gap`
-- `G1-SM-I` — `gap`
-- `G1-BLOCKING-DECISIONS` — `gap`
-- `AD-17` — `gap`
-- `D9-WRITE-ELIGIBILITY` — `gap`
-- `D9-STOP-MARGIN` — `gap`
-- `D9-SET-LOCAL-FLOOR` — `gap`
-- `DW-4` — `gap`
-- `DW-5` — `gap`
-- `DW-6` — `contradictory`
+No blocking row remains.
 
-What each blocker needs, as its source states it:
+How the 16 rows that blocked the DW-51 re-assembly were settled, each from retained evidence:
 
-- NFR-1–NFR-5, SM-I5, AD-17 and the three D-9 constant rows wait for the AD-17 reference run of Story 3.3. Its only retained manifest is a smoke run, and every constant is provisional.
-- SM-I2 is `contradictory`: the three retained runs are identical per test, but DW-50 (`status: open`) records one coordinator verify run of the same source that failed 8 tests with 5000 ms timeouts. The ledger says Gate 1 cannot rely on the determinism of the whole suite until that failure is reproduced.
-- G1-SM-I follows from SM-I2 and SM-I5. G1-BLOCKING-DECISIONS follows from the three D-9 constant rows.
-- DW-4, DW-5 and DW-6 wait for the Story 3.3 reference-profile evidence (AC 8 below).
+- NFR-1–NFR-5, SM-I5 and AD-17 rest on the AD-17 reference manifest [`benchmark/reference-manifest.json`](benchmark/reference-manifest.json). It records source commit `e5e16ec2588982ca674540100ae24186d1fc1081`, `gate1Eligible: true` and no deviation, and each of its 11 budgets has `verdict: pass`.
+- D9-WRITE-ELIGIBILITY, D9-STOP-MARGIN and D9-SET-LOCAL-FLOOR: every constant is `status: reference` and satisfies its criterion 7 rule (`derivation.gate1: ready`). DW-56 committed the values and marked them fixed (accepted commit `8f76ac9268fb30c9daf6a969b9fa1e18f1fe12ce`, [constants.md](benchmark/constants.md)). The dependent fixtures passed in the three `ezopnas` runs.
+- SM-I2: three fresh-database `yarn test:wikilint` runs on `ezopnas` at `e1d81de21d30f199e424c512dbeddb9dd161f90c` ([run 1](raw/test-wikilint-nas-run-1.json), [run 2](raw/test-wikilint-nas-run-2.json), [run 3](raw/test-wikilint-nas-run-3.json)). Each passed 2291 tests and skipped 1, and the three are identical per test. DW-50 is `done 2026-10-25`: its failures were Vitest's 5000 ms default timeout on tests with too little headroom, and DW-58 (`done 2026-10-25`, accepted commit `9e96964d345b191539f0b7a95de5553fb4fabef1`) gave the server project a 20000 ms timeout. The failing series before DW-58 ([fenrir](raw/dw50-fenrir-reset-runs-e5e16ec25.txt), [ezopnas](raw/dw50-nas-runs-e5e16ec25.txt)) is evidence of `e5e16ec25`, the earlier revision. The Story 3.2 three-run comparison ([conformance.md](conformance.md)) stays linked as evidence of `55fbe63b8c99`. No source disagrees about the current revision.
+- DW-4, DW-5 and DW-6 rest on the reference records in the manifest's `dw` array, under Story 3.3 criterion 9 as amended on 2026-10-25 (AC 8 below).
+- G1-SM-I and G1-BLOCKING-DECISIONS follow from the SM-I and D-9 rows.
+
+## AD-17 reference host (operator decision of 2026-10-25)
+
+The operator accepted the developer workstation under WSL2 (kernel `6.18.33.2-microsoft-standard-WSL2`) as the AD-17 reference host. The operator also attested that the disk under the WSL2 virtual disk is local SSD, and that no competing traffic ran on the Windows host during the run ([`benchmark/reference-attestation.txt`](benchmark/reference-attestation.txt), 2026-10-25T10:27:34Z). The three containers ran on one Docker engine on a user-defined bridge network, with no artificial latency: PostgreSQL 14.2 (`--cpus=2 --cpuset-cpus=2,3 --memory=4g`), the app (`--cpus=2 --cpuset-cpus=4,5 --memory=4g`) and Redis (`--cpus=1 --cpuset-cpus=6 --memory=512m`). The coordinator ran the provisioning script [`benchmark/reference-stack.sh`](benchmark/reference-stack.sh).
+
+The image `outline:wikilint-e5e16ec2588982ca674540100ae24186d1fc1081` (`sha256:82a8ea725d99d88ee714cce9f639f75477220b0083e1dd9a9e682664c7511127`) was built locally and not published. The attestation lists the runtime additions to the unmodified image: corepack installed globally at container start, and `yarn.lock`, `.yarnrc.yml` and `Dockerfile` of the same commit mounted read-only.
 
 ## Baseline and source provenance (AC 3)
 
@@ -62,22 +54,35 @@ The Story 3.2 conformance evidence is retained in [`conformance.md`](conformance
 - AC 4: every injected dependency is one of the ten seam kinds of AD-18 as amended by the operator decision of 2026-10-24 ([Spine AD-18, Amendment Record row of 2026-10-24](../../_bmad-output/planning-artifacts/architecture/architecture-outline-2026-09-21/ARCHITECTURE-SPINE.md)). The three seams the review had left outside the seven kinds are `schedule` (job scheduling), the `AttemptPlan` members (attempt-phase implementations) and `setTimingProbe` (the process timing probe). Index rows AD-18 and NFR-26 are `pass`.
 - AC 7: under the operator decision of 2026-10-24, the coordinator ran `corepack yarn build` from the main worktree root at 2026-10-24T12:04:00Z on HEAD `5308b7edfeb13b1b4c645245301b7715c6466b62`. It exited `0` and ended with `Done!`. The earlier exit `1` in the story worktree came from a stray `node_modules/node_modules` symlink, which the coordinator removed before this run. The build was local only and published nothing.
 - Every test row of the index whose linked test files passed in all three runs of their command is `pass`, linking the run reports.
+- After DW-58, three fresh-database `yarn test:wikilint` runs on `ezopnas` at `e1d81de21d30f199e424c512dbeddb9dd161f90c` passed 2291 tests and skipped 1 each, identical per test ([raw/test-wikilint-nas-runs.txt](raw/test-wikilint-nas-runs.txt); index row SM-I2).
 
-## Open deferred-work entries bearing on Gate 1
+## Deferred-work entries bearing on Gate 1
 
-Statuses are taken from [deferred-work.md](../../_bmad-output/implementation-artifacts/deferred-work.md).
+Statuses are taken from [deferred-work.md](../../_bmad-output/implementation-artifacts/deferred-work.md). This record does not edit the ledger. An entry that is still open is recorded here and is not an accepted residual of this record.
 
-| Entry | Ledger status     | Where it applies                                                                                                                                                                                                                                                                                                                                                                          |
-| ----- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| DW-4  | `open`            | index row DW-4 (`gap`); AC 8 below                                                                                                                                                                                                                                                                                                                                                        |
-| DW-5  | `open`            | index row DW-5 (`gap`); AC 8 below                                                                                                                                                                                                                                                                                                                                                        |
-| DW-6  | `done 2026-10-04` | index row DW-6 (`contradictory` with the Story 3.3 held-pool re-run); AC 8 below                                                                                                                                                                                                                                                                                                          |
-| DW-13 | `open`            | index row FR-7 (`pass`). Its finding F-5, a collection revoked between lookup and snapshot, was accepted as contract behavior under AD-16 and the action item withdrawn ([epic-1-retro-2026-10-03.md](../../_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md) F-5). The ledger still shows it open, so it is recorded here and is not an accepted residual of this record |
-| DW-50 | `open`            | index row SM-I2 (`contradictory`). The failing verify run timed out in `server/queues/tasks/DocumentPublishedNotificationsTask.test.ts` and `server/wikiLint/adapters/auditEvents.test.ts`. The rows that link `auditEvents.test.ts` (FR-19, FR-21, NFR-14, NFR-17, AD-14) rest on the three retained runs, in which it passed                                                            |
+| Entry | Ledger status     | Where it applies                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DW-4  | `open`            | index row DW-4 (`pass`): the Story 3.3 reference record closes it (AC 8 below). The ledger entry has not been closed yet                                                                                                                                                                                                                                                                             |
+| DW-5  | `open`            | index row DW-5 (`pass`): the Story 3.3 reference record closes it (AC 8 below). The ledger entry has not been closed yet                                                                                                                                                                                                                                                                             |
+| DW-6  | `done 2026-10-04` | index row DW-6 (`pass`): the reference held-pool record passes the amended criterion 9 and agrees with the ledger (AC 8 below)                                                                                                                                                                                                                                                                       |
+| DW-13 | `open`            | index row FR-7 (`pass`). Its finding F-5, a collection revoked between lookup and snapshot, was accepted as contract behavior under AD-16 and the action item withdrawn ([epic-1-retro-2026-10-03.md](../../_bmad-output/implementation-artifacts/epic-1-retro-2026-10-03.md) F-5). The ledger still shows it open                                                                                   |
+| DW-20 | `open`            | Story 3.3 (metering `documentStructure` before materializing it, folded into Story 3.3 by a retrospective item). Story 3.3's criteria do not name it (DW-41). Index row AD-16 rests on its retained runs and is unchanged                                                                                                                                                                            |
+| DW-21 | `open`            | ledger decision 2026-10-04: "Keep open as a Gate 1 residual". It is not one of the AC 5 residuals, so it is recorded here and not as `accepted-gap`                                                                                                                                                                                                                                                  |
+| DW-22 | `open`            | ledger decision 2026-10-04: "Keep open as a Gate 1 residual". It is not one of the AC 5 residuals, so it is recorded here and not as `accepted-gap`                                                                                                                                                                                                                                                  |
+| DW-25 | `open`            | ledger decision 2026-10-04: "Keep open for the Gate 1 review" (one completed independent review of the Story 2.5 code). It is recorded for that review                                                                                                                                                                                                                                               |
+| DW-30 | `open`            | Story 3.3 constant derivation (the worker post-commit tail and the cross-host clock-skew budget, folded in by a retrospective item). Story 3.3 criterion 7 does not name them (DW-41). The D-9 constant rows follow criterion 7 as written                                                                                                                                                           |
+| DW-41 | `open`            | DW-20 and DW-30 are not in Story 3.3's text, and DW-21 and DW-25 are not in Story 3.4's                                                                                                                                                                                                                                                                                                              |
+| DW-52 | `open`            | index row S3.2-CONFORMANCE (`pass`): one `git diff --stat` claim in the AC 7 paragraph of [conformance.md](conformance.md) has no retained output                                                                                                                                                                                                                                                    |
+| DW-53 | `open`            | `gate1EvidenceIndex.test.ts`: the not-done branch of the Story 3.2 deliverable rows is no longer exercised                                                                                                                                                                                                                                                                                           |
+| DW-57 | `open`            | index row DW-6 (`pass`): the harness settles the `poolAfterRelease` reading for up to 5 s, and the `dwRecords` wiring of the DW-6 verdict has no unit test                                                                                                                                                                                                                                           |
+| DW-50 | `done 2026-10-25` | index row SM-I2 (`pass`). Resolution: the failures were Vitest's 5000 ms default test timeout on tests with 2–3 s of headroom; DW-58 fixed the timeout, and the three `ezopnas` runs then passed. The failing series before DW-58 is retained as [dw50-fenrir-reset-runs-e5e16ec25.txt](raw/dw50-fenrir-reset-runs-e5e16ec25.txt) and [dw50-nas-runs-e5e16ec25.txt](raw/dw50-nas-runs-e5e16ec25.txt) |
+| DW-58 | `done 2026-10-25` | index row SM-I2 (`pass`): the server project's test timeout is 20000 ms (accepted commit `9e96964d345b191539f0b7a95de5553fb4fabef1`)                                                                                                                                                                                                                                                                 |
 
 ## AD-17 benchmark manifest
 
-The only retained manifest is the Story 3.3 smoke manifest [`benchmark/smoke-manifest.json`](benchmark/smoke-manifest.json): `gate1Eligible: false`, `derivation.gate1: not ready`, source commit `0fa7969ca377656f5bda32974e789181cec58500`, retained at the Story 3.3 accepted commit `647e7b0a72a373cebeaf07f7361cb8fa310fffea`. It is not Gate 1 evidence. Every constant in [`benchmark/constants.md`](benchmark/constants.md) is `provisional — open, not Gate 1 evidence`, so the three D-9 constant rows (D9-WRITE-ELIGIBILITY, D9-STOP-MARGIN, D9-SET-LOCAL-FLOOR) are `gap` and block. The AD-17 reference manifest is open (index row AD-17, `gap`). The Story 3.3 constants stay provisional; this record changes no value.
+The retained AD-17 reference manifest is [`benchmark/reference-manifest.json`](benchmark/reference-manifest.json) (sha256 `481eaf954b52fc57d1423f2d9a3d105fb7a994d3b54025b3f7880f12de6efe89`, index row AD-17, `pass`). It records source commit `e5e16ec2588982ca674540100ae24186d1fc1081`, `gate1Eligible: true` and `deviations: []`. Every budget is `verdict: pass`, and so are the DW-4, DW-5 and DW-6 records. Every constant is `status: reference` and satisfies its rule (`derivation.gate1: ready`). The local image digest `sha256:82a8ea725d99d88ee714cce9f639f75477220b0083e1dd9a9e682664c7511127` is benchmark identity only and not a Gate 2 publication (`imageDigest.note`). [`benchmark/constants.md`](benchmark/constants.md) records the four constants as `fixed — reference, Gate 1 evidence`. DW-56 committed them at the values the run measured (accepted commit `8f76ac9268fb30c9daf6a969b9fa1e18f1fe12ce`). This record changes no value.
+
+The Story 3.3 smoke manifest [`benchmark/smoke-manifest.json`](benchmark/smoke-manifest.json) stays retained as earlier smoke evidence. It is not Gate 1 evidence: `gate1Eligible: false`, `derivation.gate1: not ready`, source commit `0fa7969ca377656f5bda32974e789181cec58500`.
 
 ## Accepted evidence gaps (AC 3)
 
@@ -95,7 +100,7 @@ No PRD and spine conflict is open: C-1 to C-7 and RI-1 to RI-4 and RI-6 are clos
 Only the D-9 items are phase-blocking:
 
 - the tool input schemas, annotations and token-scope gating, and the L1–L11 link forms, each fixed by its story and proven by fixtures that passed in the retained runs (index rows D9-INPUT-SCHEMAS, D9-ANNOTATIONS, D9-TOKEN-SCOPE, D9-LINK-FORMS; each `pass`);
-- the write-eligibility constants, the stop margin and the `SET LOCAL` floor, each fixed from AD-17 evidence in Story 3.3 (index rows D9-WRITE-ELIGIBILITY, D9-STOP-MARGIN, D9-SET-LOCAL-FLOOR; each `gap`).
+- the write-eligibility constants, the stop margin and the `SET LOCAL` floor, each fixed from AD-17 evidence in Story 3.3 (index rows D9-WRITE-ELIGIBILITY, D9-STOP-MARGIN, D9-SET-LOCAL-FLOOR; each `pass` on the reference manifest).
 
 ## Residuals and non-blocking items (AC 5)
 
@@ -123,13 +128,13 @@ Owner and revisit condition are taken from the accepting source. Where that sour
 
 No read-only production rollout is authorized until Story 3.3 evidence closes DW-4, DW-5 and DW-6. Closing them authorizes no rollout either, because read-only rollout remains a separately approved Gate 4 decision.
 
-| Item | Ledger                                                                                                      | Story 3.3 evidence                                                                                                                    | State                 |
-| ---- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| DW-4 | [deferred-work.md](../../_bmad-output/implementation-artifacts/deferred-work.md): `status: open`            | [dw-4-5-6.md](benchmark/dw-4-5-6.md) smoke record, not Gate 1 evidence                                                                | open                  |
-| DW-5 | [deferred-work.md](../../_bmad-output/implementation-artifacts/deferred-work.md): `status: open`            | [dw-4-5-6.md](benchmark/dw-4-5-6.md) smoke record, not Gate 1 evidence                                                                | open                  |
-| DW-6 | [deferred-work.md](../../_bmad-output/implementation-artifacts/deferred-work.md): `status: done 2026-10-04` | [dw-4-5-6.md](benchmark/dw-4-5-6.md) held-pool re-run: **fail**, `VALIDATION_RUNTIME_FAILED` after 30004 ms, not `VALIDATION_TIMEOUT` | open, `contradictory` |
+| Item | Ledger                                                                                                      | Story 3.3 evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                    | State                        |
+| ---- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| DW-4 | [deferred-work.md](../../_bmad-output/implementation-artifacts/deferred-work.md): `status: open`            | [dw-4-5-6.md](benchmark/dw-4-5-6.md) reference record ([reference-manifest.json](benchmark/reference-manifest.json) `dw`): longest event-loop block 82.903 ms (`wiki_1000-11`) against the fixed stop margin of 2000 ms, `verdict: pass`                                                                                                                                                                                                                              | closed by Story 3.3 evidence |
+| DW-5 | [deferred-work.md](../../_bmad-output/implementation-artifacts/deferred-work.md): `status: open`            | [dw-4-5-6.md](benchmark/dw-4-5-6.md) reference record ([reference-manifest.json](benchmark/reference-manifest.json) `dw`): longest keyset-batch serialize-and-parse time 80.433 ms (`wiki_1000-11`) against the fixed stop margin of 2000 ms, `verdict: pass`                                                                                                                                                                                                         | closed by Story 3.3 evidence |
+| DW-6 | [deferred-work.md](../../_bmad-output/implementation-artifacts/deferred-work.md): `status: done 2026-10-04` | [dw-4-5-6.md](benchmark/dw-4-5-6.md) reference held-pool record ([reference-manifest.json](benchmark/reference-manifest.json) `dw`, `heldPool`): ended after 30003.082 ms of the 61000 ms bound, `state: failed` with the one System Failure `VALIDATION_RUNTIME_FAILED`, pool 0 in use and 0 waiting after release, `verdict: pass` under criterion 9 as amended on 2026-10-25 ([epics.md](../../_bmad-output/planning-artifacts/epics.md) "Amendment (2026-10-25)") | closed by Story 3.3 evidence |
 
-DW-4 also has a code change (`spec-dw-4-yield-between-lint-units.md`, accepted commit `17b840d5f5b50a16fa5a735926fd064bb687c8e1`). A code change is not closing evidence; the reference-profile re-run of Story 3.3 criterion 9 is.
+The ledger still shows DW-4 and DW-5 as `open`. This record does not edit the ledger. DW-4 also has a code change (`spec-dw-4-yield-between-lint-units.md`, accepted commit `17b840d5f5b50a16fa5a735926fd064bb687c8e1`). A code change is not closing evidence. The reference-profile re-run of Story 3.3 criterion 9 is, and the records above are that re-run. The earlier smoke records, including the DW-6 `fail` under the unamended criterion, stay in [smoke-manifest.json](benchmark/smoke-manifest.json) as smoke evidence, not Gate 1 evidence.
 
 ## Gate separation (AC 6)
 
@@ -139,7 +144,7 @@ DW-4 also has a code change (`spec-dw-4-yield-between-lint-units.md`, accepted c
 | Gate 3 | Deployment                     | unauthorized |
 | Gate 4 | Read-only and enforced rollout | unauthorized |
 
-Each later gate is a separate approval, whether Gate 1 evidence is complete or not. No image is pushed, no environment is changed, no deployment is performed, no pilot policy is mounted and no collection policy is enabled.
+Each later gate is a separate approval, whether Gate 1 evidence is complete or not. The `ready` decision above authorizes only consideration of publication (`epics.md`, Gate 1 exit). The local image digest of the AD-17 run is not a publication. No image is pushed, no environment is changed, no deployment is performed, no pilot policy is mounted and no collection policy is enabled.
 
 ## Deferred operational decisions (AC 7)
 
