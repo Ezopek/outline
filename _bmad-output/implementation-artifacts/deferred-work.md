@@ -549,3 +549,11 @@ source_spec: `spec-dw-59-reassemble-gate-1-after-ad17.md`
 severity: medium
 reason: The index test recomputes completeness, the decision and the blocking rows from the stated results, but no case checks that SM-I2 turns `contradictory` when its sources disagree, or that an AD-17-dependent row stays `gap` when the reference manifest has a non-pass budget or a missing item. With today's all-pass data the decision is right; a future re-assembly could state a wrong result that the test would not catch.
 status: open
+
+### DW-61: Five verified Epic 3 retrospective gaps in the benchmark, the Gate 1 index test and the health-route test (A-2, A-3, A-4, A-7, A-10).
+origin: Epic 3 retrospective 2026-10-25, operator decision to close them before Gate 2
+location: server/wikiLint/application/{writeDecision,deadline,lintWiki}.ts (doc comments); server/wikiLint/benchmark/{gate1EvidenceIndex.test,harness,referenceProfile,run}.ts; server/main.ts; server/wikiLint/adapters/healthCheck.ts
+source_spec: `spec-dw-61-close-epic-3-retro-verification-gaps.md`
+severity: medium
+reason: Constants cite a non-retained run, the index test is not tied to the code constants or its contradictory/gap branches (also DW-60), a partial full run stays Gate 1 eligible, the production-image benchmark CLI seeds any database, and the readiness-wired health route is untested. None changes runtime lint behaviour.
+status: open
