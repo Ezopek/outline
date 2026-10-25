@@ -529,4 +529,5 @@ location: vitest.config.ts (server project)
 source_spec: `spec-dw-58-server-test-timeout-headroom.md`
 severity: medium
 reason: 15 tests take 1.5-11 s in a passing developer-host run; on `ezopnas` three of three fresh-database runs failed on 5000 ms timeouts, and on the developer host one of 27 fresh-database runs failed during competing I/O. A 20-second server-project timeout keeps a hang a failure while tolerating slower hosts.
-status: open
+resolution: story dw-58-server-test-timeout-headroom (accepted commit 9e96964d3, review 17b91e6c, no findings): the server project's testTimeout is 20000 ms; coordinator probes showed a 6 s server test passing, a never-settling one failing at 20009 ms, and shared-node keeping 5000 ms.
+status: done 2026-10-25
