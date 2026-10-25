@@ -78,7 +78,7 @@ development_status:
   dw-56-fix-ad17-constants-and-held-pool-verdict: done
   dw-58-server-test-timeout-headroom: done
   dw-59-reassemble-gate-1-after-ad17: done
-  dw-61-close-epic-3-retro-verification-gaps: backlog
+  dw-61-close-epic-3-retro-verification-gaps: in-progress
 
   epic-3: done
   3-1-verify-safe-startup-and-readiness-policy-identity: done

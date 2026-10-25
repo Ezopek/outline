@@ -2,7 +2,7 @@
 title: 'DW-61: Close the verified Epic 3 retrospective gaps (A-2, A-3, A-4, A-7, A-10)'
 type: 'chore'
 created: '2026-10-25'
-status: 'ready-for-dev'
+status: 'in-progress'
 baseline_revision: '8972e230c85b0098a5e1e9ec718950c230e22351'
 review_loop_iteration: 0
 followup_review_recommended: false
