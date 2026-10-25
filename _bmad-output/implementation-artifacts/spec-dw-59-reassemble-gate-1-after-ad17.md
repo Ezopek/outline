@@ -2,7 +2,7 @@
 title: 'DW-59: Re-assemble the Gate 1 evidence index and decision record after the AD-17 reference run'
 type: 'chore'
 created: '2026-10-25'
-status: 'in-progress'
+status: 'done'
 baseline_revision: 'f01702852bfe4dd54b20643fb5e43d6949825441'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -76,3 +76,11 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+## Coordinator Result
+
+- acceptance: `b327d742-0d82-4f7b-8f65-69156a477793`
+- accepted commit: `0ef97699283866ed4914d06b2d3cd2466a591b84`
+- review: `d8b67380-7b7e-4c69-a37f-d459e6150c5b`
+- verification: tsc: pass, oxlint: pass, oxfmt: pass, vitest-index: pass
+- decisions: none
