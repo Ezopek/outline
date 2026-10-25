@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Job } from "bull";
 import { BaseTask } from "@server/queues/tasks/base/BaseTask";
+import { LINT_WIKI_DEADLINE_MS } from "../application/lintWiki";
 import {
   MAX_LINK_REFERENCES_PER_DOCUMENT,
   WRITE_MODES,
@@ -11,7 +12,9 @@ import {
   evaluateBudgets,
   heldPoolVerdict,
   runBenchmark,
+  runDeviations,
 } from "./harness";
+import { isGate1Eligible } from "./referenceProfile";
 
 /** The test-scale deadline of the held-pool re-run. */
 const HELD_POOL_DEADLINE_MS = 3000;
@@ -307,6 +310,96 @@ describe("runBenchmark (smoke, wiki_150)", () => {
       expect(constant.status).toBe("provisional");
       expect(constant.sourceSampleIds.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("a partial or overridden full run", () => {
+  const full = { smoke: false };
+
+  it("finds no run deviation in a full run with the reference inputs", () => {
+    expect(runDeviations(full)).toEqual([]);
+    expect(
+      runDeviations({
+        ...full,
+        profiles: ["wiki_1000", "wiki_150"],
+        heldPool: { profile: "wiki_1000", deadlineMs: LINT_WIKI_DEADLINE_MS },
+      })
+    ).toEqual([]);
+  });
+
+  it("is not Gate 1 evidence and fails the unmeasured wiki_1000 budgets when it measures only wiki_150", () => {
+    const deviations = runDeviations({ ...full, profiles: ["wiki_150"] });
+    expect(deviations).toEqual([
+      {
+        item: "measured lint_wiki profiles (--profiles)",
+        expected: "wiki_150,wiki_1000",
+        actual: "wiki_150",
+      },
+      {
+        item: "held-pool profile",
+        expected: "wiki_1000",
+        actual: "wiki_150",
+      },
+    ]);
+    expect(isGate1Eligible(deviations, false)).toBe(false);
+
+    const budgets = evaluateBudgets(
+      [caseOf("lint_wiki:wiki_150")],
+      ["wiki_150", "wiki_1000"]
+    );
+    for (const id of [
+      "lint_wiki.wiki_1000.complete",
+      "lint_wiki.wiki_1000.max",
+    ]) {
+      expect(budgets.find((budget) => budget.id === id)).toMatchObject({
+        measured: null,
+        verdict: "fail",
+        sourceCaseId: "lint_wiki:wiki_1000",
+        sourceSampleIds: [],
+      });
+    }
+    expect(
+      budgets.filter((budget) => budget.id.startsWith("lint_wiki.wiki_150."))
+    ).toEqual(
+      manifest.budgets.filter((budget) =>
+        budget.id.startsWith("lint_wiki.wiki_150.")
+      )
+    );
+  });
+
+  it.each<[string, Parameters<typeof runDeviations>[0], string]>([
+    [
+      "a duplicated profile",
+      { ...full, profiles: ["wiki_150", "wiki_150", "wiki_1000"] },
+      "measured lint_wiki profiles (--profiles)",
+    ],
+    [
+      "an overridden held-pool profile",
+      { ...full, heldPool: { profile: "wiki_150" } },
+      "held-pool profile",
+    ],
+    [
+      "an overridden held-pool deadline",
+      { ...full, heldPool: { deadlineMs: HELD_POOL_DEADLINE_MS } },
+      "held-pool deadline (ms)",
+    ],
+  ])("records %s as a deviation", (_name, options, item) => {
+    const deviations = runDeviations(options);
+    expect(deviations.map((deviation) => deviation.item)).toEqual([item]);
+    expect(isGate1Eligible(deviations, false)).toBe(false);
+  });
+
+  it("leaves a smoke run's inputs and budgets as they were", () => {
+    expect(
+      runDeviations({
+        smoke: true,
+        profiles: ["wiki_150"],
+        heldPool: { deadlineMs: HELD_POOL_DEADLINE_MS },
+      })
+    ).toEqual([]);
+    expect(manifest.budgets.map((budget) => budget.id)).not.toContain(
+      "lint_wiki.wiki_1000.max"
+    );
   });
 });
 

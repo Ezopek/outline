@@ -1,5 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  SET_LOCAL_FLOOR_MS,
+  VALIDATION_DEADLINE_MS,
+} from "../application/deadline";
+import {
+  LINT_WIKI_DEADLINE_MS,
+  LINT_WIKI_STOP_MARGIN_MS,
+} from "../application/lintWiki";
+import {
+  WRITE_ELIGIBLE_LINK_REFERENCES,
+  WRITE_ELIGIBLE_MARKDOWN_BYTES,
+} from "../application/writeDecision";
 
 /**
  * Story 3.4: the retained Gate 1 evidence index and decision record. The
@@ -376,6 +388,118 @@ function syntheticRecord(
 
 const read = (file: string): string => fs.readFileSync(file, "utf8");
 
+/** The fields of a retained Vitest JSON report that SM-I2 rests on. */
+interface RunReport {
+  success: boolean;
+  numFailedTests: number;
+  testResults: {
+    name: string;
+    assertionResults: { fullName: string; status: string }[];
+  }[];
+}
+
+/**
+ * Recomputes SM-I2 from its sources: the three retained runs are
+ * deterministic when each succeeded with no failed test and all three agree
+ * in every test's status, and the ledger resolves the earlier failures when
+ * DW-50 and DW-58 are done. The row passes when both hold, is
+ * `contradictory` when the sources disagree, and fails when neither holds.
+ *
+ * @param runs - the retained run reports.
+ * @param ledgerDone - whether DW-50 and DW-58 are done.
+ * @returns the result SM-I2 must state.
+ */
+function smI2Result(
+  runs: readonly RunReport[],
+  ledgerDone: { "DW-50": boolean; "DW-58": boolean }
+): Result {
+  const statuses = runs.map((run) =>
+    JSON.stringify(
+      run.testResults
+        .flatMap((file) =>
+          file.assertionResults.map((test) =>
+            JSON.stringify([file.name, test.fullName, test.status])
+          )
+        )
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    )
+  );
+  const deterministic =
+    runs.length === 3 &&
+    runs.every((run) => run.success && run.numFailedTests === 0) &&
+    statuses.every((status) => status === statuses[0]);
+  const resolved = ledgerDone["DW-50"] && ledgerDone["DW-58"];
+  return deterministic && resolved
+    ? "pass"
+    : deterministic || resolved
+      ? "contradictory"
+      : "fail";
+}
+
+/** The reference-manifest budgets each AD-17-dependent row rests on. */
+const AD17_BUDGET_ROWS: Record<string, string[]> = {
+  "NFR-1": ["lint_document.p95", "lint_document.semantics"],
+  "NFR-2": ["create", "replace", "append", "prepend", "patch"].map(
+    (mode) => `write.${mode}.overhead_p95`
+  ),
+  "NFR-3": ["lint_wiki.wiki_150.p95", "lint_wiki.wiki_150.complete"],
+  "NFR-4": ["lint_wiki.wiki_1000.max", "lint_wiki.wiki_1000.complete"],
+};
+AD17_BUDGET_ROWS["SM-I5"] = Object.values(AD17_BUDGET_ROWS).flat();
+
+/** The fields of the reference manifest the index rests on. */
+interface ReferenceManifest {
+  gate1Eligible: boolean;
+  deviations: unknown[];
+  constantsInForce: Record<string, number>;
+  budgets: { id: string; verdict: string }[];
+  dw: { entry: string; verdict: string }[];
+  derivation: {
+    gate1: string;
+    constants: { status: string; currentSatisfiesRule: boolean }[];
+  };
+}
+
+/**
+ * Recomputes an AD-17-dependent row from the reference manifest: it passes
+ * only when the manifest is Gate 1 eligible with no deviation and holds every
+ * budget the row rests on with `verdict: pass`; a failing or missing budget
+ * leaves it a `gap`.
+ *
+ * @param reference - the reference manifest.
+ * @param id - the row.
+ * @returns the result the row must state.
+ */
+function ad17Result(
+  reference: Pick<
+    ReferenceManifest,
+    "gate1Eligible" | "deviations" | "budgets"
+  >,
+  id: string
+): Result {
+  const eligible = reference.gate1Eligible && reference.deviations.length === 0;
+  return eligible &&
+    AD17_BUDGET_ROWS[id].every(
+      (budgetId) =>
+        reference.budgets.find((budget) => budget.id === budgetId)?.verdict ===
+        "pass"
+    )
+    ? "pass"
+    : "gap";
+}
+
+/**
+ * Reads whether a ledger entry is done.
+ *
+ * @param ledger - the deferred-work ledger.
+ * @param entry - the entry, such as `DW-6`.
+ * @returns whether its status is done.
+ */
+function ledgerDone(ledger: string, entry: string): boolean {
+  const section = ledger.split(`### ${entry}:`)[1]?.split("\n### ")[0];
+  return /^status: done/m.test(section ?? "");
+}
+
 describe("the AC 2 rule", () => {
   it("accepts ready when every row passes", () => {
     expect(validate(syntheticIndex(), syntheticRecord("ready"))).toEqual([]);
@@ -511,9 +635,141 @@ describe("the AC 2 rule", () => {
   });
 });
 
+describe("the recomputed SM-I2 and AD-17-dependent results", () => {
+  /**
+   * Builds a one-test run report.
+   *
+   * @param status - the test's status.
+   * @returns the report.
+   */
+  const runOf = (status = "passed"): RunReport => ({
+    success: status !== "failed",
+    numFailedTests: status === "failed" ? 1 : 0,
+    testResults: [
+      {
+        name: "/repo/server/a.test.ts",
+        assertionResults: [{ fullName: "a works", status }],
+      },
+    ],
+  });
+  const done = { "DW-50": true, "DW-58": true };
+
+  it("passes SM-I2 when three identical clean runs and the ledger agree", () => {
+    expect(smI2Result([runOf(), runOf(), runOf()], done)).toBe("pass");
+  });
+
+  it("turns SM-I2 contradictory when its sources disagree, and the AC 2 rule lists it", () => {
+    // The ledger resolves the failures, but the runs do not show it.
+    for (const runs of [
+      [runOf(), runOf("failed"), runOf()],
+      [runOf(), runOf("skipped"), runOf()],
+      [runOf(), runOf()],
+    ]) {
+      expect(smI2Result(runs, done)).toBe("contradictory");
+    }
+    // The runs are clean, but the ledger leaves an entry open.
+    for (const entry of ["DW-50", "DW-58"] as const) {
+      expect(
+        smI2Result([runOf(), runOf(), runOf()], { ...done, [entry]: false })
+      ).toBe("contradictory");
+    }
+    expect(
+      smI2Result([runOf(), runOf("failed"), runOf()], {
+        "DW-50": false,
+        "DW-58": false,
+      })
+    ).toBe("fail");
+
+    const index = syntheticIndex({ "SM-I2": "contradictory" });
+    expect(validate(index, syntheticRecord("ready"))).toContain(
+      "the record says ready, but the AC 2 rule yields not ready"
+    );
+    expect(
+      validate(index, syntheticRecord("not ready", { "SM-I2": "pass" }))
+    ).toContain("blocking row SM-I2 (contradictory) is not listed as such");
+    expect(
+      validate(
+        index,
+        syntheticRecord("not ready", { "SM-I2": "contradictory" })
+      )
+    ).toEqual([]);
+  });
+
+  const passing = {
+    gate1Eligible: true,
+    deviations: [],
+    budgets: AD17_BUDGET_ROWS["SM-I5"].map((id) => ({ id, verdict: "pass" })),
+  };
+
+  it.each(Object.keys(AD17_BUDGET_ROWS))(
+    "keeps %s a gap when a budget it rests on fails or is missing, or the manifest is not eligible",
+    (id) => {
+      expect(ad17Result(passing, id)).toBe("pass");
+      for (const budgetId of AD17_BUDGET_ROWS[id]) {
+        expect(
+          ad17Result(
+            {
+              ...passing,
+              budgets: passing.budgets.map((budget) =>
+                budget.id === budgetId ? { ...budget, verdict: "fail" } : budget
+              ),
+            },
+            id
+          ),
+          budgetId
+        ).toBe("gap");
+        expect(
+          ad17Result(
+            {
+              ...passing,
+              budgets: passing.budgets.filter(
+                (budget) => budget.id !== budgetId
+              ),
+            },
+            id
+          ),
+          budgetId
+        ).toBe("gap");
+      }
+      expect(ad17Result({ ...passing, gate1Eligible: false }, id)).toBe("gap");
+      expect(
+        ad17Result({ ...passing, deviations: [{ item: "platform" }] }, id)
+      ).toBe("gap");
+
+      const index = syntheticIndex({ [id]: "gap" });
+      expect(validate(index, syntheticRecord("ready"))).not.toEqual([]);
+      expect(
+        validate(index, syntheticRecord("not ready", { [id]: "gap" }))
+      ).toEqual([]);
+    }
+  );
+
+  it("leaves a row passing when only a budget it does not rest on fails", () => {
+    const reference = {
+      ...passing,
+      budgets: passing.budgets.map((budget) =>
+        budget.id === "lint_wiki.wiki_1000.max"
+          ? { ...budget, verdict: "fail" }
+          : budget
+      ),
+    };
+    expect(ad17Result(reference, "NFR-1")).toBe("pass");
+    expect(ad17Result(reference, "NFR-4")).toBe("gap");
+    expect(ad17Result(reference, "SM-I5")).toBe("gap");
+  });
+});
+
 describe("the retained Gate 1 evidence", () => {
   const index = read(INDEX_PATH);
   const record = read(RECORD_PATH);
+  const ledger = read(
+    path.join(
+      REPOSITORY_ROOT,
+      "_bmad-output",
+      "implementation-artifacts",
+      "deferred-work.md"
+    )
+  );
   const rows = new Map(parseIndex(index).rows.map((row) => [row.ID, row]));
   const row = (id: string): IndexRow => {
     const found = rows.get(id);
@@ -543,18 +799,26 @@ describe("the retained Gate 1 evidence", () => {
 
   const reference = JSON.parse(
     read(path.join(GATE1_DIR, "benchmark", "reference-manifest.json"))
-  ) as {
-    gate1Eligible: boolean;
-    deviations: unknown[];
-    budgets: { verdict: string }[];
-    dw: { entry: string; verdict: string }[];
-    derivation: {
-      gate1: string;
-      constants: { status: string; currentSatisfiesRule: boolean }[];
-    };
-  };
+  ) as ReferenceManifest;
   const referenceEligible =
     reference.gate1Eligible && reference.deviations.length === 0;
+
+  it("records as the constants in force exactly the constants the code holds", () => {
+    expect(reference.constantsInForce).toEqual({
+      WRITE_ELIGIBLE_MARKDOWN_BYTES,
+      WRITE_ELIGIBLE_LINK_REFERENCES,
+      LINT_WIKI_STOP_MARGIN_MS,
+      SET_LOCAL_FLOOR_MS,
+      LINT_WIKI_DEADLINE_MS,
+      VALIDATION_DEADLINE_MS,
+    });
+  });
+
+  it("states every AD-17-dependent row's result as the reference manifest's budgets yield it", () => {
+    for (const id of Object.keys(AD17_BUDGET_ROWS)) {
+      expect(row(id).Result, id).toBe(ad17Result(reference, id));
+    }
+  });
 
   it("records the three D-9 constant rows as gaps while the constants are provisional, and from the reference manifest once they are fixed", () => {
     const constants = read(path.join(GATE1_DIR, "benchmark", "constants.md"));
@@ -598,15 +862,22 @@ describe("the retained Gate 1 evidence", () => {
     }
     expect(index).not.toMatch(/reference (run|manifest) is open/);
     expect(record).not.toMatch(/reference (run|manifest) is open/);
-    if (reference.budgets.every((budget) => budget.verdict === "pass")) {
-      for (const id of ["NFR-1", "NFR-2", "NFR-3", "NFR-4", "SM-I5"]) {
-        expect(row(id).Result, id).toBe("pass");
-      }
-    }
   });
 
-  it("rests SM-I2 on the three ezopnas runs and the DW-50 and DW-58 entries", () => {
+  it("rests SM-I2 on the three ezopnas runs and the DW-50 and DW-58 entries, stating the result they yield", () => {
     const sm = row("SM-I2");
+    const runs = [1, 2, 3].map(
+      (n) =>
+        JSON.parse(
+          read(path.join(GATE1_DIR, "raw", `test-wikilint-nas-run-${n}.json`))
+        ) as RunReport
+    );
+    expect(sm.Result).toBe(
+      smI2Result(runs, {
+        "DW-50": ledgerDone(ledger, "DW-50"),
+        "DW-58": ledgerDone(ledger, "DW-58"),
+      })
+    );
     for (const n of [1, 2, 3]) {
       expect(sm["Raw evidence location"]).toContain(
         `](raw/test-wikilint-nas-run-${n}.json)`
@@ -622,21 +893,11 @@ describe("the retained Gate 1 evidence", () => {
   });
 
   it("records DW-6 as contradictory when the ledger and the held-pool re-run disagree, and DW-4/5/6 from the reference records once they pass", () => {
-    const ledger = read(
-      path.join(
-        REPOSITORY_ROOT,
-        "_bmad-output",
-        "implementation-artifacts",
-        "deferred-work.md"
-      )
-    );
-    const ledgerEntry = ledger.split("### DW-6:")[1]?.split("\n### ")[0];
-    const ledgerDone = /^status: done/m.test(ledgerEntry ?? "");
     const verdict = (entry: string): string | undefined =>
       referenceEligible
         ? reference.dw.find((dwRecord) => dwRecord.entry === entry)?.verdict
         : undefined;
-    if (ledgerDone && verdict("DW-6") === "fail") {
+    if (ledgerDone(ledger, "DW-6") && verdict("DW-6") === "fail") {
       expect(row("DW-6").Result).toBe("contradictory");
     }
     expect(row("DW-6").Link).toContain("deferred-work.md");

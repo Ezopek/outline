@@ -6,8 +6,9 @@ export const monotonicClock: MonotonicClock = () => performance.now();
 
 /**
  * The smallest remainder, in milliseconds, for which a database batch may
- * start. Fixed by the Story 3.3 criterion 7 rule from the AD-17 reference
- * run of 2026-10-25 (source commit `7631d00b0`).
+ * start. Fixed by the Story 3.3 criterion 7 rule and confirmed by the
+ * retained Gate 1 reference run (source commit `e5e16ec25`,
+ * `docs/wikilint-gate-1/benchmark/reference-manifest.json`).
  */
 export const SET_LOCAL_FLOOR_MS = 100;
 

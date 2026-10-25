@@ -1,8 +1,10 @@
 import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { Socket } from "node:net";
 import Koa from "koa";
+import Router from "koa-router";
 import Logger from "@server/logging/Logger";
-import { createHealthHandler } from "./healthCheck";
+import { createHealthHandler, registerHealthRoute } from "./healthCheck";
 import { POLICY_SET_FINGERPRINT_HEADER } from "./policyConfig";
 
 const FINGERPRINT =
@@ -100,5 +102,53 @@ describe("createHealthHandler", () => {
     expect(ctx.body).toBeUndefined();
     expect(ctx.response.get(POLICY_SET_FINGERPRINT_HEADER)).toBe(FINGERPRINT);
     expect(error).toHaveBeenCalledWith("Redis ping failed", failure);
+  });
+});
+
+describe("registerHealthRoute", () => {
+  /**
+   * Serves a Koa app on which the route is registered, as `server/main.ts`
+   * registers it, and requests `GET /_health` over HTTP.
+   *
+   * @param ready - the worker's policy readiness.
+   * @returns the response.
+   */
+  async function requestHealth(ready: boolean) {
+    const app = new Koa();
+    const router = new Router();
+    registerHealthRoute(router, {
+      readiness: { ready, policySetFingerprint: FINGERPRINT },
+      checkDatabase: () => Promise.resolve(),
+      checkRedis: () => Promise.resolve(),
+    });
+    app.use(router.routes());
+    const server = http.createServer(app.callback());
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const response = await fetch(`http://127.0.0.1:${port}/_health`);
+      return {
+        status: response.status,
+        fingerprint: response.headers.get(POLICY_SET_FINGERPRINT_HEADER),
+        body: await response.text(),
+      };
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+
+  it("answers 503 with the fingerprint header when not ready", async () => {
+    expect(await requestHealth(false)).toMatchObject({
+      status: 503,
+      fingerprint: FINGERPRINT,
+    });
+  });
+
+  it("answers 200 OK when ready", async () => {
+    expect(await requestHealth(true)).toEqual({
+      status: 200,
+      fingerprint: FINGERPRINT,
+      body: "OK",
+    });
   });
 });

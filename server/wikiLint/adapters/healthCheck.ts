@@ -1,4 +1,5 @@
 import type { Context } from "koa";
+import type Router from "koa-router";
 import { toError } from "@shared/utils/error";
 import Logger from "@server/logging/Logger";
 import type { PolicyReadiness } from "./policyConfig";
@@ -49,4 +50,17 @@ export function createHealthHandler({
 
     ctx.body = "OK";
   };
+}
+
+/**
+ * Registers the `/_health` route that every service process answers.
+ *
+ * @param router - the process's root router.
+ * @param options - the readiness and dependency checks.
+ */
+export function registerHealthRoute(
+  router: Router,
+  options: HealthHandlerOptions
+): void {
+  router.get("/_health", createHealthHandler(options));
 }

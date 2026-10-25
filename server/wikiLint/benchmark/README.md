@@ -29,7 +29,7 @@ A missing item counts as a deviation, never as a pass. The image digest identifi
 
 1. Build the image locally from the commit under test, and do not publish it. Record its digest.
 2. Start PostgreSQL 14.2 in its own container on the same host, on local SSD, with `--cpus=2 --cpuset-cpus=<two dedicated cores> --memory=4g`. Migrate a fresh database.
-3. Start the app container on two other dedicated cores, with `--cpus=2 --cpuset-cpus=<two other cores> --memory=4g`, `NODE_ENV=production`, the usual Outline environment (`DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `UTILS_SECRET`, `URL`), the operator inputs and the attestations. Leave `SERVICES`, `WEB_CONCURRENCY`, `REQUEST_TIMEOUT` and `DATABASE_CONNECTION_POOL_MAX` at the values under test. The manifest records them.
+3. Start the app container on two other dedicated cores, with `--cpus=2 --cpuset-cpus=<two other cores> --memory=4g`, `NODE_ENV=production`, the usual Outline environment (`DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `UTILS_SECRET`, `URL`), the operator inputs and the attestations. Set `WIKILINT_BENCH_ALLOW_SEED=yes` to confirm that `DATABASE_URL` is the fresh benchmark database: `run.js` seeds fixture teams and users into it. Without the variable, or when the database already holds any team, `run.js` seeds nothing and exits non-zero with a message that names the variable or the existing teams. Leave `SERVICES`, `WEB_CONCURRENCY`, `REQUEST_TIMEOUT` and `DATABASE_CONNECTION_POOL_MAX` at the values under test. The manifest records them.
 4. Run nothing else against either container while the benchmark runs.
 
 ## Command
@@ -37,14 +37,14 @@ A missing item counts as a deviation, never as a pass. The image digest identifi
 From the checkout root inside the app container:
 
 ```sh
-yarn node build/server/wikiLint/benchmark/run.js --out /evidence/manifest.json
+WIKILINT_BENCH_ALLOW_SEED=yes yarn node build/server/wikiLint/benchmark/run.js --out /evidence/manifest.json
 ```
 
 Options:
 
 - `--smoke`: reduced samples (one warmup, three samples). It forces `gate1Eligible: false`.
 - `--seed SEED`: the fixture seed. The default is `wikilint-ad17-v1`. A seed's IDs are fixed, so each seed can be seeded once per database.
-- `--profiles wiki_150,wiki_1000`: the `lint_wiki` profiles to measure. The default is both.
+- `--profiles wiki_150,wiki_1000`: the `lint_wiki` profiles to measure. The default is both. A full run that measures anything other than exactly both records a deviation, so it is not Gate 1 evidence, and each unmeasured profile's budgets fail.
 
 The harness runs in one process with no queue worker, so a scheduled import task runs in-process. A full run uses 5 warmups and 40 samples per case. The cold run is each case's first warmup. p95 is the nearest-rank sample at `ceil(0.95 * N)`. The concurrent writer, the HTML imports and the held-pool re-run (DW-6, at the full 60-second deadline) run apart from the timed samples. A budget breach is recorded with its measured value and `fail`, and the run continues. Timing never changes a lint result.
 

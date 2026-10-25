@@ -24,7 +24,7 @@ import { RedisPrefixHelper } from "./utils/RedisPrefixHelper";
 import ShutdownHelper, { ShutdownOrder } from "./utils/ShutdownHelper";
 import { getSSLOptions } from "./utils/ssl";
 import { checkUpdates } from "./utils/updates";
-import { createHealthHandler } from "./wikiLint/adapters/healthCheck";
+import { registerHealthRoute } from "./wikiLint/adapters/healthCheck";
 import {
   getPolicyReadiness,
   getPolicySet,
@@ -84,14 +84,11 @@ export async function start(id: number, disconnect: () => void) {
   app.context.redirectOnClient = redirectOnClient;
 
   // Add a health check endpoint to all services
-  router.get(
-    "/_health",
-    createHealthHandler({
-      readiness: policyReadiness,
-      checkDatabase: () => sequelize.query("SELECT 1"),
-      checkRedis: () => Redis.defaultClient.ping(),
-    })
-  );
+  registerHealthRoute(router, {
+    readiness: policyReadiness,
+    checkDatabase: () => sequelize.query("SELECT 1"),
+    checkRedis: () => Redis.defaultClient.ping(),
+  });
 
   app.use(router.routes());
 

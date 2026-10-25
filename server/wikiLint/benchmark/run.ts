@@ -8,15 +8,18 @@ import { sequelize } from "@server/storage/database";
 import type { ProfileName } from "./fixtureGenerator";
 import { PROFILES } from "./fixtureGenerator";
 import { runBenchmark } from "./harness";
+import { seedRefusal } from "./seedGuard";
 
 /**
  * Runs the AD-17 benchmark from the production build and writes its
  * manifest:
  *
- *   node build/server/wikiLint/benchmark/run.js [--smoke] [--seed SEED]
- *     [--profiles wiki_150,wiki_1000] [--out FILE]
+ *   WIKILINT_BENCH_ALLOW_SEED=yes node build/server/wikiLint/benchmark/run.js
+ *     [--smoke] [--seed SEED] [--profiles wiki_150,wiki_1000] [--out FILE]
  *
  * `--smoke` runs reduced samples, and its manifest is never Gate 1 evidence.
+ * Without `WIKILINT_BENCH_ALLOW_SEED=yes`, or when the database already
+ * holds a team, it seeds nothing and exits non-zero.
  */
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
@@ -48,6 +51,13 @@ async function main(): Promise<number> {
   ) {
     return Promise.resolve({ finished: () => this.perform(props) } as Job);
   };
+
+  // The production image contains this script, so it seeds only an
+  // opted-in database that holds no team yet.
+  const refusal = await seedRefusal(process.env);
+  if (refusal) {
+    throw new Error(refusal);
+  }
 
   const manifest = await runBenchmark({
     smoke: args.includes("--smoke"),

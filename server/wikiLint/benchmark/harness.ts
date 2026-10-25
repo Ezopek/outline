@@ -868,13 +868,33 @@ const completed = (sample: MeasuredSample) =>
 
 /**
  * Evaluates the AD-17 budgets of criteria 4 to 6 from the retained samples.
- * A budget without a measured value fails; a breach is recorded, never acted
- * on, and never changes a lint result.
+ * A budget without a measured value fails, as do the budgets of a required
+ * profile that was not measured; a breach is recorded, never acted on, and
+ * never changes a lint result.
  *
  * @param cases - the benchmark cases.
+ * @param requiredProfiles - the `lint_wiki` profiles whose budgets must be
+ *   evaluated even when no case measured them.
  * @returns each budget's measured value and verdict.
  */
-export function evaluateBudgets(cases: readonly CaseRecord[]): BudgetVerdict[] {
+export function evaluateBudgets(
+  cases: readonly CaseRecord[],
+  requiredProfiles: readonly ProfileName[] = []
+): BudgetVerdict[] {
+  const unmeasured = requiredProfiles
+    .filter(
+      (name) =>
+        !cases.some(
+          (record) => record.kind === "lint_wiki" && record.profile === name
+        )
+    )
+    .map((name): CaseRecord => ({
+      id: `lint_wiki:${name}`,
+      kind: "lint_wiki",
+      profile: name,
+      samples: [],
+      summary: {},
+    }));
   const budgets: BudgetVerdict[] = [];
   const add = (
     budget: Omit<BudgetVerdict, "verdict">,
@@ -888,7 +908,7 @@ export function evaluateBudgets(cases: readonly CaseRecord[]): BudgetVerdict[] {
   const idsAt = (samples: readonly MeasuredSample[], value: number | null) =>
     samples.filter((sample) => sample.durationMs === value).map(({ id }) => id);
 
-  for (const record of cases) {
+  for (const record of [...cases, ...unmeasured]) {
     if (record.kind === "lint_document") {
       const samples = warm(record.samples);
       const value = p95(samples.map((sample) => sample.durationMs));
@@ -1050,6 +1070,55 @@ function selectSamples<T extends { role: "warmup" | "sample" }>(
 }
 
 /**
+ * Lists every way a full run's inputs depart from the AD-17 reference run: it
+ * measures exactly every profile in `PROFILES`, and runs the held-pool re-run
+ * on the largest of them at `LINT_WIKI_DEADLINE_MS`. A smoke run is never
+ * Gate 1 evidence, so its inputs are not checked.
+ *
+ * @param options - the run inputs.
+ * @returns the deviations, in a fixed order.
+ */
+export function runDeviations(
+  options: Pick<HarnessOptions, "smoke" | "profiles" | "heldPool">
+): Deviation[] {
+  if (options.smoke) {
+    return [];
+  }
+  const deviations: Deviation[] = [];
+  const all = Object.keys(PROFILES) as ProfileName[];
+  const measuredProfiles = options.profiles ?? all;
+  if ([...measuredProfiles].sort().join(",") !== [...all].sort().join(",")) {
+    deviations.push({
+      item: "measured lint_wiki profiles (--profiles)",
+      expected: all.join(","),
+      actual: measuredProfiles.join(",") || "none",
+    });
+  }
+  // As in `runBenchmark`, the held-pool re-run defaults to the largest
+  // measured profile.
+  const largest = all[all.length - 1];
+  const heldProfile =
+    options.heldPool?.profile ??
+    (measuredProfiles.includes(largest) ? largest : measuredProfiles[0]);
+  if (heldProfile !== largest) {
+    deviations.push({
+      item: "held-pool profile",
+      expected: largest,
+      actual: heldProfile,
+    });
+  }
+  const heldDeadlineMs = options.heldPool?.deadlineMs ?? LINT_WIKI_DEADLINE_MS;
+  if (heldDeadlineMs !== LINT_WIKI_DEADLINE_MS) {
+    deviations.push({
+      item: "held-pool deadline (ms)",
+      expected: String(LINT_WIKI_DEADLINE_MS),
+      actual: String(heldDeadlineMs),
+    });
+  }
+  return deviations;
+}
+
+/**
  * Runs the AD-17 benchmark in-process: seeds the database, installs the
  * benchmark policy, runs every case through the registered MCP tools, runs
  * the concurrent writer, HTML imports, and held-pool re-run apart from the
@@ -1118,7 +1187,10 @@ export async function runBenchmark(options: HarnessOptions): Promise<Manifest> {
       min: sequelize.options.pool?.min ?? null,
     },
   });
-  const deviations = profileDeviations(environment);
+  const deviations = [
+    ...profileDeviations(environment),
+    ...runDeviations(options),
+  ];
   const gate1Eligible = isGate1Eligible(deviations, smoke);
 
   const recorder = new Recorder();
@@ -1399,7 +1471,10 @@ export async function runBenchmark(options: HarnessOptions): Promise<Manifest> {
     }
   }
 
-  const budgets = evaluateBudgets(cases);
+  const budgets = evaluateBudgets(
+    cases,
+    smoke ? [] : (Object.keys(PROFILES) as ProfileName[])
+  );
   const dw = dwRecords(cases, heldPool, gate1Eligible);
   const derivation = deriveConstants({
     referenceEligible: gate1Eligible,

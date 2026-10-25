@@ -44,8 +44,8 @@ export const LINT_WIKI_DEADLINE_MS = 60000;
 /**
  * The remainder, in milliseconds, below which `lint_wiki` starts no further
  * unit; result assembly is charged to it. Fixed by the Story 3.3 criterion 7
- * rule from the AD-17 reference run of 2026-10-25 (source commit
- * `7631d00b0`).
+ * rule and confirmed by the retained Gate 1 reference run (source commit
+ * `e5e16ec25`, `docs/wikilint-gate-1/benchmark/reference-manifest.json`).
  */
 export const LINT_WIKI_STOP_MARGIN_MS = 2000;
 
