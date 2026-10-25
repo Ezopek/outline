@@ -511,4 +511,13 @@ location: server/wikiLint/application/writeDecision.ts; server/wikiLint/applicat
 source_spec: `spec-dw-56-fix-ad17-constants-and-held-pool-verdict.md`
 severity: medium
 reason: The derivation gives 131072 for the Markdown eligibility constant against the committed 262144; the other three constants satisfy their rules. The held-pool re-run ended after 30,004 ms as `VALIDATION_RUNTIME_FAILED` from the pool's own 30-second acquisition timeout, inside the 60-second deadline; DW-6 forbids reclassifying that error, so the operator amended Story 3.3 criterion 9 to accept either outcome when the run does not overrun and leaves no connection held.
+resolution: story dw-56-fix-ad17-constants-and-held-pool-verdict (accepted commit 8f76ac926, review a3220697): WRITE_ELIGIBLE_MARKDOWN_BYTES is 131072, the four constants are marked fixed, and the DW-6 verdict follows the amended criterion with the pool usage after release recorded. Gate 1 evidence still needs an AD-17 re-run on the new source.
+status: done 2026-10-25
+
+### DW-57: The held-pool `poolAfterRelease` reading is settled for up to 5 s, and the `dwRecords` wiring of the DW-6 verdict has no unit test.
+origin: DW-56 implementation review a3220697, two low findings
+location: server/wikiLint/benchmark/harness.ts:1588 (POOL_SETTLE_MS); server/wikiLint/benchmark/harness.test.ts:335
+source_spec: `spec-dw-56-fix-ad17-constants-and-held-pool-verdict.md`
+severity: low
+reason: `runHeldPool` waits up to `POOL_SETTLE_MS` (5000 ms) for the pool to become idle before it records `poolAfterRelease`, so a short-lived leftover connection reads as 0/0; the README and manifest do not say the reading is settled. The record's `verdict: heldPoolVerdict(heldPool)` wiring is covered only by the DB-backed `wiki_150` smoke test on the `VALIDATION_TIMEOUT` path, so a change to `dwRecords` could break the `VALIDATION_RUNTIME_FAILED` path unnoticed.
 status: open
