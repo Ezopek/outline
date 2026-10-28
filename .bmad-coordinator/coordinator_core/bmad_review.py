@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import bmad_contract as contract
-from . import bundles, clients
+from . import bmad_snapshot, boundary, bundles, clients
 from .bmad_implementation import SPEC_AUTHOR, STORY_PROFILES
 from .bmad_planning import (AFFECTED_IDS_RULE, PLAN, REVIEW, _file_entry, _row, _write_brief, client_binding,
                             client_label, effective_dependencies, read_assignment_binding, refuse_while_running,
@@ -50,6 +50,8 @@ class ReviewPrepare:
     lenses: list[str] = field(default_factory=lambda: list(DEFAULT_LENSES))
     client_root: str = ".agents/skills"
     client: str = clients.DEFAULT                # registered write-free worker client
+    boundary: str | None = None                  # launch-boundary L1; recorded in the binding when set
+    mode: str | None = None                      # Copilot reviewer design V1: "read", a Copilot reviewer only
 
 
 def _bad(message: str) -> DomainError:
@@ -302,7 +304,14 @@ def _invalid(message: str) -> DomainError:
 def _validate(spec: ReviewPrepare) -> None:
     if type(spec.client) is not str:
         raise _invalid("Worker client must be a registered client name")
-    if not clients.get(spec.client).write_free_readonly:
+    if spec.mode is not None:   # Copilot reviewer design V1: the read mode, under the launch boundary only
+        if spec.mode != "read":
+            raise _invalid("Review mode must be read or absent")
+        if not clients.get(spec.client).read_mode:
+            raise DomainError("UNSUPPORTED_CLIENT_MODE", f"Worker client {spec.client} has no read mode")
+        if boundary.check_kind(spec.boundary) is None:
+            raise _invalid("A read-mode review needs boundary bwrap")
+    elif not clients.get(spec.client).write_free_readonly:
         raise DomainError("UNSUPPORTED_CLIENT_MODE", f"Worker client {spec.client} has no write-free read-only mode")
     if not KEY.match(spec.key or "") or not spec.reviewer_id.strip():
         raise _invalid("Key and reviewer are required")
@@ -369,6 +378,46 @@ SEVERITY_RULES = [
 ]
 
 
+# Copilot reviewer design V2, V5, V6: a read-mode review's return rules and its staged inputs. The reviewer cannot hash,
+# so `bundle_read` is left out of its return; the coordinator observes which files it read in full.
+READ_REVIEW_RULES = [rule for rule in REVIEW_RULES if "`bundle_read`" not in rule]
+
+
+def read_inputs(worktree: Path, sealed: list[dict], extras: list[dict]) -> list[dict]:
+    """The staged input set: each sealed file, then the profile's extras (the code review's diff and spec, the spec
+    review's rules and context), under an inert alias numbered across the whole set. An extra without a bound digest
+    is read now from its commit, so a missing or irregular one refuses the prepare."""
+    entries = [{"kind": item["kind"], "path": item["path"], "digest": item["digest"],
+                "source": {"file": item["sealed_path"]}, "required": True} for item in sealed] + list(extras)
+    return [{"alias": bundles.read_alias(item["kind"], index, item["path"]), "path": item["path"],
+             "kind": item["kind"], "required": item["required"], "source": item["source"],
+             "digest": item.get("digest") or hashlib.sha256(bundles.input_bytes(worktree, item["source"])).hexdigest()}
+            for index, item in enumerate(entries)]
+
+
+REVIEW_SKILL = "bmad-review"
+
+
+def planning_read_extras(worktree: Path, report, client_root: str) -> list[dict]:
+    """Copilot reviewer design V2, the planning review: the review skill's own contract files (its `SKILL.md`,
+    `customize.toml`, references and scripts), its override files and the BMAD config layers, each from the
+    fingerprinted contract (the digest the binding seals), read as needed. The reviewer resolves no customization:
+    it reads these copies."""
+    prefixes = (f"{client_root}/{REVIEW_SKILL}/", f"_bmad/custom/{REVIEW_SKILL}", "_bmad/config", "_bmad/custom/config")
+    return [{"kind": "contract", "path": item["path"], "digest": item["digest"], "required": False,
+             "source": {"file": str(worktree / item["path"])}}
+            for item in report.contract_files if item["path"].startswith(prefixes)]
+
+
+def read_section(inputs: list[dict]) -> str:
+    lines = ["", "## Read-mode inputs (your only files)",
+             "Each line is a staged file under your cwd, then the path it stands for: read the staged file, cite the "
+             "path in a finding's `location`. Read every file marked `read in full` whole, with `view`."]
+    lines += [f"- `{item['alias']}` is `{item['path']}` ({item['kind']}; "
+              f"{'read in full' if item['required'] else 'read as needed'})" for item in inputs]
+    return "\n".join(lines) + "\n"
+
+
 def _planning_binding(store, events, assignment_id: str) -> dict:
     """The binding of a bundle contributor, whichever profile (planning or implementation) it is bound to."""
     name, bound = binding_anchor(events, assignment_id)
@@ -399,13 +448,16 @@ def _provenance(store, snapshot, contributors) -> tuple[set[str], dict[str, list
 
 def _brief(spec: ReviewPrepare, worktree: Path, sealed: list[dict], carried: dict, bundle: dict,
            decisions: list[dict], own: set[str], inherited: dict[str, list[str]]) -> str:
-    root, claude = spec.client_root, spec.client == clients.CLAUDE.name
+    root, claude, read = spec.client_root, spec.client == clients.CLAUDE.name, spec.mode == "read"
     items = carried["assumptions"] + carried["critical_flags"]
+    lenses = ", ".join(f"`{lens}`" for lens in spec.lenses)
     lines = ["# BMAD review of a sealed planning bundle (one attempt)", "",
              "You are a fresh, read-only reviewer. The coordinator holds all state; this brief is everything you have. "
              + client_label(spec.client), "", "## Read first",
-             f"- `{root}/bmad-review/SKILL.md` and the lens files it names; run exactly these lenses: "
-             + ", ".join(f"`{lens}`" for lens in spec.lenses), "",
+             (f"- The staged copies of `{root}/bmad-review/SKILL.md`, its `customize.toml` (and any override under "
+              f"`_bmad/custom/`) and the lens files they name, listed under Read-mode inputs below; resolve no "
+              f"customization yourself, read those copies. Run exactly these lenses: {lenses}") if read else
+             f"- `{root}/bmad-review/SKILL.md` and the lens files it names; run exactly these lenses: {lenses}", "",
              "## Sealed bundle (read only; read this copy, not the live worktree)"]
     lines += [f"- [{item['kind']}] `{item['path']}` at `{item['sealed_path']}`" for item in sealed]
     lines += ["", "## Carried items needing a disposition (each exactly once)"]
@@ -430,8 +482,23 @@ def _brief(spec: ReviewPrepare, worktree: Path, sealed: list[dict], carried: dic
     lines += ["", "## Severity rubric",
               "`critical` = unsafe for downstream use or contradicts the mandate; `high`, `medium`, `low` otherwise by "
               "consequence. BMAD review has no severity; you assign it here. Never lower a severity to make work pass.",
-              *SEVERITY_RULES,
-              "", "## Rules",
+              *SEVERITY_RULES]
+    if read:   # Copilot reviewer design V5, V6: staged inputs, no attestation, the final message as the return
+        lines += ["", "## Rules",
+                  "- You have only the `view`, `grep` and `glob` tools, over the staged files listed under Read-mode "
+                  "inputs below; nothing else exists for you. Do not call any service or follow any handoff.",
+                  "- Do not start extra reviewers; you are the reviewer.",
+                  "- `location` is `path:line`, with the path a Read-mode inputs line names.",
+                  "- Return the required generic fields plus `bundle_id`, `manifest_digest`, `lenses_run`, `findings` "
+                  "and `dispositions`; there is no `bundle_read`, the coordinator observes which files you read:",
+                  *READ_REVIEW_RULES, AFFECTED_IDS_RULE,
+                  "- Use result `blocked` with an explanation if you cannot read the staged files; that is not a review.",
+                  "- Your final message is the return and nothing else: one JSON object, from `{` to `}`. A sentence "
+                  "before or after it voids the review.",
+                  "", "## Profile line", f"- bundle_id: `{bundle['id']}`",
+                  f"- manifest_digest: `{bundle['manifest_digest']}`", f"- lenses: {', '.join(spec.lenses)}", ""]
+        return "\n".join(lines)
+    lines += ["", "## Rules",
               "- Write nothing anywhere; " + ("your tool policy has no write tools and denies write-capable shell "
                                               "commands; every shell command is recorded and audited. It is a "
                                               "recorded policy, not OS confinement." if claude else
@@ -512,8 +579,9 @@ def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
         raise _invalid("A code review takes no compatibility decision")
     if not code and not spec.compat_decision_id:
         raise _invalid("A planning review needs a compatibility decision")
-    report = None
+    report = source = None
     if not code:
+        source = bmad_snapshot.guard(worktree, repo.common_dir, snapshot["events"])   # BMAD snapshot design S7
         report = contract.discover(worktree, spec.client_root)
         if not report.supported:
             raise DomainError("UNSUPPORTED_CONTRACT", "; ".join(report.reasons))
@@ -534,6 +602,18 @@ def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
         raise DomainError("BLOCKED_EVIDENCE", "; ".join(reasons))
     carried = _carried(repo, store, contributors)
     sealed = _sealed_files(bundle, manifest)
+    inputs, read_profile = [], None
+    if spec.mode == "read":   # Copilot reviewer design V2, V8: the staged input set, and every refusal before a key
+        read_profile = "spec-review" if spec_bundle else "code-review" if code else "planning-review"
+        chosen = clients.get(spec.client)
+        clients.read_ready(chosen, clients.preflight(chosen)[1], read_profile)
+        clients.boundary_ready(spec.boundary, chosen, repo)
+        from . import bmad_implementation, bmad_spec_author
+        extras = (bmad_spec_author.read_extras(repo, store, feature, manifest) if spec_bundle else
+                  bmad_implementation.read_extras(store, feature, manifest) if code else
+                  planning_read_extras(worktree, report, spec.client_root))
+        inputs = read_inputs(worktree, sealed, extras)
+    shown = [{**item, "sealed_path": entry["alias"]} for item, entry in zip(sealed, inputs)] if inputs else sealed
     if code:
         from . import bmad_implementation as implementation
         project = _planning_binding(store, snapshot["events"], contributors[0]["id"]).get("project")
@@ -545,13 +625,15 @@ def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
     own, inherited = _provenance(store, snapshot, manifest["source_assignment_ids"])
     if spec_bundle:
         from . import bmad_spec_author
-        text = bmad_spec_author.review_brief(spec, worktree, sealed, bundle, feature, manifest, decisions, carried,
-                                             store, repo, snapshot)
+        text = bmad_spec_author.review_brief(spec, worktree, shown, bundle, feature, manifest, decisions, carried,
+                                             store, repo, snapshot)   # V2: a read review sees the staged aliases
     elif code:
-        text = implementation.review_brief(spec, worktree, sealed, bundle, feature, manifest, decisions, carried, store,
+        text = implementation.review_brief(spec, worktree, shown, bundle, feature, manifest, decisions, carried, store,
                                            repo, snapshot)
     else:
-        text = _brief(spec, worktree, sealed, carried, bundle, decisions, own, inherited)
+        text = _brief(spec, worktree, shown, carried, bundle, decisions, own, inherited)
+    if inputs:
+        text += read_section(inputs)
     brief = _write_brief(worktree, brief_ref, text)
     contract_files = [] if code else report.contract_files
     assignment_id = coordinator.create_assignment(owner, AssignmentInput(
@@ -565,9 +647,13 @@ def review_prepare(repo, store, owner, spec: ReviewPrepare) -> dict:
              "contributor_assignment_ids": [row["id"] for row in contributors],
              "contributor_source_ids": sorted(json.loads(row["return_json"])["source_id"] for row in contributors),
              "lenses": list(spec.lenses), "brief_sha256": brief["digest"], "carried": carried, **client_binding(spec)}
+    if inputs:   # Copilot reviewer design V2: what the read launch stages, and which gate qualifies it
+        value.update(read_inputs=inputs, read_profile=read_profile)
     if not code:   # a planning review binding seals the contract it was prepared against
         value.update(fingerprint_sha256=report.fingerprint_sha256, contract=report.contract,
                      compat_decision_id=spec.compat_decision_id)
+        if source is not None:
+            value["bmad_source"] = source
     evidence = seal_binding(repo.common_dir / "coordinator", value)
     coordinator.bind_assignment(owner, assignment_id, evidence)
     return {"assignment_id": assignment_id, "brief_ref": brief_ref, "binding_sha256": evidence.payload_digest}

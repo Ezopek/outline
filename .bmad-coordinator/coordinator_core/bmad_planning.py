@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import bmad_contract as contract
-from . import bundles, clients
+from . import bmad_snapshot, boundary, bundles, clients
 from .model import AssignmentInput, DomainError
 from .profiles import ReturnProfile
 from .repo import resolve_repo
@@ -53,6 +53,7 @@ class PlanningPrepare:
     prd_acceptance: str | None = None            # architecture only: an accepted PRD feeds it
     client_root: str = ".agents/skills"
     client: str = clients.DEFAULT                # registered worker client; recorded in the binding when not default
+    boundary: str | None = None                  # launch-boundary L1; recorded in the binding when set
 
 
 CODEX_LABEL = "Codex does not auto-discover the skill: read the files named here."
@@ -76,15 +77,19 @@ def spec_digest(spec) -> str:
     data = asdict(spec)
     if data.get("client") == clients.DEFAULT:
         del data["client"]
-    for key, unset in (("corrects_review", None), ("finding_ids", [])):
+    for key, unset in (("corrects_review", None), ("finding_ids", []), ("boundary", None), ("mode", None)):
         if key in data and data[key] == unset:
             del data[key]
     return hashlib.sha256(canonical(data)).hexdigest()
 
 
 def client_binding(spec) -> dict:
-    """The binding carries the client only when it is not the default, so Codex bindings keep their bytes."""
-    return {} if spec.client == clients.DEFAULT else {"client": spec.client}
+    """The binding carries the client only when it is not the default, so Codex bindings keep their bytes, and the
+    boundary and the mode only when set (launch-boundary L1, Copilot reviewer design V1)."""
+    kind = boundary.check_kind(getattr(spec, "boundary", None))
+    mode = getattr(spec, "mode", None)
+    return ({} if spec.client == clients.DEFAULT else {"client": spec.client}) | \
+        ({"boundary": kind} if kind else {}) | ({"mode": mode} if mode else {})
 
 
 RULED_CLIENTS = (clients.CLAUDE.name, clients.COPILOT.name)  # clients whose author argv renders exact command rules
@@ -107,16 +112,35 @@ LAUNCHER_RULE = ("- The installed skills write these commands as `uv run --no-pr
 
 def author_commands(worktree, root: str, skill: str, workspace: str) -> list[str]:
     """Design sections 5 and 14: the exact `uv` prefixes a Claude or Copilot author may run (customization, config,
-    memlog init and append), sealed in its binding as `commands` and rendered as advisory Bash or `shell(...)` rules
-    plus a stdin-only sha256sum. A path with a glob or permission-pattern metacharacter is refused before any rule,
-    brief or binding exists."""
+    memlog init and append, and for the architecture skill its Reviewer Gate lint, issue #1), sealed in its binding
+    as `commands` and rendered as advisory Bash or `shell(...)` rules plus a stdin-only sha256sum. A path with a glob
+    or permission-pattern metacharacter is refused before any rule, brief or binding exists."""
     if not all(clients.pattern_safe(str(item)) for item in (worktree, root, skill, workspace)):
         raise _invalid("Worktree, client root or workspace contains a glob or permission-pattern character")
     scripts = f"{worktree}/_bmad/scripts"  # stdlib scripts with inline metadata: no project is read or synced
-    return [f"uv run --no-project {scripts}/resolve_customization.py --skill {worktree}/{root}/{skill}",
-            f"uv run --no-project {scripts}/resolve_config.py --project-root {worktree}",
-            f"uv run --no-project {scripts}/memlog.py init --workspace {workspace}",
-            f"uv run --no-project {scripts}/memlog.py append --workspace {workspace}"]
+    commands = [f"uv run --no-project {scripts}/resolve_customization.py --skill {worktree}/{root}/{skill}",
+                f"uv run --no-project {scripts}/resolve_config.py --project-root {worktree}",
+                f"uv run --no-project {scripts}/memlog.py init --workspace {workspace}",
+                f"uv run --no-project {scripts}/memlog.py append --workspace {workspace}"]
+    if skill == "bmad-architecture":  # issue #1: the gate's lint, its report bound to a workspace file (not stdout)
+        # so a Copilot launcher refuses any other --output (repeated, abbreviated or short) and the delta holds it
+        commands.append(f"uv run --no-project {worktree}/{root}/{skill}/scripts/lint_spine.py --workspace {workspace} "
+                        f"--output {workspace}/{LINT_OUTPUT}")
+    return commands
+
+
+LINT_OUTPUT = ".lint-spine.json"
+# Issue #1 (BMAD 6.12): a bound Claude or Copilot author has no subagent tool (no `Agent` in AUTHOR_TOOLS; Copilot's
+# pinned set drops `task`), so the skills' subagent steps take their documented sequential fallback in the author's
+# own context; that gate is a self-check, and the pipeline's review step stays the independent review.
+SUBAGENT_RULE = ("- No subagent tool is offered in this run. Where the skill dispatches subagents (research, input "
+                 "reconciliation, the Reviewer Gate's rubric walker and reviewer lenses), take its sequential fallback "
+                 "in this process: write each review to its file under `{workspace}/reviews/` first, then go on. Add "
+                 "one `assumptions` entry saying that the reviewer gate ran sequentially without subagents. That gate "
+                 "is your own check, not an independent review: the coordinator reviews the bundle separately.")
+LINT_RULE = ("- The Reviewer Gate's `lint_spine.py` is bound above with `--output {output}`: it writes its JSON report "
+             "to that file instead of printing it. Run it in exactly that form, with no further argument, and read "
+             "the file.")
 
 
 # The `workflow_json` keys `check` reads (workflow_json skeleton round): the intent, a status, the four lists and,
@@ -635,12 +659,12 @@ def _brief(spec, worktree, workspace, roles, decisions, continuation, prior, inh
             for item in review["items"]:  # free text JSON-quoted: a multi-line field cannot end the list (review M4)
                 if item["pointer"].startswith("/findings/"):
                     lines.append(f"- `{item['pointer']}` ({item['severity']}, lens `{item['lens']}`) at "
-                                 f"`{item['location']}`: trigger: {json.dumps(item['trigger_condition'])}; guard: "
-                                 f"{json.dumps(item['guard_snippet'])}; consequence: "
+                                 f"{json.dumps(item['location'])}: trigger: {json.dumps(item['trigger_condition'])}; "
+                                 f"guard: {json.dumps(item['guard_snippet'])}; consequence: "
                                  f"{json.dumps(item['potential_consequence'])}")
                 else:
                     lines.append(f"- `{item['pointer']}` ({item['severity']}) carried item of contributor "
-                                 f"`{item['contributor_id']}`, kind `{item['kind']}`, index {item['index']}")
+                                 f"{json.dumps(item['contributor_id'])}, kind `{item['kind']}`, index {item['index']}")
         else:
             lines += [f"- Change signal (caller-reported, not a recorded decision): {continuation['change_signal']}"]
         lines += ["A single free-form decision or signal may not cover every gap. Retain any still-unresolved gap "
@@ -687,6 +711,10 @@ def _brief(spec, worktree, workspace, roles, decisions, continuation, prior, inh
                   "- Write your return JSON, one object, to the envelope's `return_path` and nowhere else, with your "
                   "file-creation tool (`create`, or `edit` to fix it); a shell redirect is accepted but discouraged. "
                   "Your final message is never read as the return."]
+    if claude or copilot:  # issue #1: the clients whose author tools are pinned without a subagent tool
+        lines.append(SUBAGENT_RULE.format(workspace=workspace))
+        if skill == "bmad-architecture":
+            lines.append(LINT_RULE.format(output=f"{workspace}/{LINT_OUTPUT}"))
     return "\n".join(lines) + "\n"
 
 
@@ -725,6 +753,7 @@ def prepare(repo, store, owner, spec: PlanningPrepare) -> dict:
                 raise DomainError("IDEMPOTENCY_CONFLICT", "Idempotency key was used with a different prepare spec")
             return {"assignment_id": prior_row["id"], "brief_ref": prior_row["brief_ref"],
                     "binding_sha256": bound["payload_digest"]}
+    source = bmad_snapshot.guard(worktree, repo.common_dir, snapshot["events"])   # BMAD snapshot design S7
     report = contract.discover(worktree, spec.client_root)
     if not report.supported:
         raise DomainError("UNSUPPORTED_CONTRACT", "; ".join(report.reasons))
@@ -833,6 +862,8 @@ def prepare(repo, store, owner, spec: PlanningPrepare) -> dict:
              "expected_customization": [{"skill": spec.skill,
                                          "sha256": report.contract["resolved"]["skills"][spec.skill]}],
              **client_binding(spec)}
+    if source is not None:   # absent for a committed install, whose bindings keep their digests
+        value["bmad_source"] = source
     if spec.client in RULED_CLIENTS:
         value["commands"] = author_commands(worktree, spec.client_root, spec.skill, workspace)
     sealed = {item["id"]: {"id": item["id"], "digest": item["digest"]} for item in inherited}
@@ -861,9 +892,10 @@ def view_return(repo, store, assignment_id: str) -> dict:
 
 
 def run(repo, store, owner, assignment_id: str, model: str, timeout_seconds: int, client: str | None = None,
-        max_turns: int | None = None) -> dict:
+        max_turns: int | None = None, boundary_kind: str | None = None) -> dict:
     """Thin wrapper over worker.run_assignment; every mandatory gate lives in the core reserve path."""
-    report = run_assignment(repo, store, owner, assignment_id, model, timeout_seconds, client, max_turns)
+    report = run_assignment(repo, store, owner, assignment_id, model, timeout_seconds, client, max_turns,
+                            boundary_kind)
     planning = binding_anchor(store.read_snapshot()["events"], assignment_id)[0] == PLAN  # review runs have no verdict
     return {"assignment_id": report.assignment_id, "state": report.state, "run_dir": report.run_dir,
             "evidence_needs": report.evidence_needs,

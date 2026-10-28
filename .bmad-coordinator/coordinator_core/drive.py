@@ -22,12 +22,12 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from . import bmad_implementation as implementation
-from . import bmad_planning, bmad_review, bundles, clients, drive_pipeline, exporter, inbox, judgment, worker
+from . import bill, bmad_planning, bmad_review, bundles, clients, drive_pipeline, exporter, inbox, judgment, worker
 from . import bmad_spec_author
 from .drive_pipeline import open_high_findings
 from .model import DecisionInput, DomainError, OwnerRef
 from .run_receipt import canonical, seal
-from .service import DRIVE_EVENTS, HOLDING_STATES, Coordinator, releasable
+from .service import DRIVE_EVENTS, HOLDING_STATES, Coordinator, releasable, require_open_feature
 from .store import open_store
 
 HOOK = None   # test seam: callable(point, **info) at named points; production leaves it None
@@ -214,6 +214,12 @@ def _drive_action(outcome: str, reason: str | None, subjects: dict) -> str | Non
         return (f"fix the project status file ({subjects.get('detail')}) in the story worktree without committing "
                 "it, then drive resume (the status step edits and commits it); or release --token-file "
                 f"{TOKEN} and finish the story attended")
+    if reason == "client-failure":   # design D29
+        return (f"the worker of assignment {subjects.get('assignment_id')} ended without a return "
+                f"{subjects.get('failures')} times in a row (timeouts or crashes; the attempts are committed): check "
+                "the client (login, quota, the model, the role's timeout), then drive resume to try once more; or "
+                "raise budgets.client_failures in a pipeline bound to a new mandate revision (release --token-file "
+                f"{TOKEN} first); or release and finish the story attended")
     if reason == "correction-budget":
         return ("the red verify receipt of the attempt commit is final, so a plain drive resume stops here again: fix "
                 "the failing verification by hand in the story worktree and commit nothing yourself; then " +
@@ -238,6 +244,18 @@ def _drive_action(outcome: str, reason: str | None, subjects: dict) -> str | Non
                 f"then drive resume; or, to have the author revise it, decision add --token-file {TOKEN} with {revise} "
                 f"while no driver runs, then drive resume; or release --token-file {TOKEN} and revise the spec "
                 "attended (spec_auto_accept: true in the pipeline skips this stop)")
+    if reason == "cost-budget":   # bill design B5/B6: reported money only; the epic action names the epic commands
+        missing = subjects.get("unreported_launches") or 0
+        note = f" ({missing} launch{'' if missing == 1 else 'es'} without a figure)" if missing else ""
+        if subjects.get("scope") == "epic":
+            return (f"the epic's reported cost USD {subjects.get('used')} reached its budgets.max_cost_usd "
+                    f"{subjects.get('max')}{note}, so a plain drive resume stops here again: raise the epic's bound "
+                    f"or leave the story (the epic action names the commands); or release --token-file {TOKEN} and "
+                    "finish the story attended")
+        return (f"the story's reported cost USD {subjects.get('used')} reached budgets.max_cost_usd "
+                f"{subjects.get('max')}{note}, so a plain drive resume stops here again: inside an epic, the epic "
+                "action names the restart under a wider bound; for a story drive, " + _NEW_REVISION +
+                f" with a wider max_cost_usd; or release --token-file {TOKEN} and finish the story attended")
     if reason in REQUEST_REASONS:
         return (f"inbox add decision for request {subjects.get('request_id')}, then drive resume "
                 "(or keep a driver waiting with --human-wait)")
@@ -293,9 +311,11 @@ def start(repo, feature_id: str, value: dict, token_path: Path, bounds: RunBound
         raise DomainError("INVALID_INPUT", "Pipeline is bound to another feature")
     _bounds_check(pipeline, bounds)
     root = _judgment_root(repo, pipeline, judgment_root)
+    drive_pipeline.check_read_reviews(pipeline)   # Copilot reviewer design V8: nothing bound on a refusal
     drive_pipeline.check_bindable(store.read_snapshot(), pipeline)
     fd = acquire_lock(repo, exclusive=True)
     try:
+        require_open_feature(store.read_snapshot(), feature_id)   # lifecycle F5: under the lock, before the claim
         lease_id = uuid.uuid4().hex
         owner = Coordinator(store).claim(SESSION + lease_id, token_path)
         _hook("after-claim", lease_id=lease_id)
@@ -363,8 +383,9 @@ def resume(repo, owner: OwnerRef, bounds: RunBounds | dict | None = None, judgme
     store = open_store(repo)
     fd = acquire_lock(repo, exclusive=True)
     try:
-        store.read_export_snapshot(owner)  # fence first: a stale or never-claimed token is OWNERSHIP_CONFLICT
+        snapshot = store.read_export_snapshot(owner)  # fence first: a stale or unclaimed token is OWNERSHIP_CONFLICT
         lease = find_lease(store, owner)
+        require_open_feature(snapshot, lease["feature_id"])   # feature lifecycle F5: before the run's first write
         pipeline = drive_pipeline.load(store.path.parent, lease["pipeline_sha256"])
         if not isinstance(bounds, RunBounds):
             bounds = RunBounds(**{**lease["bounds"], **(bounds or {})})
@@ -386,7 +407,8 @@ class Launcher:
         spec = self.pipeline["roles"][role]
         client = clients.get(spec["client"])
         return worker.run_assignment(self.repo, self.store, self.owner, assignment_id, spec["model"],
-                                     spec["timeout"], client.name, spec.get("max_turns"))   # design D25
+                                     spec["timeout"], client.name, spec.get("max_turns"),   # design D25
+                                     spec.get("boundary"))   # launch-boundary L1
 
 
 @dataclass
@@ -397,8 +419,10 @@ class Outcome:
 
 
 class Run:
-    def __init__(self, repo, store, owner, lease, pipeline, bounds, clock, mode, *, release_on_done=True):
+    def __init__(self, repo, store, owner, lease, pipeline, bounds, clock, mode, *, release_on_done=True,
+                 epic_bound=None):
         self.repo, self.store, self.owner, self.lease = repo, store, owner, lease
+        self.epic_bound = epic_bound   # bill design B6: (max_cost_usd, the epic's feature ids), from the epic driver
         self.pipeline, self.bounds, self.clock, self.mode = pipeline, bounds, clock, mode
         self.base = store.path.parent
         self.lease_id, self.feature_id = lease["lease_id"], lease["feature_id"]
@@ -649,8 +673,14 @@ class Run:
         subjects = {"step_id": step.step_id, "request_id": action["request_id"], "judgment_key": action["key"]}
         if self._elapsed() + role["timeout"] > self.bounds.deadline_seconds:
             return self._stop() or Outcome("continue", "deadline", subjects)
+        stopped = self._cost_stop(step, "judgment")
+        if stopped is not None:
+            return stopped
         if action["fresh"]:
-            try:
+            try:   # launch-boundary L7: the boundary checked before the key is reserved
+                clients.boundary_ready(role.get("boundary"), clients.get(role["client"]), self.repo)
+                if role.get("mode") == "read":   # Copilot reviewer design V7, V8: the version, before the key
+                    clients.read_ready(clients.get(role["client"]), clients.preflight(clients.get(role["client"]))[1])
                 judgment.prepare(self.repo, self.store, self.owner, self.feature_id, action["request_id"],
                                  self.lease["pipeline_sha256"], step.step_id, action["key"],
                                  self.lease["judgment_root"], hook=_hook)
@@ -844,6 +874,9 @@ class Run:
         if self._elapsed() + timeout > self.bounds.deadline_seconds:
             return self._stop() or Outcome("continue", "deadline", {"step_id": step.step_id,
                                                                     "assignment_id": action["assignment_id"]})
+        stopped = self._cost_stop(step, role)
+        if stopped is not None:
+            return stopped
         self.attempt = action["assignment_id"]
         report = Launcher(self.repo, self.store, self.owner, self.pipeline).launch(action["assignment_id"], role)
         self.attempt = None
@@ -851,6 +884,33 @@ class Run:
         return {"kind": "launch", "step_id": step.step_id, "assignment_id": action["assignment_id"], "role": role,
                 "client": self.pipeline["roles"][role]["client"], "state": report.state,
                 "evidence_needs": report.evidence_needs[:5]}, True
+
+    def _cost_stop(self, step, role: str) -> "Outcome | None":
+        """Bill design B5/B6: before a launch, the story's reported USD (every lease, revision and chain of the
+        feature) against the pipeline's `budgets.max_cost_usd`, then the epic's against its own bound; at or above a
+        bound the step stops `cost-budget`. Reported money only: the subjects carry the launches without a figure."""
+        scopes = []
+        bound = self.pipeline["budgets"].get("max_cost_usd") or 0
+        if bound:
+            scopes.append(("story", bound, [self.feature_id]))
+        if self.epic_bound and self.epic_bound[0]:
+            scopes.append(("epic", self.epic_bound[0], list(self.epic_bound[1])))
+        if not scopes:
+            return None
+        snapshot = self.store.read_snapshot()
+        for scope, limit, features in scopes:
+            used, unreported = bill.usd_reported(self.base, snapshot, features)
+            if used >= limit:
+                return Outcome("needs-human", "cost-budget", {"step_id": step.step_id, "role": role, "scope": scope,
+                                                              "used": used, "max": limit,
+                                                              "unreported_launches": unreported})
+        return None
+
+    def _bill(self) -> dict:
+        """Bill design B4: the run's and the lease's launches so far, observed apart from reported."""
+        snapshot = self.store.read_snapshot()
+        return {"run": bill.summary(self.base, snapshot, [self.feature_id], self.lease_id, self.run_id),
+                "lease": bill.summary(self.base, snapshot, [self.feature_id], self.lease_id)}
 
     def _carried(self, lease: dict) -> None:
         """Design D24: the run continues on the carried pipeline under the re-sealed lease."""
@@ -908,7 +968,8 @@ class Run:
         result = {"acceptance_id": action["acceptance_id"], "commit_sha": manifest["commit"]["sha"],
                   "review_id": action["review_id"],
                   "verify": [f"{item['name']}: {item['outcome']}" for item in verify.get("results", [])],
-                  "decisions": listed}
+                  "decisions": listed,
+                  "bill": bill.result_line(bill.summary(self.base, snapshot, [self.feature_id]))}   # B4
         return result, entries
 
     def _failure(self, exc: DomainError) -> Outcome:
@@ -940,7 +1001,7 @@ class Run:
                    "reason": outcome.reason, "subjects": subjects,
                    "operator_action": _operator_action(outcome.outcome, outcome.reason, subjects),
                    "ownership": "unchanged" if outcome.outcome == "failed" else "retained", "ownership_reason": None,
-                   "decisions": self._listed_decisions(outcome), "counts": counts,
+                   "decisions": self._listed_decisions(outcome), "counts": counts, "bill": self._bill(),
                    "steps": [step.view() for step in self.steps],
                    "restarts": self.restarts, "interventions": self.interventions,
                    "acknowledged_stops": self.acknowledged if stop else [], "ended_at": _now()}

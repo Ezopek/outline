@@ -9,9 +9,10 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
+from . import backlog, boundary
 from . import bmad_contract as contract
 from . import bmad_implementation as implementation
-from . import bmad_planning, bmad_spec_author, bundles, clients, judgment
+from . import bmad_planning, bmad_snapshot, bmad_spec_author, bundles, clients, judgment
 from .bmad_review import CODE_LENSES, SPEC_LENSES, finding_counts
 from .model import DecisionInput, DomainError, OwnerRef
 from .run_receipt import canonical, private_file, read_binding, read_receipt
@@ -32,9 +33,13 @@ OUT_OF_SLICE = frozenset({"branch", "branches", "loop", "epics", "sprint_status"
 MAX_UPDATES = 8
 MAX_JUDGMENTS = 8
 MAX_CORRECTIONS = 6
+MAX_CLIENT_FAILURES = 4   # design D29
+DEFAULT_CLIENT_FAILURES = 2
 PLANNING_MAX_CORRECTIONS = 4   # a planning pipeline validates as before the implementation drive
 MAX_TIMEOUT = 86400
 MAX_TURNS = 1000   # design D25: a role's turn limit
+MAX_COST_USD = 10000   # bill design B5: a story's or an epic's money bound, two decimals at most
+MAX_BOUNDARY_PATHS = 32   # launch-boundary L4: a project's own extra mounts
 COMMAND_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 MAX_OUTPUT = 1 << 24
 COMPLETE = ("OBSERVED_COMPLETE_CLAIM", "OBSERVED_PARTIAL_CLAIM")
@@ -47,6 +52,18 @@ def _unsupported(message: str) -> DomainError:
 
 def _invalid(message: str) -> DomainError:
     return DomainError("INVALID_INPUT", message)
+
+
+def cost_bound(value, roles: dict, what: str) -> float:
+    """Bill design B5/B6: a money bound is a number from 0 to MAX_COST_USD with at most two decimals (absent or 0:
+    no bound); above 0 it needs a role whose client reports a money figure, or it could never fire."""
+    if value is None:
+        return 0
+    if type(value) not in (int, float) or value != value or not 0 <= value <= MAX_COST_USD or round(value, 2) != value:
+        raise _invalid(f"{what} must be a number from 0 to {MAX_COST_USD} with at most two decimals")
+    if value > 0 and not any(clients.get(role["client"]).reports_cost for role in roles.values()):
+        raise _invalid(f"{what} needs a role whose client reports cost")
+    return value
 
 
 def _keys(value, required, optional, what: str) -> None:
@@ -64,13 +81,30 @@ def _text(value, what: str) -> None:
         raise _invalid(f"{what} must be non-empty text")
 
 
+def _boundary(value: dict, role: str) -> dict:
+    """Launch-boundary L1: the role's boundary for a prepare spec, only when set (the spec digest stays)."""
+    kind = value["roles"].get(role, {}).get("boundary")
+    return {"boundary": kind} if kind else {}
+
+
 def _integer(value, low: int, high: int, what: str) -> None:
     if type(value) is not int or not low <= value <= high:
         raise _invalid(f"{what} must be an integer from {low} to {high}")
 
 
 def _role(name: str, value) -> None:
-    _keys(value, ("client", "model", "timeout"), ("web", "max_turns"), f"Role {name}")
+    _keys(value, ("client", "model", "timeout"), ("web", "max_turns", "boundary", "mode"), f"Role {name}")
+    if "mode" in value:   # Copilot reviewer design revision 6, V1: the read mode, under the boundary only
+        if value["mode"] != "read":
+            raise _invalid(f"Role {name} mode must be read")
+        if name not in ("judgment", "reviewer"):
+            raise _invalid(f"Only the judgment and reviewer roles take a mode, not {name}")
+        if not clients.get(value["client"]).read_mode:
+            raise _unsupported(f"Role {name} client {value['client']} has no read mode")
+        if value.get("boundary") != "bwrap":
+            raise _invalid(f"Role {name} mode read needs boundary bwrap")
+    if "boundary" in value and boundary.check_kind(value["boundary"]) is None:   # launch-boundary L1
+        raise _invalid(f"Role {name}: omit boundary instead of null")
     if type(value["client"]) is not str:
         raise _invalid(f"Role {name} client must be a registered client name")
     if value["client"] not in clients.REGISTRY:
@@ -102,6 +136,23 @@ def _head(step_id: str, steps: dict) -> dict:
     return steps[step_id]
 
 
+def read_review_profiles(pipeline: dict) -> list[str]:
+    """Copilot reviewer design V7, V8: the review profiles a read-mode reviewer of this pipeline must be qualified
+    for, so a start refuses before any work instead of at its first review."""
+    if (pipeline["roles"].get("reviewer") or {}).get("mode") != "read":
+        return []
+    steps = {step["id"]: step for step in pipeline["steps"]}
+    heads = {_head(step["of"], steps)["kind"] for step in pipeline["steps"] if step["kind"] == "review"}
+    return sorted({"spec": "spec-review", "implement": "code-review", "author": "planning-review"}[kind]
+                  for kind in heads & {"spec", "implement", "author"})
+
+
+def check_read_reviews(pipeline: dict) -> None:
+    for profile in read_review_profiles(pipeline):
+        reviewer = clients.get(pipeline["roles"]["reviewer"]["client"])
+        clients.read_ready(reviewer, clients.preflight(reviewer)[1], profile)
+
+
 def _source(step_id: str, steps: dict) -> str | None:
     """The skill of the author step that a chain of wrapper steps starts from."""
     return _head(step_id, steps).get("skill")
@@ -128,7 +179,8 @@ def _wrapper(step: dict, kinds: dict, roles: dict) -> None:
         _text(step["reviewer_id"], f"Step {sid} reviewer")
         if "reviewer" not in roles:
             raise _invalid(f"Step {sid} needs a reviewer role")
-        if not clients.get(roles["reviewer"]["client"]).write_free_readonly:
+        if not clients.get(roles["reviewer"]["client"]).write_free_readonly and \
+           roles["reviewer"].get("mode") != "read":
             raise _unsupported("The reviewer client has no write-free read-only mode")
 
 
@@ -186,7 +238,17 @@ def _project(value) -> None:
     without glob characters, so the status files' string-prefix checks (protected, prepare, sync_status) are sound.
     `context` (design D24) lists the relative files a spec author reads first."""
     _keys(value, ("setup", "verify", "env", "commit_identity", "output_limit_bytes"),
-          ("rules", "artifacts_dir", "briefs_dir", "context"), "Pipeline project")
+          ("rules", "artifacts_dir", "briefs_dir", "context", "backlog", "boundary"), "Pipeline project")
+    if "boundary" in value:   # launch-boundary L4: what a bounded worker's own test runs need, beyond the defaults
+        _keys(value["boundary"], (), ("ro", "rw"), "Project boundary")
+        for mode, paths in value["boundary"].items():
+            if not isinstance(paths, list) or len(paths) > MAX_BOUNDARY_PATHS or any(
+                    type(item) is not str or not (item.startswith("/") or item.startswith("~/")) or
+                    os.path.normpath(item) != item or not clients.pattern_safe(item) for item in paths):
+                raise _invalid(f"Project boundary {mode} must list normalized absolute or ~/ paths without patterns")
+    if "backlog" in value:   # backlog design A3: the layout, from the closed registry; absent means bmad
+        _keys(value["backlog"], ("kind",), (), "Project backlog")
+        backlog.get(value["backlog"]["kind"])
     for name in ("setup", "verify"):
         if not isinstance(value[name], list):
             raise _invalid(f"Project {name} must be a list")
@@ -282,16 +344,23 @@ def validate(value) -> dict:
         raise _invalid("Pipeline roles must include worker and name only worker, reviewer and judgment")
     for name, role in roles.items():
         _role(name, role)
-    _keys(value["budgets"], ("max_updates", "max_judgments"), ("max_corrections",), "Pipeline budgets")
+    _keys(value["budgets"], ("max_updates", "max_judgments"), ("max_corrections", "max_cost_usd", "client_failures"),
+          "Pipeline budgets")
+    cost_bound(value["budgets"].get("max_cost_usd"), roles, "max_cost_usd")
     _integer(value["budgets"]["max_updates"], 0, MAX_UPDATES, "max_updates")
     _integer(value["budgets"]["max_judgments"], 0, MAX_JUDGMENTS, "max_judgments")
+    if "client_failures" in value["budgets"]:   # design D29: absent means the default, and the digest stays
+        _integer(value["budgets"]["client_failures"], 0, MAX_CLIENT_FAILURES, "client_failures")
+        if "project" not in value:
+            raise _invalid("client_failures is a story budget")
     cap = (MAX_CORRECTIONS, "story") if "project" in value else (PLANNING_MAX_CORRECTIONS, "planning")
     corrections = value["budgets"].get("max_corrections", 0)
     if type(corrections) is not int or not 0 <= corrections <= cap[0]:
         raise _invalid(f"max_corrections must be an integer from 0 to {cap[0]} (the {cap[1]} pipeline cap)")
     if value["budgets"]["max_judgments"] > 0 and "judgment" not in roles:
         raise _invalid("max_judgments > 0 needs a judgment role")
-    if "judgment" in roles and not clients.get(roles["judgment"]["client"]).write_free_readonly:
+    if "judgment" in roles and roles["judgment"].get("mode") != "read" and \
+       not clients.get(roles["judgment"]["client"]).write_free_readonly:
         raise _unsupported("The judgment client has no write-free read-only mode (isolated runs are read-only)")
     if "project" in value:
         _project(value["project"])
@@ -529,10 +598,17 @@ def gather(repo, store, snapshot: dict, value: dict, generation: int) -> dict:
     feature = next(row for row in snapshot["features"] if row["id"] == value["feature_id"])
     worktree = Path(feature["worktree"])
     story = any(step["kind"] == "implement" for step in value["steps"])
-    report = None if story else contract.discover(worktree, ".agents/skills")   # design D22
+    drift = None
+    if not story:   # BMAD snapshot design S7: a drifted materialized install is never executed
+        try:
+            bmad_snapshot.guard(worktree, repo.common_dir, snapshot["events"])
+        except DomainError as exc:
+            drift = exc.message
+    report = None if story or drift else contract.discover(worktree, ".agents/skills")   # design D22
     facts = {"generation": generation, "workspaces": {}, "bindings": {}, "unbound": [], "payloads": {},
              "reviews": {}, "bundles": {}, "acceptances": {}, "export": None,
-             "contract": None if report is None else {"supported": report.supported,
+             "contract": {"supported": False, "fingerprint": None, "reasons": [drift]} if drift else
+             None if report is None else {"supported": report.supported,
                                                       "fingerprint": report.fingerprint_sha256,
                                                       "reasons": list(report.reasons)[:5]},
              "judgments": judgment.facts(store.path.parent, snapshot, feature["id"])}
@@ -732,8 +808,8 @@ def _judgment_state(sid, sha, request, facts, value, subjects, kind="author", st
     mine = [item for item in judged.values() if item["request_id"] == request["id"]]
     if not mine:
         prefix = f"drv-{sha[:12]}-"
-        used = sum(1 for item in judged.values()  # max_judgments counts every launch
-                   if item["key"].startswith(prefix) and item["state"] != "failed-preflight")
+        used = sum(1 for item in judged.values()  # design D30: max_judgments counts this step's launches
+                   if item["key"].startswith(f"{prefix}{sid}-j") and item["state"] != "failed-preflight")
         if used >= value["budgets"]["max_judgments"]:
             return StepState(sid, kind, "needs-human", "judgment-budget", None, subjects)
         n = 1 + sum(1 for item in judged.values() if item["key"].startswith(f"{prefix}{sid}-j"))
@@ -804,7 +880,8 @@ def _correction(step, sid, snapshot, facts, bound, head, key, compat_id, client,
                  if row["feature_id"] == feature_id and row["mandate_revision"] == revision and
                  row["request_id"] in asked]
     extra = {"prd_acceptance": origin["prd_acceptance"]} if origin.get("prd_acceptance") else {}
-    spec = _spec(step, feature_id, key, compat_id, client, intent="update", update_of=head["id"],
+    spec = _spec(step, feature_id, key, compat_id, client, **_boundary(value, "worker"), intent="update",
+                 update_of=head["id"],
                  corrects_review=review_id, finding_ids=blocking, inputs=sorted(roles), input_roles=dict(roles),
                  decisions=decisions, **extra)
     return StepState(sid, "author", "ready", None, {"kind": "prepare", "intent": "update", "spec": spec},
@@ -815,7 +892,8 @@ def _head_state(step, sid, snapshot, facts, bound, key, compat_id, client, value
                 sha, workspace, prd_acceptance=None) -> StepState:
     if not bound:
         extra = {"prd_acceptance": prd_acceptance} if prd_acceptance else {}
-        spec = _spec(step, feature_id, key, compat_id, client, intent="create", slug=step["slug"],
+        spec = _spec(step, feature_id, key, compat_id, client, **_boundary(value, "worker"), intent="create",
+                     slug=step["slug"],
                      inputs=list(step["inputs"]), input_roles=dict(step["inputs"]), **extra)
         return StepState(sid, "author", "ready", None, {"kind": "prepare", "intent": "create", "spec": spec}, subjects)
     head = bound[-1]
@@ -862,7 +940,8 @@ def _head_state(step, sid, snapshot, facts, bound, key, compat_id, client, value
                   not (facts["bindings"][row["id"]].get("continues") or {}).get("corrects_review"))
     if updates >= value["budgets"]["max_updates"]:
         return StepState(sid, "author", "needs-human", "update-budget", None, subjects)
-    spec = _spec(step, feature_id, key, compat_id, client, intent="update", update_of=head["id"],
+    spec = _spec(step, feature_id, key, compat_id, client, **_boundary(value, "worker"), intent="update",
+                 update_of=head["id"],
                  continues_request=request["id"])
     return StepState(sid, "author", "ready", None, {"kind": "prepare", "intent": "update", "spec": spec}, subjects)
 
@@ -920,7 +999,8 @@ def _review_state(step, sha, snapshot, facts, feature, compat_id, value, done) -
     half = sorted((row for row in live if row["id"] in facts["unbound"] and row["state"] == "prepared" and
                    _own(row["idempotency_key"], prefix)), key=lambda row: prepared[row["id"]])
     spec = {"bundle_id": bundle_id, "reviewer_id": step["reviewer_id"], "key": _next_key(sha, sid, rows),
-            "client": value["roles"]["reviewer"]["client"]}
+            "client": value["roles"]["reviewer"]["client"], **_boundary(value, "reviewer"),
+            **({"mode": "read"} if value["roles"]["reviewer"].get("mode") == "read" else {})}
     if compat_id is not None and not done[step["of"]].subjects.get("code"):   # design D22: planning only
         spec["compat_decision_id"] = compat_id
     if done[step["of"]].subjects.get("code"):   # ruling R9: the code lenses; design D24: a spec bundle's own
@@ -1104,6 +1184,17 @@ def _story_corrections(bound, facts) -> int:
                                          for key in ("corrects_review", "corrects_verify")))
 
 
+def _client_failures(bound) -> int:
+    """Design D29: the step's consecutive attempts that ended in a client failure, newest first."""
+    count = 0
+    for row in reversed(bound):
+        stop = (json.loads(row["return_json"]) if row["return_json"] else {}).get("client_stop") or {}
+        if row["state"] != "client-stopped" or stop.get("kind") != "client-failure":
+            break
+        count += 1
+    return count
+
+
 def _story_updates(bound, facts) -> int:
     return sum(1 for row in bound if facts["bindings"][row["id"]].get("intent") == "update" and
                not any((facts["bindings"][row["id"]].get("continues") or {}).get(key)
@@ -1192,6 +1283,7 @@ def _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, fea
 
     def spec(**extra):   # an operator's revise decision joins the update's decisions (ruling P13)
         return {"feature_id": feature["id"], "key": key, "author_id": step["author_id"], "client": client,
+                **_boundary(value, "worker"),
                 "project": value["project"],
                 "decisions": decisions + ([{"id": extra["revises"]}] if "revises" in extra else []),
                 **({"web": True} if value["roles"]["worker"].get("web") is True else {}),
@@ -1225,6 +1317,9 @@ def _implement_head(step, sid, snapshot, facts, bound, key, value, subjects, fea
             return StepState(sid, kind, "ready", None, {"kind": "commit", "assignment_id": head["id"]}, subjects)
         subjects = {**subjects, "commit_sha": commit.get("sha"), "empty": bool(commit.get("empty")),
                     "client_stop": ret.get("client_stop")}
+        failures = _client_failures(bound)   # design D29: consecutive failures of this step, bounded
+        if failures and failures >= value["budgets"].get("client_failures", DEFAULT_CLIENT_FAILURES):
+            return StepState(sid, kind, "needs-human", "client-failure", None, {**subjects, "failures": failures})
         if _story_updates(bound, facts) >= value["budgets"]["max_updates"]:
             return StepState(sid, kind, "needs-human", "update-budget", None, subjects)
         return prepare("update", update_of=head["id"], continues_stop=True)

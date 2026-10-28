@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from .repo import RepoIdentity
+from .repo import GIT_SAFE, RepoIdentity
 
 
 PACKAGE = ".bmad-coordinator"
@@ -43,7 +43,7 @@ def check_package_entries(root: Path, files: set[str]) -> None:
 
 
 def _git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo.worktree), *args], check=True,
+    return subprocess.run(["git", *GIT_SAFE, "-C", str(repo.worktree), *args], check=True,
                           capture_output=True).stdout
 
 
@@ -65,9 +65,11 @@ def _safe_file(root: Path, name: str):
 
 
 def _block(data, digest):
+    """Check the one managed block wherever it sits; project sections may follow it (issue #6)."""
     if data.count(BEGIN) != 1 or data.count(END) != 1:
         return False
-    block = data[data.index(BEGIN):]
+    end = data.index(END) + len(END) + 1
+    block = data[data.index(BEGIN):end]
     return block.endswith(END + b"\n") and hashlib.sha256(block).hexdigest() == digest
 
 
@@ -78,7 +80,7 @@ def doctor(repo: RepoIdentity, base_ref: str) -> DoctorReport:
     try:
         base = _git(repo, "rev-parse", "--verify", "--end-of-options", f"{base_ref}^{{commit}}").decode().strip()
         head = _git(repo, "rev-parse", "HEAD").decode().strip()
-        if subprocess.run(["git", "-C", str(repo.worktree), "merge-base", "--is-ancestor", base, head],
+        if subprocess.run(["git", *GIT_SAFE, "-C", str(repo.worktree), "merge-base", "--is-ancestor", base, head],
                           capture_output=True).returncode != 0:
             reasons.append("Base commit is not an ancestor of actual HEAD")
     except (OSError, subprocess.CalledProcessError, UnicodeError):
