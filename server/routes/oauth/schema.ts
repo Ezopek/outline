@@ -37,6 +37,14 @@ const redirectUris = z
       }`,
   });
 
+/**
+ * The most entries accepted in a registration metadata array that is not a
+ * list of redirect URIs. `grant_types` and `response_types` have one or two
+ * valid values, so this leaves room for a client that repeats them, while a
+ * list of any real size is refused before its entries are validated.
+ */
+const maxMetadataItems = 10;
+
 export const RegisterSchema = BaseSchema.extend({
   body: z.object({
     // RFC 7591 §2 marks every metadata field as OPTIONAL; some MCP clients
@@ -50,8 +58,12 @@ export const RegisterSchema = BaseSchema.extend({
     redirect_uris: redirectUris,
     grant_types: z
       .array(z.enum(["authorization_code", "refresh_token"]))
+      .max(maxMetadataItems)
       .default(["authorization_code"]),
-    response_types: z.array(z.enum(["code"])).default(["code"]),
+    response_types: z
+      .array(z.enum(["code"]))
+      .max(maxMetadataItems)
+      .default(["code"]),
     token_endpoint_auth_method: z
       .enum(["none", "client_secret_post"])
       .default("none"),
@@ -66,7 +78,7 @@ export const RegisterSchema = BaseSchema.extend({
       .url()
       .max(OAuthClientValidation.maxAvatarUrlLength)
       .optional(),
-    contacts: z.array(z.string().email()).optional(),
+    contacts: z.array(z.string().email()).max(maxMetadataItems).optional(),
   }),
 });
 

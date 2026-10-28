@@ -1,4 +1,5 @@
 import { Scope } from "@shared/types";
+import { CommentStatusFilter } from "@shared/types";
 import type { ProsemirrorData } from "@shared/types";
 import { Comment } from "@server/models";
 import {
@@ -321,5 +322,66 @@ describe("delete_comment", () => {
     );
 
     expect(res?.result?.isError).toBe(true);
+  });
+});
+
+describe("list_comments statusFilter", () => {
+  async function setup() {
+    const { user, accessToken } = await buildOAuthUser();
+    const collection = await buildCollection({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    const document = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+      collectionId: collection.id,
+    });
+    const open = await buildComment({
+      userId: user.id,
+      documentId: document.id,
+    });
+    const resolved = await buildComment({
+      userId: user.id,
+      documentId: document.id,
+      resolvedById: user.id,
+    });
+    const list = async (statusFilter?: string[]) => {
+      const res = await callMcpTool(server, accessToken, "list_comments", {
+        documentId: document.id,
+        ...(statusFilter ? { statusFilter } : {}),
+      });
+      return (res?.result?.content ?? []).map(
+        (c: { text: string }) => JSON.parse(c.text).id
+      ) as string[];
+    };
+    return { open, resolved, list };
+  }
+
+  it("filters by each status and by both", async () => {
+    const { open, resolved, list } = await setup();
+
+    expect(await list([CommentStatusFilter.Resolved])).toEqual([resolved.id]);
+    expect(await list([CommentStatusFilter.Unresolved])).toEqual([open.id]);
+    expect((await list(Object.values(CommentStatusFilter))).sort()).toEqual(
+      [open.id, resolved.id].sort()
+    );
+  });
+
+  it("rejects a list longer than the number of statuses without querying", async () => {
+    const { user, accessToken } = await buildOAuthUser();
+    const findAll = vi.spyOn(Comment, "findAll");
+
+    const res = await callMcpTool(server, accessToken, "list_comments", {
+      documentId: (
+        await buildDocument({ teamId: user.teamId, userId: user.id })
+      ).id,
+      statusFilter: Array(10).fill(CommentStatusFilter.Resolved),
+    });
+
+    expect(res?.result?.isError).toBe(true);
+    expect(res?.result?.content?.[0]?.text).toContain("statusFilter");
+    expect(findAll).not.toHaveBeenCalled();
+    findAll.mockRestore();
   });
 });

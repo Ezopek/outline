@@ -77,6 +77,8 @@ export function commentTools(server: McpServer, scopes: string[]) {
           ),
           statusFilter: z
             .array(z.enum(CommentStatusFilter))
+            // The statuses are a set: a longer list only repeats one.
+            .max(Object.values(CommentStatusFilter).length)
             .optional()
             .describe(
               "Filter by resolution status: resolved, unresolved, or both."

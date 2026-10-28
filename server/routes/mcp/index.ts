@@ -35,6 +35,12 @@ import { version } from "../../../package.json";
  */
 export const MCP_REQUEST_TIMEOUT_MS = 65000;
 
+/**
+ * The most array entries and object members, at any depth, that the arguments
+ * of one `tools/call` may hold.
+ */
+export const MCP_MAX_TOOL_INPUT_ELEMENTS = 100;
+
 const app = new Koa();
 const router = new Router();
 
@@ -116,6 +122,7 @@ function createMcpServer(scopes: string[], guidance?: string): McpServer {
         resources: {},
       },
       instructions,
+      maxToolInputElements: MCP_MAX_TOOL_INPUT_ELEMENTS,
     }
   );
 

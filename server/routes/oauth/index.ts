@@ -1,5 +1,6 @@
 import OAuth2Server from "@node-oauth/oauth2-server";
 import Koa from "koa";
+import type { Next } from "koa";
 import bodyParser from "koa-body";
 import Router from "koa-router";
 import env from "@server/env";
@@ -178,15 +179,35 @@ router.post(
   }
 );
 
+type RegistrationState = { registrationTeam?: Team };
+
+// Everything that can refuse a registration without reading the body runs before
+// `validate`, so a refused request never pays for validating its collections.
+async function registrationAdmission(ctx: APIContext, next: Next) {
+  if (env.OAUTH_DISABLE_DCR) {
+    throw NotFoundError();
+  }
+
+  const team = await getTeamFromContext(ctx, {
+    includeOAuthState: false,
+  });
+  if (!team) {
+    throw NotFoundError();
+  }
+  if (!team.getPreference(TeamPreference.MCP)) {
+    throw NotFoundError();
+  }
+
+  (ctx.state as RegistrationState).registrationTeam = team;
+  return next();
+}
+
 router.post(
   "/register",
-  validate(T.RegisterSchema),
   rateLimiter(RateLimiterStrategy.FivePerHour),
+  registrationAdmission,
+  validate(T.RegisterSchema),
   async (ctx: APIContext<T.RegisterReq>) => {
-    if (env.OAUTH_DISABLE_DCR) {
-      throw NotFoundError();
-    }
-
     const {
       client_name,
       redirect_uris,
@@ -196,15 +217,7 @@ router.post(
       contacts,
     } = ctx.input.body;
 
-    const team = await getTeamFromContext(ctx, {
-      includeOAuthState: false,
-    });
-    if (!team) {
-      throw NotFoundError();
-    }
-    if (!team.getPreference(TeamPreference.MCP)) {
-      throw NotFoundError();
-    }
+    const team = (ctx.state as RegistrationState).registrationTeam as Team;
 
     const clientType =
       token_endpoint_auth_method === "client_secret_post"
@@ -253,9 +266,9 @@ router.get("/register/:clientId", registrationAuth(), async (ctx) => {
 router.put(
   "/register/:clientId",
   rateLimiter(RateLimiterStrategy.TenPerHour),
-  validate(T.RegisterUpdateSchema),
   transaction(),
   registrationAuth(),
+  validate(T.RegisterUpdateSchema),
   async (ctx: APIContext<T.RegisterUpdateReq>) => {
     const client = ctx.state.oauthClient as OAuthClient;
     const { client_name, redirect_uris, client_uri, logo_uri } = ctx.input.body;
