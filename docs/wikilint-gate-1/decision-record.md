@@ -159,3 +159,13 @@ Source: [Spine Deferred](../../_bmad-output/planning-artifacts/architecture/arch
 ## Pilot metrics
 
 SM-P1–SM-P7 are deferred to Gate 4. This record claims no pilot evidence and no production success.
+
+## Candidate 42485693 addendum (2026-10-29)
+
+The historical decision, tables and evidence above retain their original source scope. This addendum does not extend `ready` to source `42485693aa9bdddfeac31011f01137257167f515`, accept a native feature, or reassemble the Story 3.4 decision for that candidate.
+
+The [latest release record](../wikilint-gate-2/release-candidate-42485693.md) and [derived qualification summary](../wikilint-gate-2/qualification-42485693.json) bind the current source, runtime parent, final local image, postcommit checks and full `shared-host-ssd-v1` measurement. The parent verified all 11 budgets, three DW checks, four constant rules and external window evidence against raw manifest SHA-256 `5c652dedfc14b165279858fb7e6d5f2a90306361b584fe3d541af139a936dc4c`. This supplies current DW-4/5/6 evidence for Story 3.4 AC8 without changing historical manifests, constants, rows or ledger status; it authorizes no rollout. The shared raw manifest's `controllerWindowEvidence` remains `pending-external-verification`; parent verification is a separate hash-bound receipt.
+
+Whole-candidate Gate 1 acceptance remains unestablished: the supplied current test totals do not establish the historical three-run normalized SM-I2 comparison, and a complete candidate-bound inventory/decision under Story 3.4 AC1–5 has not been reassembled and accepted. Passing the historical structural validator would not supply those missing proofs. See the [remaining literal criteria](../wikilint-gate-2/release-candidate-42485693.md#gate-1-integration-and-remaining-literal-criteria); this is not a request to rerun unchanged runtime tests or performance measurements.
+
+For OD-7, the registry/access choice is now settled as private GitHub Container Registry under the fork owner; other applicable release/deployment decisions remain separate. The old `not selected` table is retained as history. Security disposition remains open, no registry digest or publication approval exists, and Gates 2–4 remain unauthorized. Actual assistant connectivity through built-in MCP, meaningful server-side read-only policy, the 7-day/10-batch/2-client pilot and separate enforcement approval remain required. No production or pilot success is claimed.

@@ -1,5 +1,17 @@
 # Gate 2 handoff: image publication of the wiki-lint fork
 
+## Latest candidate (2026-10-29)
+
+Use [release candidate `42485693`](release-candidate-42485693.md) for the current source, build, local image, smoke, performance, security residuals, and remaining delivery gates. Its [derived qualification summary](qualification-42485693.json) binds the retained evidence by SHA-256; private raw receipts are not copied here.
+
+The built image comes from source `42485693aa9bdddfeac31011f01137257167f515`, with runtime parent `c2bcfa1070c20871360c90760aa8fc42f1bd514d`, Node 26.12.1 and Yarn 4.11.0. Its local image ID is `sha256:c33b509b2d811b8145e159413127cf592db21f04ae5239f4862d757366bf4a45`. There is **no registry digest or publication approval**. A later records-only commit is not this image's source.
+
+The registry choice is settled: private GitHub Container Registry under the fork owner. Publication and residual-risk disposition remain separate operator decisions. The adopted `shared-host-ssd-v1` performance run is parent-verified; whole-candidate Gate 1 acceptance and native feature closure are not established by this documentation.
+
+## Historical snapshot (2026-10-25; superseded for the latest candidate)
+
+**All remaining sections below retain the original handoff as history.** Their source, readiness, production/rollback observations, registry alternatives, Node 26.3.0 pin, old lock hash/parity claims, dependency counts and dry-run image describe that snapshot only. They are not current instructions or proof for `42485693`. The latest candidate record supersedes their current applicability, including the request to select a registry and the old rebuild procedure. Historical Gate 1 rows and manifests remain unchanged; their scoped addenda link the latest evidence without extending historical acceptance.
+
 This is the hand-off for the agent and operator who take the wiki-lint fork from Gate 1 to Gate 2, image publication (PRD §11). The Claude Code session that built Epics 1–3 prepared it on 2026-10-25. It is the single entry point: what has been settled, what the operator still decides, the exact procedure, and what follows after Gate 2.
 
 **Nothing here authorizes publication.** Gate 2 needs the operator's explicit approval. Publication does not authorize pulling or running the image anywhere (Gate 3), and deployment does not authorize enabling any policy (Gate 4).

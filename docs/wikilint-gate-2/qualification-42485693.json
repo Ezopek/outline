@@ -1,0 +1,337 @@
+{
+  "schemaVersion": 1,
+  "kind": "allowlisted-derived-summary",
+  "scope": "Retained local qualification only; not a raw manifest, independent documentation review, Gate 1 acceptance, or release approval.",
+  "sourceCommit": "42485693aa9bdddfeac31011f01137257167f515",
+  "runtimeParentCommit": "c2bcfa1070c20871360c90760aa8fc42f1bd514d",
+  "imageSourceExportManifestSha256": "f04b7f4e2c455b0805d6a3a6a5b12e923a619fea9ce41e94f2ef2ff64c9d11fe",
+  "lockSha256": "8c62a80e9a0e4dd611b2aa7c08ab569ccbb64df831e01a4cf2343add69100549",
+  "localImageId": "sha256:c33b509b2d811b8145e159413127cf592db21f04ae5239f4862d757366bf4a45",
+  "registryDigest": null,
+  "runtime": {
+    "node": "v26.12.1",
+    "yarn": "4.11.0",
+    "benchmarkPostgreSQL": "14.2 (Debian 14.2-1.pgdg110+1)"
+  },
+  "retainedEvidenceSha256": {
+    "sourceCommitVerification": "6bb6560fab51a68a32c473a8f2ea520e29a5c9d5dfc724b6e97fb7fb2a1e17e2",
+    "postcommitAcceptance": "3059b67a4926557e1717c9b6a2434e7a665d1f54f48db69837eee0bc7da11a79",
+    "postcommitResults": "e82058c2070fdb3c868a2c9d4e7f610af660d42e18156aaa8312cb2de8b37e5a",
+    "sourceIndependentReview": "06c81c9be315466396fda47a3df90d0f1f614c63653d9c0dd8aab4c2889a7d90",
+    "buildProvenance": "179a85ef0a84353c414511c40db066d78581f8a7da85dd1f2d178ab7229e3a18",
+    "imageByteBinding": "75eda6ec976710a5a603b6652cf137d1b63221c2907a523634d559c51bbbd675",
+    "imageSmoke": "d436802accd5b0eaa37d4669669581e60d2ce412b8b9b55dbf6970b64a6ad9d5",
+    "parentBenchmarkVerification": "ea4adf17a9aef357b1a65f14fb0135d53219854c20a95befbc0f71619f996eff",
+    "benchmarkReport": "61eb3886ae277b0e78f4bc3c122576595df10dfbead691a39df251913d74c53b",
+    "advisorySummary": "8ca468392762ff164bd029247677f61e016276891b185f31e7f64783b3c763f0",
+    "correctedInventoryComparison": "2c36549eff62b14dcbd300ef58276a6a1dfea932145ef47288160911b673ee62"
+  },
+  "postcommit": {
+    "sourceUnchanged": true,
+    "testResults": {
+      "benchmark-profile": [
+        " Test Files  6 passed (6)",
+        "      Tests  191 passed (191)"
+      ],
+      "targeted": [
+        " Test Files  20 passed (20)",
+        "      Tests  387 passed (387)"
+      ],
+      "audit-loopback-control": [
+        " Test Files  1 passed (1)",
+        "      Tests  2 passed (2)"
+      ],
+      "wikilint": [
+        " Test Files  100 passed | 1 skipped (101)",
+        "      Tests  2431 passed | 1 skipped (2432)"
+      ],
+      "shared-editor": [
+        " Test Files  69 passed | 1 skipped (70)",
+        "      Tests  1201 passed | 9 skipped (1210)"
+      ],
+      "app-title": [
+        " Test Files  1 passed (1)",
+        "      Tests  3 passed (3)"
+      ]
+    },
+    "nonincrementalTypesExit": 0,
+    "scopedFormatExit": 0,
+    "lintExit": 0,
+    "lintWarnings": 178,
+    "lintErrors": 0,
+    "offlineImmutableInstallExit": 0,
+    "fullFormatExit": 1,
+    "unchangedBaselineFullFormatFailures": [
+      "app/components/Switch.tsx",
+      "app/editor/index.tsx",
+      "app/types.ts",
+      "shared/components/Text.tsx",
+      "shared/editor/components/Styles.ts",
+      "shared/editor/rules/math.ts"
+    ]
+  },
+  "smoke": {
+    "checks": [
+      {
+        "id": "S1-no-policy",
+        "outcome": "pass"
+      },
+      {
+        "id": "S2-read-only-example",
+        "outcome": "pass"
+      },
+      {
+        "id": "S3-wrong-expected-fingerprint",
+        "outcome": "pass"
+      },
+      {
+        "id": "S4a-enforced-unconfirmed",
+        "outcome": "pass"
+      },
+      {
+        "id": "S4b-enforced-confirmed",
+        "outcome": "pass"
+      },
+      {
+        "id": "S5-malformed-policy",
+        "outcome": "pass"
+      },
+      {
+        "id": "S6-packaged-artifacts",
+        "outcome": "pass"
+      }
+    ],
+    "scope": "Local startup and packaging; not target deployment or assistant MCP connectivity."
+  },
+  "benchmark": {
+    "rawManifestSha256": "5c652dedfc14b165279858fb7e6d5f2a90306361b584fe3d541af139a936dc4c",
+    "rawManifestBytes": 1004982,
+    "referenceProfile": "shared-host-ssd-v1",
+    "gate1Eligible": true,
+    "deviations": [],
+    "controllerWindowEvidence": "pending-external-verification",
+    "parentVerificationStatus": "PARENT_VERIFIED_FULL_SHARED_PROFILE_BENCHMARK_PASS",
+    "parentVerifiedAt": "2026-10-29T01:00:32.905678+00:00",
+    "sampling": {
+      "warmups": 5,
+      "samples": 40,
+      "coldRuns": 1,
+      "p95": "nearest rank: the sample at rank ceil(0.95 * N) in ascending order; the cold run is each case's first warmup",
+      "full": {
+        "warmups": 5,
+        "samples": 40
+      }
+    },
+    "fixture": {
+      "generator": "server/wikiLint/benchmark/fixtureGenerator.ts",
+      "generatorCommit": "42485693aa9bdddfeac31011f01137257167f515",
+      "seed": "wikilint-ad17-v1",
+      "datasetHash": "sha256:d9e1e10f3ed5cd755685cd1fa867d0638e28f3a3cf2cf781a6a5d05618924a19",
+      "maxLinkReferencesPerDocument": 1000,
+      "profiles": [
+        {
+          "name": "wiki_150",
+          "collections": 3,
+          "documents": 150,
+          "links": 1200,
+          "seeded": true
+        },
+        {
+          "name": "wiki_1000",
+          "collections": 10,
+          "documents": 1000,
+          "links": 8000,
+          "seeded": true
+        }
+      ]
+    },
+    "budgets": [
+      {
+        "id": "lint_document.p95",
+        "measured": 31.324,
+        "limit": 1000,
+        "unit": "ms",
+        "verdict": "pass"
+      },
+      {
+        "id": "lint_document.semantics",
+        "measured": 0,
+        "limit": 0,
+        "unit": "runs",
+        "verdict": "pass"
+      },
+      {
+        "id": "lint_wiki.wiki_150.complete",
+        "measured": 0,
+        "limit": 0,
+        "unit": "runs",
+        "verdict": "pass"
+      },
+      {
+        "id": "lint_wiki.wiki_150.p95",
+        "measured": 242.35,
+        "limit": 10000,
+        "unit": "ms",
+        "verdict": "pass"
+      },
+      {
+        "id": "lint_wiki.wiki_1000.complete",
+        "measured": 0,
+        "limit": 0,
+        "unit": "runs",
+        "verdict": "pass"
+      },
+      {
+        "id": "lint_wiki.wiki_1000.max",
+        "measured": 1845.073,
+        "limit": 60000,
+        "unit": "ms",
+        "verdict": "pass"
+      },
+      {
+        "id": "write.create.overhead_p95",
+        "measured": 32.372,
+        "limit": 500,
+        "unit": "ms",
+        "verdict": "pass"
+      },
+      {
+        "id": "write.replace.overhead_p95",
+        "measured": 37.341,
+        "limit": 500,
+        "unit": "ms",
+        "verdict": "pass"
+      },
+      {
+        "id": "write.append.overhead_p95",
+        "measured": 34.087,
+        "limit": 500,
+        "unit": "ms",
+        "verdict": "pass"
+      },
+      {
+        "id": "write.prepend.overhead_p95",
+        "measured": 35.976,
+        "limit": 500,
+        "unit": "ms",
+        "verdict": "pass"
+      },
+      {
+        "id": "write.patch.overhead_p95",
+        "measured": 31.435,
+        "limit": 500,
+        "unit": "ms",
+        "verdict": "pass"
+      }
+    ],
+    "constantsInForce": {
+      "WRITE_ELIGIBLE_MARKDOWN_BYTES": 131072,
+      "WRITE_ELIGIBLE_LINK_REFERENCES": 1000,
+      "LINT_WIKI_STOP_MARGIN_MS": 2000,
+      "SET_LOCAL_FLOOR_MS": 100,
+      "LINT_WIKI_DEADLINE_MS": 60000,
+      "VALIDATION_DEADLINE_MS": 9000
+    },
+    "constantRules": [
+      {
+        "name": "WRITE_ELIGIBLE_MARKDOWN_BYTES",
+        "current": 131072,
+        "currentSatisfiesRule": true,
+        "verdict": "pass"
+      },
+      {
+        "name": "WRITE_ELIGIBLE_LINK_REFERENCES",
+        "current": 1000,
+        "currentSatisfiesRule": true,
+        "verdict": "pass"
+      },
+      {
+        "name": "LINT_WIKI_STOP_MARGIN_MS",
+        "current": 2000,
+        "currentSatisfiesRule": true,
+        "verdict": "pass"
+      },
+      {
+        "name": "SET_LOCAL_FLOOR_MS",
+        "current": 100,
+        "currentSatisfiesRule": true,
+        "verdict": "pass"
+      }
+    ],
+    "dw": [
+      {
+        "entry": "DW-4",
+        "measuredMs": 127.599,
+        "comparedWith": {
+          "name": "LINT_WIKI_STOP_MARGIN_MS",
+          "ms": 2000
+        },
+        "verdict": "pass"
+      },
+      {
+        "entry": "DW-5",
+        "measuredMs": 116.857,
+        "comparedWith": {
+          "name": "LINT_WIKI_STOP_MARGIN_MS",
+          "ms": 2000
+        },
+        "verdict": "pass"
+      },
+      {
+        "entry": "DW-6",
+        "measuredMs": 30003.909,
+        "comparedWith": {
+          "name": "deadline + HELD_POOL_TOLERANCE_MS",
+          "ms": 61000
+        },
+        "verdict": "pass"
+      }
+    ],
+    "heldPool": {
+      "profile": "wiki_1000",
+      "heldConnections": 5,
+      "poolMax": 5,
+      "deadlineMs": 60000,
+      "toleranceMs": 1000,
+      "elapsedMs": 30003.909,
+      "outcome": "result",
+      "state": "failed",
+      "systemFailureCodes": [
+        "VALIDATION_RUNTIME_FAILED"
+      ],
+      "poolAfterRelease": {
+        "using": 0,
+        "waiting": 0
+      }
+    },
+    "growth": {
+      "note": "wiki_1000 per-unit cost divided by wiki_150 per-unit cost; a ratio above 1 is an increase to explain",
+      "msPerDocument": 0.972,
+      "msPerLink": 0.972,
+      "queriesPerDocument": 0.412,
+      "rssBytesPerDocument": 0.171
+    },
+    "totalSampleRecords": 675,
+    "telemetrySamples": 85,
+    "duringManifestWindowSamples": 69,
+    "maximumCaptureGapSeconds": 2.1278879642486572,
+    "protectedPeersUnchanged": 25,
+    "ownedResourcesAbsent": true
+  },
+  "security": {
+    "disposition": "OPEN; no residual-risk waiver",
+    "inputPackageVersions": 1606,
+    "uniqueAdvisoryRecords": 79,
+    "packageVersionAdvisoryPairs": 98,
+    "severitiesByUniqueRecord": {
+      "LOW": 16,
+      "HIGH": 25,
+      "MODERATE": 36,
+      "CRITICAL": 2
+    },
+    "debianBinaryPackages": 91,
+    "debianSourcePackages": 66,
+    "debianRepeatedOpenOrUnknownRows": 184,
+    "debianSourceAdvisoryPairs": 88
+  }
+}
