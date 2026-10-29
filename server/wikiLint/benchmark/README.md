@@ -7,9 +7,11 @@ The reproducible performance, growth and constant-derivation benchmark of Story 
 - `harness.ts` with `run.ts`: seeds the database and installs the benchmark policy through `initializePolicyConfiguration`. It runs every case through the registered MCP tools over an in-memory transport and writes the manifest.
 - `constantDerivation.ts`: derives the AD-13 write-eligibility constants, the AD-11 stop margin and the `SET LOCAL` floor from the retained samples, and checks each rule.
 
-A run is Gate 1 evidence only when `gate1Eligible` is `true`: a full run with no deviation. A smoke run, or a run on any other host, is never Gate 1 evidence. Its constants stay `provisional`, and Gate 1 stays `not ready`.
+A run is eligible for Gate 1 evidence only when `gate1Eligible` is `true`: a full run with no selected-profile or workload deviation. Eligibility is distinct from all-budget PASS and final evidence acceptance. A smoke or deviating run is never Gate 1 evidence; its constants stay `provisional`, and Gate 1 stays `not ready`. Shared-host eligibility additionally requires controller verification of actual window evidence before acceptance; the manifest's planned telemetry reference does not claim completed capture.
 
-## Reference profile
+## Legacy strict reference profile
+
+Absent `WIKILINT_BENCH_REFERENCE_PROFILE` or explicit `strict-dedicated-v1` retains the strict contract below. Unknown or malformed selectors fail closed. Historical manifests, results, attestations and constants are unchanged.
 
 | Item              | Reference                                                         | How the harness establishes it                                                                                                                                                        |
 | ----------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -24,6 +26,14 @@ A run is Gate 1 evidence only when `gate1Eligible` is `true`: a full run with no
 | Attestations      | same host, local SSD, no artificial latency, no competing traffic | `WIKILINT_BENCH_ATTEST_SAME_HOST`, `WIKILINT_BENCH_ATTEST_LOCAL_SSD`, `WIKILINT_BENCH_ATTEST_NO_ARTIFICIAL_LATENCY`, `WIKILINT_BENCH_ATTEST_NO_COMPETING_TRAFFIC`, each exactly `yes` |
 
 A missing item counts as a deviation, never as a pass. The image digest identifies the benchmarked build only. It is not a Gate 2 publication.
+
+## Explicit shared-host variant
+
+`WIKILINT_BENCH_REFERENCE_PROFILE=shared-host-ssd-v1` selects the adopted [shared-host profile and reproducibility contract](../../../docs/wikilint-gate-1/shared-host-ssd-v1.md). Supply `WIKILINT_BENCH_SHARED_HOST_METADATA` as schema-v1 JSON as documented there. It records attributed topology/storage/preflight evidence, honest shared SMT/ordinary host traffic, fixture isolation, no heavy work and a controller telemetry capture plan. The app cgroup cpuset is detected; PostgreSQL cpuset and socket/core topology are operator declarations requiring external verification. Affinity does not reserve cores exclusively.
+
+This variant keeps both containers at 2 quota-vCPU/4 GiB, on different nonoverlapping physical-core pairs, PostgreSQL 14.2 on actual local NVMe SSD, the final Dockerfile Node 26.12.1/packageManager Yarn 4.11.0, and every workload/budget/derivation rule. Same-host, local-SSD and no-artificial-latency attestations remain `yes`; leave the legacy no-competing-traffic claim false (do not set it to `yes`). A false legacy attestation still invalidates strict runs. Missing or invalid shared metadata never falls back to strict eligibility.
+
+Shared results carry the selected profile name and pending controller window-evidence status. They are not the old same-hardware reference. Compare dataset growth within one run; do not compute cross-hardware timing ratios against historical strict results. The provisioning below describes strict runs; shared provisioning and the two-stage evidence contract are in the linked profile document.
 
 ## Provisioning
 
@@ -58,6 +68,6 @@ WIKILINT_BENCH_SEED=wikilint-ad17-smoke-3 \
 
 ## Manifest
 
-The manifest records the label, `smoke`, `gate1Eligible`, the deviations, the command, the source commit, the image digest and the fixture (generator, commit, seed, dataset hash, per-document link maximum). It also records the policy set fingerprint, the environment (Node, Yarn, PostgreSQL version and settings, CPU, kernel, cgroup limits, process topology, pool size), the sampling and the constants in force. Every case keeps its raw samples: duration, RSS, peak RSS, every statement duration, the longest statement under `SET LOCAL`, event-loop maximum, unit and result-assembly times, batch serialize-and-parse maximum, and the lint or write outcome. The manifest also records each AD-17 budget's verdict, the growth ratios, the concurrent writer, the held-pool re-run, the DW-4/5/6 records and the constant derivation.
+The manifest records the label, selected `referenceProfile`, `controllerWindowEvidence` status, `smoke`, `gate1Eligible`, the deviations, the command, the source commit, the image digest and the fixture (generator, commit, seed, dataset hash, per-document link maximum). It also records the policy set fingerprint, the environment (Node, Yarn, PostgreSQL version and settings, CPU, kernel, cgroup limits, process topology, pool size), the sampling and the constants in force. The environment retains the selected profile, raw parsed shared-host operator declarations (or null for invalid JSON), and legacy attestation booleans; `source: operator` labels declarations rather than detected facts. Every case keeps its raw samples: duration, RSS, peak RSS, every statement duration, the longest statement under `SET LOCAL`, event-loop maximum, unit and result-assembly times, batch serialize-and-parse maximum, and the lint or write outcome. The manifest also records each AD-17 budget's verdict, the within-run growth ratios, the concurrent writer, the held-pool re-run, the DW-4/5/6 records and the constant derivation.
 
 Statement durations and counts come from Sequelize per-query benchmark logging. A statement counts as under `SET LOCAL` when its transaction issued one before it. The AD-15 audit transaction is excluded. Unit, result-assembly and per-batch serialize-and-parse times come from the no-op-by-default timing probe (`application/timingProbe.ts`).

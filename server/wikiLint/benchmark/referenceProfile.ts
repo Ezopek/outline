@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 
 /** One GiB, in bytes. */
 const GIB = 1024 * 1024 * 1024;
@@ -42,6 +43,115 @@ export const ATTESTATIONS = Object.freeze({
 
 export type Attestation = keyof typeof ATTESTATIONS;
 
+/** Explicit selection; absent selection retains the legacy strict contract. */
+export const PROFILE_SELECTOR = "WIKILINT_BENCH_REFERENCE_PROFILE";
+export const SHARED_HOST_INPUT = "WIKILINT_BENCH_SHARED_HOST_METADATA";
+export const STRICT_PROFILE = "strict-dedicated-v1";
+export const SHARED_HOST_PROFILE = "shared-host-ssd-v1";
+
+/** Opaque evidence references are retained, never fetched by the harness. */
+const evidenceRef = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/#-]{0,239}$/);
+const topologyId = z.number().int().nonnegative().max(1048575);
+const sharedHostSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  source: z.literal("operator"),
+  coTenancy: z.literal("shared-smt-ordinary-host-traffic"),
+  preflightEvidenceRef: evidenceRef,
+  postgresCpuset: z.string().min(1).max(128),
+  cpuTopology: z
+    .array(
+      z.strictObject({
+        cpu: topologyId,
+        socket: topologyId,
+        core: topologyId,
+      })
+    )
+    .length(4),
+  storage: z.literal("local-nvme-ssd"),
+  attestations: z.strictObject({
+    affinityPinned: z.literal("yes"),
+    coTenancyDisclosed: z.literal("yes"),
+    fixtureExclusive: z.literal("yes"),
+    noHeavyWork: z.literal("yes"),
+    pgdataOnLocalNvme: z.literal("yes"),
+  }),
+  telemetry: z.strictObject({
+    collector: z.literal("controller"),
+    windowId: evidenceRef,
+    evidenceRef,
+    capture: z.literal("planned-before-during-after"),
+    coverage: z.tuple([
+      z.literal("cpu"),
+      z.literal("io"),
+      z.literal("psi"),
+      z.literal("memory"),
+      z.literal("device"),
+      z.literal("network"),
+    ]),
+  }),
+});
+
+/** Attributed declarations, not automatically detected host facts. */
+export type SharedHostMetadata = z.infer<typeof sharedHostSchema>;
+
+/** Parses metadata without treating malformed JSON as an absent selector. */
+function parseSharedHost(value: string | undefined): unknown {
+  try {
+    return JSON.parse(value ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+/** Reads exactly two distinct CPU IDs without expanding arbitrary ranges. */
+function cpuPair(value: string | null): number[] | null {
+  if (!value || value.length > 128) {
+    return null;
+  }
+  const ids: number[] = [];
+  const parts = value.split(",");
+  if (parts.length > 2) {
+    return null;
+  }
+  for (const part of parts) {
+    const match = /^(\d+)(?:-(\d+))?$/.exec(part);
+    if (!match) {
+      return null;
+    }
+    const start = Number(match[1]);
+    const end = match[2] === undefined ? start : Number(match[2]);
+    if (start > end || end > 1048575 || end - start > 1) {
+      return null;
+    }
+    ids.push(start);
+    if (end !== start) {
+      ids.push(end);
+    }
+  }
+  return ids.length === 2 && new Set(ids).size === 2 ? ids : null;
+}
+
+/** Checks declared physical topology against the detected app CPU pair. */
+function sharedAffinityValid(
+  appCpuset: string | null,
+  metadata: SharedHostMetadata
+): boolean {
+  const app = cpuPair(appCpuset);
+  const postgres = cpuPair(metadata.postgresCpuset);
+  if (!app || !postgres) {
+    return false;
+  }
+  const assigned = [...app, ...postgres];
+  return (
+    new Set(assigned).size === 4 &&
+    assigned.every((cpu) =>
+      metadata.cpuTopology.some((row) => row.cpu === cpu)
+    ) &&
+    new Set(metadata.cpuTopology.map((row) => `${row.socket}:${row.core}`))
+      .size === 4
+  );
+}
+
 /** The cgroup limits of the app process. */
 export interface CgroupLimits {
   version: 1 | 2 | null;
@@ -54,6 +164,10 @@ export interface CgroupLimits {
 
 /** The captured benchmark environment (AD-17, criteria 2 and 8). */
 export interface EnvironmentCapture {
+  /** Retains unknown selections so validation cannot silently fall back. */
+  referenceProfile: string;
+  /** Raw parsed operator declarations; validated only for the shared variant. */
+  sharedHost: unknown;
   platform: string;
   arch: string;
   kernel: string;
@@ -233,6 +347,8 @@ export function captureEnvironment(input: {
     attestations[key as Attestation] = env[variable] === "yes";
   }
   return {
+    referenceProfile: env[PROFILE_SELECTOR] ?? STRICT_PROFILE,
+    sharedHost: parseSharedHost(env[SHARED_HOST_INPUT]),
     platform: process.platform,
     arch: process.arch,
     kernel: `${os.type()} ${os.release()}`,
@@ -294,6 +410,47 @@ export function profileDeviations(capture: EnvironmentCapture): Deviation[] {
       });
     }
   };
+
+  const shared = capture.referenceProfile === SHARED_HOST_PROFILE;
+  if (!shared && capture.referenceProfile !== STRICT_PROFILE) {
+    deviations.push({
+      item: "reference profile selector",
+      expected: `${STRICT_PROFILE} or ${SHARED_HOST_PROFILE}`,
+      actual: show(capture.referenceProfile),
+    });
+  }
+  if (shared) {
+    expect(
+      "shared-host Dockerfile runner",
+      "v26.12.1",
+      capture.dockerfileNodeVersion
+    );
+    expect(
+      "shared-host packageManager Yarn",
+      "4.11.0",
+      capture.packageManagerYarnVersion
+    );
+    expect(
+      "shared-host legacy noCompetingTraffic",
+      false,
+      capture.attestations.noCompetingTraffic
+    );
+    const metadata = sharedHostSchema.safeParse(capture.sharedHost);
+    if (!metadata.success) {
+      deviations.push({
+        item: "shared-host metadata",
+        expected: `complete attributed ${SHARED_HOST_INPUT} schema v1`,
+        actual: "missing or malformed declarations",
+      });
+    } else if (!sharedAffinityValid(capture.cgroup.cpuset, metadata.data)) {
+      deviations.push({
+        item: "shared-host affinity",
+        expected:
+          "two nonoverlapping two-physical-core pairs with attributed topology",
+        actual: "missing, invalid, overlapping or inconsistent cpuset/topology",
+      });
+    }
+  }
 
   expect("platform", REFERENCE_PROFILE.platform, capture.platform);
   expect("arch", REFERENCE_PROFILE.arch, capture.arch);
@@ -365,6 +522,9 @@ export function profileDeviations(capture: EnvironmentCapture): Deviation[] {
     });
   }
   for (const [key, variable] of Object.entries(ATTESTATIONS)) {
+    if (shared && key === "noCompetingTraffic") {
+      continue;
+    }
     if (!capture.attestations[key as Attestation]) {
       deviations.push({
         item: `attestation ${key} (${variable})`,

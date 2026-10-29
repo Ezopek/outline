@@ -76,6 +76,8 @@ import {
 } from "./fixtureGenerator";
 import type { Deviation, EnvironmentCapture } from "./referenceProfile";
 import {
+  SHARED_HOST_PROFILE,
+  STRICT_PROFILE,
   captureEnvironment,
   isGate1Eligible,
   profileDeviations,
@@ -235,6 +237,11 @@ export interface DwRecord {
 /** The retained benchmark manifest (criterion 8). */
 export interface Manifest {
   manifestVersion: 1;
+  referenceProfile: string;
+  /** A telemetry plan is never proof of completed controller capture. */
+  controllerWindowEvidence:
+    | "pending-external-verification"
+    | "not-required-by-profile";
   label: string;
   smoke: boolean;
   gate1Eligible: boolean;
@@ -1079,12 +1086,23 @@ function selectSamples<T extends { role: "warmup" | "sample" }>(
  * @returns the deviations, in a fixed order.
  */
 export function runDeviations(
-  options: Pick<HarnessOptions, "smoke" | "profiles" | "heldPool">
+  options: Pick<HarnessOptions, "smoke" | "profiles" | "heldPool" | "seed">,
+  referenceProfile: string = STRICT_PROFILE
 ): Deviation[] {
   if (options.smoke) {
     return [];
   }
   const deviations: Deviation[] = [];
+  if (
+    referenceProfile === SHARED_HOST_PROFILE &&
+    (options.seed ?? DEFAULT_SEED) !== DEFAULT_SEED
+  ) {
+    deviations.push({
+      item: "shared-host fixture seed",
+      expected: DEFAULT_SEED,
+      actual: options.seed ?? DEFAULT_SEED,
+    });
+  }
   const all = Object.keys(PROFILES) as ProfileName[];
   const measuredProfiles = options.profiles ?? all;
   if ([...measuredProfiles].sort().join(",") !== [...all].sort().join(",")) {
@@ -1189,7 +1207,7 @@ export async function runBenchmark(options: HarnessOptions): Promise<Manifest> {
   });
   const deviations = [
     ...profileDeviations(environment),
-    ...runDeviations(options),
+    ...runDeviations(options, environment.referenceProfile),
   ];
   const gate1Eligible = isGate1Eligible(deviations, smoke);
 
@@ -1528,14 +1546,23 @@ export async function runBenchmark(options: HarnessOptions): Promise<Manifest> {
     | undefined;
   const ratio = (a: number | null | undefined, b: number | null | undefined) =>
     a && b ? round(b / a) : null;
+  const label = gate1Eligible
+    ? "AD-17 reference run"
+    : smoke
+      ? "smoke run — not Gate 1 evidence"
+      : "non-reference run — not Gate 1 evidence";
 
   return {
     manifestVersion: 1,
-    label: gate1Eligible
-      ? "AD-17 reference run"
-      : smoke
-        ? "smoke run — not Gate 1 evidence"
-        : "non-reference run — not Gate 1 evidence",
+    referenceProfile: environment.referenceProfile,
+    controllerWindowEvidence:
+      environment.referenceProfile === SHARED_HOST_PROFILE
+        ? "pending-external-verification"
+        : "not-required-by-profile",
+    label:
+      environment.referenceProfile === SHARED_HOST_PROFILE
+        ? `${SHARED_HOST_PROFILE} — controller window evidence pending; ${label}`
+        : label,
     smoke,
     gate1Eligible,
     deviations,

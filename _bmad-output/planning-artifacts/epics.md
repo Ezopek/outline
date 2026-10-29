@@ -1609,8 +1609,10 @@ AD: AD-11, AD-13, AD-16–AD-18
 
 2. **Given** the benchmark harness
    **When** it provisions the reference profile
-   **Then** it uses a production build on Linux x86-64 with app limited to two dedicated vCPU/4 GiB and PostgreSQL 14.2 to two dedicated vCPU/4 GiB/local SSD on the same host, baseline Yarn, Node exactly the Dockerfile runner version, no artificial latency, and no competing traffic
-   **And** deviations invalidate rather than silently qualify the Gate 1 measurement.
+   **Then** absent selection or explicit `strict-dedicated-v1` retains the legacy production build on Linux x86-64 with app limited to two dedicated vCPU/4 GiB and PostgreSQL 14.2 to two dedicated vCPU/4 GiB/local SSD on the same host, baseline Yarn, Node exactly the Dockerfile runner version, no artificial latency, and no competing traffic
+   **And** explicit `shared-host-ssd-v1` selects the adopted AD-17 environment amendment: Linux x86-64 production build, final Dockerfile Node 26.12.1/packageManager Yarn 4.11.0, app and same-host PostgreSQL 14.2 each at 2 quota-vCPU/4 GiB on different nonoverlapping two-physical-core pairs, actual local NVMe SSD PGDATA, no artificial latency, disclosed shared SMT/ordinary host traffic, fixture-exclusive access, and no concurrent build/backup/render/slicing/other heavy work; affinity is not exclusive reservation
+   **And** the manifest retains the selected variant, false legacy `noCompetingTraffic` where applicable, detected app cpuset, attributed PostgreSQL cpuset/topology/storage/preflight reference, and controller telemetry window ID/plan/evidence reference for CPU/I/O/PSI/memory/device/network before/during/after; profile/workload eligibility, all-budget PASS, and final verification of actual window evidence are distinct
+   **And** unknown/malformed selectors, missing/invalid variant inputs and other deviations invalidate rather than silently qualify the measurement; strict behavior, historical evidence and criteria 1 and 3–9 remain unchanged, and shared results are never the old same-hardware reference or a basis for cross-hardware timing ratios. See [the adopted amendment](../implementation-artifacts/ad17-shared-host-ssd-v1.md).
 
 3. **Given** each benchmark case
    **When** measurements run

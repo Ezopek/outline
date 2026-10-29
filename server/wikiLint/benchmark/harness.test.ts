@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Job } from "bull";
+import { Collection, Document, Event, Team } from "@server/models";
 import { BaseTask } from "@server/queues/tasks/base/BaseTask";
 import { LINT_WIKI_DEADLINE_MS } from "../application/lintWiki";
 import {
   MAX_LINK_REFERENCES_PER_DOCUMENT,
   WRITE_MODES,
+  generateDataset,
 } from "./fixtureGenerator";
 import type { CaseRecord, Manifest } from "./harness";
 import {
@@ -60,6 +62,14 @@ function caseOf(id: string): CaseRecord {
 }
 
 describe("runBenchmark (smoke, wiki_150)", () => {
+  it("records default strict selection without a shared window-evidence claim", () => {
+    expect(manifest).toMatchObject({
+      referenceProfile: "strict-dedicated-v1",
+      controllerWindowEvidence: "not-required-by-profile",
+      environment: { referenceProfile: "strict-dedicated-v1" },
+    });
+  });
+
   it("records every criterion 8 field", () => {
     expect(manifest.manifestVersion).toBe(1);
     expect(manifest).toHaveProperty("sourceCommit");
@@ -310,6 +320,116 @@ describe("runBenchmark (smoke, wiki_150)", () => {
       expect(constant.status).toBe("provisional");
       expect(constant.sourceSampleIds.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("shared-host manifest wiring", () => {
+  it("retains real harness environment input and pending provenance in serialized output", async () => {
+    // Reuse this process's immutable policy identity. Remove only this test's
+    // own fixture teams before reseeding; other test files keep their rows.
+    const teamId = generateDataset(manifest.fixture.seed).teams.map(
+      ({ id }) => id
+    );
+    await Event.destroy({ where: { teamId }, force: true, hooks: false });
+    await Collection.destroy({ where: { teamId }, force: true, hooks: false });
+    await Document.unscoped().destroy({
+      where: { teamId },
+      force: true,
+      hooks: false,
+    });
+    await Team.destroy({ where: { id: teamId }, force: true, hooks: false });
+    const metadata = {
+      schemaVersion: 1,
+      source: "operator",
+      coTenancy: "shared-smt-ordinary-host-traffic",
+      preflightEvidenceRef: "evidence:preflight-harness",
+      postgresCpuset: "4-5",
+      cpuTopology: [2, 3, 4, 5].map((cpu) => ({ cpu, socket: 0, core: cpu })),
+      storage: "local-nvme-ssd",
+      attestations: {
+        affinityPinned: "yes",
+        coTenancyDisclosed: "yes",
+        fixtureExclusive: "yes",
+        noHeavyWork: "yes",
+        pgdataOnLocalNvme: "yes",
+      },
+      telemetry: {
+        collector: "controller",
+        windowId: "harness-window-001",
+        evidenceRef: "evidence:telemetry-harness",
+        capture: "planned-before-during-after",
+        coverage: ["cpu", "io", "psi", "memory", "device", "network"],
+      },
+    };
+    // These synthetic operator declarations make no claims about the test host.
+    const shared = await runBenchmark({
+      seed: manifest.fixture.seed,
+      smoke: true,
+      sampling: SAMPLING,
+      profiles: ["wiki_150"],
+      heldPool: { deadlineMs: HELD_POOL_DEADLINE_MS },
+      command: "yarn node build/server/wikiLint/benchmark/run.js --smoke",
+      repoRoot: process.cwd(),
+      entryPath: null,
+      env: {
+        ...process.env,
+        WIKILINT_BENCH_REFERENCE_PROFILE: "shared-host-ssd-v1",
+        WIKILINT_BENCH_ATTEST_NO_COMPETING_TRAFFIC: "no",
+        WIKILINT_BENCH_SHARED_HOST_METADATA: JSON.stringify(metadata),
+      },
+    });
+    const emitted = JSON.parse(JSON.stringify(shared));
+    expect(emitted).toMatchObject({
+      referenceProfile: "shared-host-ssd-v1",
+      controllerWindowEvidence: "pending-external-verification",
+      smoke: true,
+      gate1Eligible: false,
+      environment: {
+        referenceProfile: "shared-host-ssd-v1",
+        sharedHost: metadata,
+        attestations: { noCompetingTraffic: false },
+      },
+      sampling: { warmups: 1, samples: 2, full: { warmups: 5, samples: 40 } },
+      derivation: { gate1: "not ready" },
+    });
+    expect(emitted.label).toContain("shared-host-ssd-v1");
+    expect(emitted.label).toContain("controller window evidence pending");
+    expect(emitted.label).toContain("not Gate 1 evidence");
+    expect(emitted.budgets.map((budget: { id: string }) => budget.id)).toEqual(
+      manifest.budgets.map((budget) => budget.id)
+    );
+    expect(emitted.startedAt).toEqual(expect.any(String));
+    expect(emitted.finishedAt).toEqual(expect.any(String));
+  }, 120000);
+
+  it("requires the adopted seed for full shared runs while preserving strict seed compatibility", () => {
+    const options = { smoke: false, seed: "another-seed" };
+    expect(runDeviations(options)).toEqual([]);
+    const deviations = runDeviations(options, "shared-host-ssd-v1");
+    expect(deviations).toContainEqual({
+      item: "shared-host fixture seed",
+      expected: "wikilint-ad17-v1",
+      actual: "another-seed",
+    });
+    expect(isGate1Eligible(deviations, false)).toBe(false);
+    expect(runDeviations({ smoke: false }, "shared-host-ssd-v1")).toEqual([]);
+  });
+
+  it("retains full-workload and held-pool requirements for shared runs", () => {
+    const deviations = runDeviations(
+      {
+        smoke: false,
+        profiles: ["wiki_150"],
+        heldPool: { deadlineMs: HELD_POOL_DEADLINE_MS },
+      },
+      "shared-host-ssd-v1"
+    );
+    expect(deviations.map(({ item }) => item)).toEqual([
+      "measured lint_wiki profiles (--profiles)",
+      "held-pool profile",
+      "held-pool deadline (ms)",
+    ]);
+    expect(isGate1Eligible(deviations, false)).toBe(false);
   });
 });
 
