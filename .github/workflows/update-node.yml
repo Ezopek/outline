@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   update-node:
+    if: ${{ github.repository == 'outline/outline' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

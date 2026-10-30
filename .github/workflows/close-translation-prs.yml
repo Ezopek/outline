@@ -10,7 +10,7 @@ on:
 
 jobs:
   close-translation-prs:
-    if: github.event.pull_request.user.login != 'outline-translations'
+    if: ${{ github.repository == 'outline/outline' && github.event.pull_request.user.login != 'outline-translations' }}
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write

@@ -2,8 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/mcp-wiki-linting-v1.10.1]
   pull_request:
+
+permissions:
+  contents: read
 
 env:
   NODE_ENV: test
@@ -19,6 +22,9 @@ env:
 jobs:
   changes:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
       config: ${{ steps.filter.outputs.config }}
@@ -156,12 +162,23 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           webpackStatsFile: ./build/app/webpack-stats.json
 
+  # Offline static contract for the fork publication safeguards. Standard
+  # library only, no package install, so it runs on every change.
+  publication-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: /usr/bin/python3 -B scripts/publication-safeguards.test.py
+
   # Always runs, so it can be used as the single required status check. Jobs
   # above are skipped when irrelevant to the changes, which is a pass here.
   # Audit is intentionally excluded, it reports advisories that can have no
   # fix available or affect dev only and should not block merging.
   ci:
-    needs: [changes, lint, actionlint, types, test, test-server, bundle-size]
+    needs: [changes, lint, actionlint, types, test, test-server, bundle-size, publication-contract]
     if: always()
     runs-on: ubuntu-latest
     steps:
