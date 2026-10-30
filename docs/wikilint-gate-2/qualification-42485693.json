@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "allowlisted-derived-summary",
-  "scope": "Retained local qualification only; not a raw manifest, independent documentation review, Gate 1 acceptance, or release approval.",
+  "scope": "Retained local qualification and current Gate 1 technical evidence assessment; not a raw manifest, independent documentation approval, native feature acceptance, security waiver or release approval.",
   "sourceCommit": "42485693aa9bdddfeac31011f01137257167f515",
   "runtimeParentCommit": "c2bcfa1070c20871360c90760aa8fc42f1bd514d",
   "imageSourceExportManifestSha256": "f04b7f4e2c455b0805d6a3a6a5b12e923a619fea9ce41e94f2ef2ff64c9d11fe",
@@ -24,7 +24,20 @@
     "parentBenchmarkVerification": "ea4adf17a9aef357b1a65f14fb0135d53219854c20a95befbc0f71619f996eff",
     "benchmarkReport": "61eb3886ae277b0e78f4bc3c122576595df10dfbead691a39df251913d74c53b",
     "advisorySummary": "8ca468392762ff164bd029247677f61e016276891b185f31e7f64783b3c763f0",
-    "correctedInventoryComparison": "2c36549eff62b14dcbd300ef58276a6a1dfea932145ef47288160911b673ee62"
+    "correctedInventoryComparison": "2c36549eff62b14dcbd300ef58276a6a1dfea932145ef47288160911b673ee62",
+    "conformanceVerification": "6178087e7513e4c1a4f3b937ea1567291c4d63336139f10b2012d36cce248ac0",
+    "conformanceParentNamesStatusesVerification": "a1f978f7827ff6c0def41e14a7e299823cf841dddc888c5073826c07c88d4824",
+    "sourceBindingRecomputed": "3b0bbefbf582a61d392670a171f94b38b992678d1b9952b47261207ac07e20e7",
+    "currentProvenanceVerification": "b62dd94631fb52fb0b631c0d4bf70e4fbb99da8992b0bd052c807756c4197b11",
+    "currentGenericDataReview": "e5a17c84d945e83b74cc52050c8047da14a03e34e71b54ee310a03d47a47e543",
+    "completedRiskReport": "be4f5da86c36f44f12773ea0bd9899f9cd06b3061693643f7111dea9cb50ae8b",
+    "parentRiskVerification": "3f1af96eded33dfcb2fc34fa9855412b219a287296b94d206e4b7994c2b0357b",
+    "deploymentAssessment": "80475c7d835b5966b6c00c28973dbdea8be65b3a88cefb628d535229e2822918",
+    "deploymentParentReconciliation": "8513b4413a162da86b68bf2e7ced285bf1505ddfcd2840a884010ae84975f728",
+    "priorIndependentReviewRequestChanges": "4a2d0d1b6d9096b00ebafff49a4624a66924c4247f5ccd0f23222caf47bce75b",
+    "focusedFixtureTraceability": "65b37b17fdbdd18dab43bba3f04359f63e0b8ed441e485c20f0efbe9e931c440",
+    "missingAC5Fields": "6d35233929e1e8b619d206c8f039ee1ddba4ddd89923d7e7a4e1badb02f7cdb2",
+    "adoptedAC5Proposal": "87500553c50565131262ccdce41ddf1e7efedd0a34f3155db2d7ce16b206655b"
   },
   "postcommit": {
     "sourceUnchanged": true,
@@ -332,6 +345,233 @@
     "debianBinaryPackages": 91,
     "debianSourcePackages": 66,
     "debianRepeatedOpenOrUnknownRows": 184,
-    "debianSourceAdvisoryPairs": 88
+    "debianSourceAdvisoryPairs": 88,
+    "assessment": "79 records and 98 pairs classified; no unconditional new source-change blocker established; not a blanket clearance.",
+    "observedTracingCondition": {
+      "DD_API_KEY_entry_present": false,
+      "DD_API_KEY_nonempty": false,
+      "requirement": "Preserve tracing off and recheck before cutover; separately remediate or qualify mitigation before enabling the affected tracing path."
+    }
+  },
+  "conformanceReuse": {
+    "executionSource": "28915b2cf6b1a16a9dd71f932346c35415826c81",
+    "assessedCandidate": "42485693aa9bdddfeac31011f01137257167f515",
+    "reports": [
+      {
+        "group": "wikilint",
+        "run": 1,
+        "file": "wikilint-1.json",
+        "sha256": "53f3a9d5352dd22835f43922be5a4f5fdaf5096c827669171ab58c61a1f91469",
+        "actual_per_test_count": 2334,
+        "statuses": {
+          "passed": 2333,
+          "skipped": 1
+        },
+        "normalized_names_statuses_sha256": "828cc798cdf5fe500323807dccf8cd3af770e49926a2bcead92cdb3d8967345b"
+      },
+      {
+        "group": "wikilint",
+        "run": 2,
+        "file": "wikilint-2.json",
+        "sha256": "332331046251e91b2fe2a3b9caa1420c78cb8c7b4cba540fd0d60d942adfc2da",
+        "actual_per_test_count": 2334,
+        "statuses": {
+          "passed": 2333,
+          "skipped": 1
+        },
+        "normalized_names_statuses_sha256": "828cc798cdf5fe500323807dccf8cd3af770e49926a2bcead92cdb3d8967345b"
+      },
+      {
+        "group": "wikilint",
+        "run": 3,
+        "file": "wikilint-3.json",
+        "sha256": "8399cea9fb9c5a49114cf099a6fa7225d519c69539d02cf80ced5f6368e5fd38",
+        "actual_per_test_count": 2334,
+        "statuses": {
+          "passed": 2333,
+          "skipped": 1
+        },
+        "normalized_names_statuses_sha256": "828cc798cdf5fe500323807dccf8cd3af770e49926a2bcead92cdb3d8967345b"
+      },
+      {
+        "group": "shared",
+        "run": 1,
+        "file": "shared-1.json",
+        "sha256": "e6646f07fdceba9983cca10cb06081454537205139c27760664dbf055f9d9e2d",
+        "actual_per_test_count": 734,
+        "statuses": {
+          "passed": 734
+        },
+        "normalized_names_statuses_sha256": "df6775fa1f01a0749d122e42b0c34521a7e51a2a37a8576e4914a3b4de482a32"
+      },
+      {
+        "group": "shared",
+        "run": 2,
+        "file": "shared-2.json",
+        "sha256": "5062b638f66f59bf80416efd16b7f2f074bab1d6242c56a7dfee2c44e1a1256c",
+        "actual_per_test_count": 734,
+        "statuses": {
+          "passed": 734
+        },
+        "normalized_names_statuses_sha256": "df6775fa1f01a0749d122e42b0c34521a7e51a2a37a8576e4914a3b4de482a32"
+      },
+      {
+        "group": "shared",
+        "run": 3,
+        "file": "shared-3.json",
+        "sha256": "1f8b8c66091ef82446ddb7d3c124d4bd020b1057fd0c9e428c3c468a8a2c3cbb",
+        "actual_per_test_count": 734,
+        "statuses": {
+          "passed": 734
+        },
+        "normalized_names_statuses_sha256": "df6775fa1f01a0749d122e42b0c34521a7e51a2a37a8576e4914a3b4de482a32"
+      },
+      {
+        "group": "server",
+        "run": 1,
+        "file": "server-1.json",
+        "sha256": "9adbf48e2651ae6dfacdec4adb67ca3bca3c62a5a8e89dff01ac377cb52cfd44",
+        "actual_per_test_count": 76,
+        "statuses": {
+          "passed": 76
+        },
+        "normalized_names_statuses_sha256": "8dd72b8499d811383721dc3e011530885dd68b78c12734022f4981eb59fee571"
+      },
+      {
+        "group": "server",
+        "run": 2,
+        "file": "server-2.json",
+        "sha256": "40345948a6d779450a14c193b38b1d0453c7ba352b1e6e4a5777b465deb32995",
+        "actual_per_test_count": 76,
+        "statuses": {
+          "passed": 76
+        },
+        "normalized_names_statuses_sha256": "8dd72b8499d811383721dc3e011530885dd68b78c12734022f4981eb59fee571"
+      },
+      {
+        "group": "server",
+        "run": 3,
+        "file": "server-3.json",
+        "sha256": "35399db1d8121d8a7ebed91ca7ef8daeb5e79a07bab96166561f0fda31450d01",
+        "actual_per_test_count": 76,
+        "statuses": {
+          "passed": 76
+        },
+        "normalized_names_statuses_sha256": "8dd72b8499d811383721dc3e011530885dd68b78c12734022f4981eb59fee571"
+      }
+    ],
+    "exactNamesStatusesEquality": {
+      "wikilint": true,
+      "shared": true,
+      "server": true
+    },
+    "normalizationScope": "The report hash compares file/full assertion name/status only; functional byte equality is established by the inspected test assertions, not by this report reduction.",
+    "functionalAssertions": [
+      {
+        "path": "server/wikiLint/core/ordering.test.ts",
+        "lines": "223-231",
+        "assertion": "sortIssues serializes 50 deterministic permutations against expectedJson",
+        "sha256": "276e1f4d3a7ec1a5c5e6282d9fb50aadc87dc9ea8bd10d567a54f85f117673e5"
+      },
+      {
+        "path": "server/wikiLint/core/result.test.ts",
+        "lines": "780-881",
+        "assertion": "30 issue/collection/policy permutations are byte-identical; explicit state, collection and policy order assertions",
+        "sha256": "370b967a9cf5d058521ba163c9beb61905355d3febe7af8e8635b30b439f8761"
+      },
+      {
+        "path": "server/routes/mcp/wikiLint.test.ts",
+        "lines": "2536-2610",
+        "assertion": "actual lint_document/scoped/default lint_wiki serialized JSON-RPC results equal baseline across OAuth/API key, headers, titles, language and updatedAt ordering; request IDs differ",
+        "sha256": "3c284ced5f390504f809415d739477de91931c59f5ba40866101fac3c0a5b04b"
+      },
+      {
+        "path": "server/wikiLint/application/timingProbe.test.ts",
+        "lines": "144-173",
+        "assertion": "serialized lint_wiki results equal with absent, installed and throwing timing probe",
+        "sha256": "6d9c41f8122ced33e55093bfe9e19981522782d2b587c6d67e426904b1b3571f"
+      }
+    ],
+    "unchangedFunctionalFiles": 479,
+    "changedRetainedReportTestFiles": [
+      "server/wikiLint/benchmark/harness.test.ts",
+      "server/wikiLint/benchmark/referenceProfile.test.ts"
+    ],
+    "currentRuntimeQualification": "Retained exact-source postcommit Node 26.12.1 results above; not three current-runtime repetitions.",
+    "applicationRerunsPerformed": false
+  },
+  "gate1TechnicalAssessment": {
+    "decision": "not ready",
+    "status": "not ready as of author amendment; AC5 metadata complete, focused independent review and parent acceptance pending",
+    "productSource": "42485693aa9bdddfeac31011f01137257167f515",
+    "recordsCheckpoint": "996df056e308a7a2b5eb4dade3dd6fee00e57d40",
+    "inventory": "../wikilint-gate-1/candidate-42485693-evidence-index.md",
+    "inventorySha256": "4399d9337cc3b2e6fd95f980e56e18bdcdad87aba839f0b99392d018b75fb65d",
+    "inventoryRows": 121,
+    "passRows": 117,
+    "acceptedGapRows": 4,
+    "blockingRows": [],
+    "namedResidualRows": 15,
+    "uniqueInventoryAndResidualIds": 132,
+    "story34Criteria": 8,
+    "securityAcceptance": "pending explicit limited disposition",
+    "nativeFeatureAcceptance": false,
+    "publicationApproved": false,
+    "deploymentApproved": false,
+    "policyActivated": false,
+    "technicalEvidenceDecision": "SM-I1-SM-I7 and seven phase-blocking D-9 evidence rows pass",
+    "decisionScope": "Formal Gate 1 readiness requires literal AC5 residual owner/revisit dispositions (now materialized) plus independent review and parent acceptance of them.",
+    "blockingCriteria": [],
+    "technicalInventoryBlockingRows": [],
+    "adoptedAC5Metadata": {
+      "adoptedByDirectOperator": true,
+      "proposalSha256": "87500553c50565131262ccdce41ddf1e7efedd0a34f3155db2d7ce16b206655b",
+      "fieldsMaterialized": 21,
+      "ownerFields": 11,
+      "revisitFields": 10,
+      "residualsAffected": 13,
+      "residualRowsWithOwnerAndRevisit": 15,
+      "unspecifiedFieldsRemaining": 0,
+      "scope": "Tracking responsibility and future assessment triggers only; not product or security risk acceptance, access, automatic mutation, disclosure widening or a waived gate.",
+      "independentReviewRetained": false,
+      "parentAcceptanceRetained": false
+    },
+    "pendingFormalGates": [
+      "focused independent review of the AC5 amendment",
+      "parent acceptance of the AC5 amendment"
+    ],
+    "story34CriteriaResults": {
+      "pass": 8,
+      "gap": 0
+    }
+  },
+  "currentTestLogSha256": {
+    "wikilint.log": "79be037a0a2d772455ce5b63a642a07ab13392d27e9b7557332ec0cb5ba0045c",
+    "benchmark-profile.log": "25b8ba7d13e2821d405980103ea7b02bf13318705b98d5ea0e6c0b6a045b1207",
+    "targeted.log": "81a7f55e1885453578b2a59a080bdccdbcbb6a07ee7ff1707a72ebc1198edc74",
+    "audit-loopback-control.log": "7ecee57713285f4d455e6d937d9c9a4832931710c422fde0774886168e844730",
+    "shared-editor.log": "17028e50e61a10d83f3ae266096147b58e914795630fa1f7861cc2bd46a6ec5e",
+    "app-title.log": "0406f0e2ab41bbd67f7ff99d339fc041b0fdc8865ff079f3ebcbcaeb78d03f22",
+    "config-runtime.log": "cb618212126a275d6a8509487549c5aa5768f2599e6d3adafae9093618894aaf",
+    "tsc.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "immutable-install.log": "5180233b336575de4cd1a2dd859620a6bcba7b61930de02c5f522725e6384ea3"
+  },
+  "reviewCorrection": {
+    "priorIndependentVerdict": "REQUEST_CHANGES",
+    "formalReadinessBlocker": "Historical: AC5 residual owner/revisit disposition only (not an application defect or new phase-blocking product item). Superseded by the adopted metadata; formal readiness now awaits independent review and parent acceptance.",
+    "architectItems": "All three resolved by operator amendment 2026-10-02; named Stories1.3/1.5/1.6/1.7 evidence mapped in current inventory.",
+    "destinationTraceability": "Named selector/all-four-policy-state/sentinel/applicable hidden-identity fixture bindings added; no new execution.",
+    "OD2OD6": {
+      "owner": "Wiki operator (PRD section12; Spine D-1/D-2)",
+      "revisit_gate": "Before Gate 4",
+      "remaining": "Pilot collections, rules, clients and evidence procedure; no values invented."
+    },
+    "OD7": {
+      "owner": "Operator (PRD section12); release operator (Spine D-3/OD-7)",
+      "revisit_gate": "Before applicable Gate 2 or Gate 3 approval",
+      "binding_source": "_bmad-output/planning-artifacts/prds/prd-outline-2026-09-20/prd.md OD-7; Architecture Spine Deferred D-3/OD-7",
+      "settled": "Private GitHub Container Registry under fork owner",
+      "remaining": "Image naming/immutable publication, target environment/change window, backup/restore evidence and rollback procedure at the applicable gate; no values invented."
+    }
   }
 }

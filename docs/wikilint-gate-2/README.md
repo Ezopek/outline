@@ -6,7 +6,7 @@ Use [release candidate `42485693`](release-candidate-42485693.md) for the curren
 
 The built image comes from source `42485693aa9bdddfeac31011f01137257167f515`, with runtime parent `c2bcfa1070c20871360c90760aa8fc42f1bd514d`, Node 26.12.1 and Yarn 4.11.0. Its local image ID is `sha256:c33b509b2d811b8145e159413127cf592db21f04ae5239f4862d757366bf4a45`. There is **no registry digest or publication approval**. A later records-only commit is not this image's source.
 
-The registry choice is settled: private GitHub Container Registry under the fork owner. Publication and residual-risk disposition remain separate operator decisions. The adopted `shared-host-ssd-v1` performance run is parent-verified; whole-candidate Gate 1 acceptance and native feature closure are not established by this documentation.
+The registry choice is settled: private GitHub Container Registry under the fork owner. Publication and residual-risk disposition remain separate operator decisions. The adopted `shared-host-ssd-v1` performance run is parent-verified; the [complete current Gate 1 inventory](../wikilint-gate-1/candidate-42485693-evidence-index.md) records formal Gate 1 as **`not ready`** as of the latest amendment: the 21 AC5 owner/revisit fields in 13 residuals now carry operator-adopted tracking values, and focused independent review plus parent acceptance are still pending; the completed SM-I/D9 technical evidence remains pass. No runtime test is requested. The bounded risk assessment is complete with explicit residual acceptance still pending. Native feature closure is not established by this documentation.
 
 ## Historical snapshot (2026-10-25; superseded for the latest candidate)
 
